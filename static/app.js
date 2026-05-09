@@ -3379,3 +3379,436 @@ document.addEventListener("DOMContentLoaded", () => {
     console.log("[App] DOM Loaded, initializing...");
     initSetup();
 });
+/* ═
+   SHERCORD V18  DISCORD-LIKE FEATURE PACK
+    */
+
+/*  Unread badge tracking  */
+if (!state.unread) state.unread = {};  // channelId  count
+
+function markUnread(channelId) {
+    if (channelId === state.activeChannelId) return;
+    if (!state.unread) state.unread = {};
+    state.unread[channelId] = (state.unread[channelId] || 0) + 1;
+    updateUnreadBadges();
+}
+
+function clearUnread(channelId) {
+    if (!state.unread) return;
+    delete state.unread[channelId];
+    updateUnreadBadges();
+}
+
+function updateUnreadBadges() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    server.channels?.forEach(ch => {
+        const el = document.querySelector(`.channel-item[data-ch="${ch.id}"] .unread-badge`);
+        const count = state.unread?.[ch.id] || 0;
+        if (el) {
+            el.textContent = count > 9 ? "9+" : count;
+            el.classList.toggle("hidden", count === 0);
+        }
+    });
+}
+
+/*  Typing indicator  */
+if (!state.typingPeers) state.typingPeers = {};
+let _typingTimer = null;
+let _lastTypingSent = 0;
+
+function onChatInputTyping() {
+    const now = Date.now();
+    if (state.mesh && now - _lastTypingSent > 2500) {
+        _lastTypingSent = now;
+        state.mesh.broadcast({ type: "typing", username: state.username, channelId: state.activeChannelId });
+    }
+    clearTimeout(_typingTimer);
+    _typingTimer = setTimeout(clearTypingIndicator, 4000);
+}
+
+function clearTypingIndicator() {
+    const el = document.getElementById("typing-indicator");
+    if (el) el.textContent = "";
+}
+
+function handleTypingMessage(fromPeerId, username, channelId) {
+    if (channelId !== state.activeChannelId) return;
+    if (!state.typingPeers) state.typingPeers = {};
+    state.typingPeers[fromPeerId] = username;
+    const names = Object.values(state.typingPeers);
+    const el = document.getElementById("typing-indicator");
+    if (el && names.length > 0) {
+        el.textContent = names.join(", ") + (names.length === 1 ? " yazıyor..." : " yazıyorlar...");
+    }
+    clearTimeout(state._typingTimers?.[fromPeerId]);
+    if (!state._typingTimers) state._typingTimers = {};
+    state._typingTimers[fromPeerId] = setTimeout(() => {
+        delete state.typingPeers[fromPeerId];
+        handleTypingMessage = () => {};  // avoid recursion
+        const remaining = Object.values(state.typingPeers);
+        const el2 = document.getElementById("typing-indicator");
+        if (el2) el2.textContent = remaining.length ? remaining.join(", ") + " yazıyor..." : "";
+    }, 4000);
+}
+
+/*  Message reactions  */
+function handleReaction(msgId, emoji, fromPeerId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    const msgs = server.messages?.[state.activeChannelId] || [];
+    const msg = msgs.find(m => m.id === msgId);
+    if (!msg) return;
+    if (!msg.reactions) msg.reactions = {};
+    if (!msg.reactions[emoji]) msg.reactions[emoji] = new Set();
+    msg.reactions[emoji].add(fromPeerId);
+    updateReactionBar(msgId, msg.reactions);
+}
+
+function updateReactionBar(msgId, reactions) {
+    const bubble = document.querySelector(`.message-bubble[data-msg-id="${msgId}"]`);
+    if (!bubble) return;
+    let bar = bubble.querySelector(".reaction-bar");
+    if (!bar) {
+        bar = document.createElement("div");
+        bar.className = "reaction-bar";
+        bubble.appendChild(bar);
+    }
+    bar.innerHTML = "";
+    for (const [emoji, peers] of Object.entries(reactions)) {
+        if (peers.size === 0) continue;
+        const pill = document.createElement("span");
+        pill.className = "reaction-pill";
+        pill.textContent = `${emoji} ${peers.size}`;
+        pill.title = [...peers].join(", ");
+        pill.onclick = () => {
+            if (state.mesh) {
+                state.mesh.broadcast({ type: "reaction", msgId, emoji });
+                handleReaction(msgId, emoji, state.peerId);
+            }
+        };
+        bar.appendChild(pill);
+    }
+}
+
+/*  User status  */
+const USER_STATUSES = [
+    { id: "online", label: "Çevrimiçi", color: "#22c55e" },
+    { id: "idle", label: "Boşta", color: "#f59e0b" },
+    { id: "dnd", label: "Rahatsız Etme", color: "#ef4444" },
+    { id: "invisible", label: "Görünmez", color: "#6b7280" },
+];
+
+if (!state.userStatus) state.userStatus = "online";
+
+function setUserStatus(statusId) {
+    state.userStatus = statusId;
+    localStorage.setItem("scord_status", statusId);
+    updateStatusDisplay();
+    if (state.mesh) state.mesh.broadcast({ type: "status_change", status: statusId });
+}
+
+function updateStatusDisplay() {
+    const statusEl = document.querySelector(".user-bar-status");
+    const info = USER_STATUSES.find(s => s.id === state.userStatus) || USER_STATUSES[0];
+    if (statusEl) {
+        statusEl.textContent = ` ${info.label}`;
+        statusEl.style.color = info.color;
+    }
+}
+
+function initStatusSelector() {
+    const statusEl = document.querySelector(".user-bar-status");
+    if (!statusEl) return;
+    const saved = localStorage.getItem("scord_status") || "online";
+    state.userStatus = saved;
+    updateStatusDisplay();
+
+    statusEl.style.cursor = "pointer";
+    statusEl.onclick = (e) => {
+        e.stopPropagation();
+        let menu = document.getElementById("status-menu");
+        if (menu) { menu.remove(); return; }
+        menu = document.createElement("div");
+        menu.id = "status-menu";
+        menu.className = "context-menu";
+        menu.style.cssText = "position:fixed;z-index:9999;min-width:180px;";
+        const rect = statusEl.getBoundingClientRect();
+        menu.style.bottom = (window.innerHeight - rect.top + 8) + "px";
+        menu.style.left = rect.left + "px";
+        USER_STATUSES.forEach(s => {
+            const item = document.createElement("div");
+            item.className = "ctx-item";
+            item.innerHTML = `<span style="color:${s.color};margin-right:8px;"></span>${s.label}`;
+            item.onclick = () => { setUserStatus(s.id); menu.remove(); };
+            menu.appendChild(item);
+        });
+        document.body.appendChild(menu);
+        setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
+    };
+}
+
+/*  Invite code: copy & join  */
+async function joinByInviteCode(code) {
+    if (!code || code.trim().length < 4) return toast("Geçersiz davet kodu.", "error");
+    code = code.trim().toUpperCase();
+    try {
+        const res = await fetch(`/api/rooms/join/${code}`);
+        const data = await res.json();
+        if (data.error || !data.room_id) {
+            toast("Geçersiz veya süresi dolmuş davet kodu.", "error");
+            return;
+        }
+        // Construct a server object from the room data
+        const server = {
+            id: data.room_id,
+            name: data.name,
+            ownerId: data.owner_id,
+            channels: data.channels || [],
+            members: data.peers || [],
+            roles: data.roles || {},
+            peerRoles: data.peer_roles || {},
+            pinnedMessages: data.pinned_messages || [],
+            messages: data.messages || {},
+            inviteCode: data.invite_code,
+            iconUrl: data.icon_url,
+            voiceMembers: {},
+        };
+        // Don't add duplicate
+        if (!state.servers.find(s => s.id === server.id)) {
+            state.servers.push(server);
+        }
+        renderServerRail();
+        switchToServer(server.id);
+        toast(`"${server.name}" sunucusuna katıldın!`, "success");
+    } catch (err) {
+        console.error(err);
+        toast("Sunucuya bağlanırken hata oluştu.", "error");
+    }
+}
+
+function showInviteModal(serverId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    const code = server.inviteCode || "";
+    const link = `${location.origin}?invite=${code}`;
+    showModal(
+        "Arkadaşlarını Davet Et",
+        `<p style="margin-bottom:12px;color:var(--text-secondary);">Bu kodu arkadaşlarınla paylaş:</p>
+         <div style="display:flex;gap:8px;align-items:center;">
+           <input readonly id="invite-code-display" value="${code}" style="flex:1;padding:10px;background:var(--bg-deep);border:1px solid var(--border);border-radius:8px;color:var(--text-primary);font-size:20px;letter-spacing:4px;text-align:center;font-weight:bold;" />
+           <button onclick="navigator.clipboard.writeText('${code}').then(()=>toast('Kod kopyalandı!','success'))" class="btn-primary" style="padding:10px 16px;">Kopyala</button>
+         </div>
+         <p style="margin-top:12px;font-size:12px;color:var(--text-muted);">Veya bağlantı: <a href="${link}" style="color:var(--accent);">${link}</a></p>`,
+        `<button class="btn-primary" onclick="hideModal()">Kapat</button>`
+    );
+}
+
+/*  Server discovery: refresh  */
+async function refreshDiscovery() {
+    try {
+        const res = await fetch("/api/rooms");
+        const rooms = await res.json();
+        const grid = document.getElementById("room-list-home");
+        if (!grid) return;
+        grid.innerHTML = "";
+        if (!rooms || rooms.length === 0) {
+            grid.innerHTML = '<p style="color:var(--text-muted);text-align:center;grid-column:1/-1;">Henüz aktif sunucu yok. Bir tane oluştur!</p>';
+            return;
+        }
+        rooms.forEach(room => {
+            const card = document.createElement("div");
+            card.className = "room-card";
+            const icon = room.icon_url
+                ? `<img src="${room.icon_url}" style="width:48px;height:48px;border-radius:12px;object-fit:cover;" />`
+                : `<div style="width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#7c3aed,#4f46e5);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;">${(room.name||"?")[0].toUpperCase()}</div>`;
+            card.innerHTML = `
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+                  ${icon}
+                  <div>
+                    <div style="font-weight:700;font-size:16px;">${room.name}</div>
+                    <div style="font-size:12px;color:var(--text-muted);">${room.peer_count || 0} üye</div>
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <span style="font-size:12px;color:var(--text-muted);flex:1;">Kod: <b style="letter-spacing:2px;color:var(--accent);">${room.invite_code || ""}</b></span>
+                  <button class="btn-primary" style="padding:6px 14px;font-size:13px;" onclick="joinDiscoveryRoom('${room.room_id}', '${room.invite_code}')">Katıl</button>
+                </div>`;
+            grid.appendChild(card);
+        });
+    } catch (err) {
+        console.error("[Discovery] Error:", err);
+    }
+}
+
+async function joinDiscoveryRoom(roomId, inviteCode) {
+    // If we already have it, just switch
+    if (state.servers.find(s => s.id === roomId)) {
+        switchToServer(roomId);
+        return;
+    }
+    await joinByInviteCode(inviteCode);
+}
+
+function switchToServer(serverId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    state.activeServerId = serverId;
+    // Connect mesh to this room
+    connectMesh(serverId);
+    // Select first text channel
+    const firstText = server.channels?.find(c => c.type === "text");
+    if (firstText) {
+        showChatView(serverId, firstText.id);
+    }
+    updateChannelSidebar(serverId);
+    renderServerRail();
+    document.querySelectorAll(".rail-icon").forEach(el => el.classList.remove("active"));
+    document.querySelector(`.rail-icon[data-server-id="${serverId}"]`)?.classList.add("active");
+}
+
+/*  Voice sidebar activity indicator  */
+function updateVoiceActivityIcons(serverId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    const voiceChannels = server.channels?.filter(c => c.type === "voice") || [];
+    voiceChannels.forEach(ch => {
+        const el = document.querySelector(`.channel-item[data-ch="${ch.id}"] .voice-activity-icon`);
+        const members = server.voiceMembers?.[ch.id] || [];
+        if (el) {
+            el.classList.toggle("active", members.length > 0);
+            el.textContent = members.length > 0 ? ` ${members.length}` : "";
+        }
+    });
+}
+
+/*  Hook everything into existing init functions  */
+// Invite join button
+const _joinCodeBtn = document.getElementById("join-by-code-btn");
+if (_joinCodeBtn) {
+    _joinCodeBtn.onclick = () => {
+        const input = document.getElementById("join-invite-input");
+        if (input) joinByInviteCode(input.value);
+    };
+}
+const _joinInput = document.getElementById("join-invite-input");
+if (_joinInput) {
+    _joinInput.addEventListener("keydown", e => {
+        if (e.key === "Enter") joinByInviteCode(_joinInput.value);
+    });
+}
+
+// Also handle ?invite= in URL (auto-join from shared link)
+(function() {
+    const params = new URLSearchParams(location.search);
+    const code = params.get("invite");
+    if (code) {
+        // Wait for app to be ready
+        const tryJoin = setInterval(() => {
+            if (state.username) {
+                clearInterval(tryJoin);
+                joinByInviteCode(code);
+                // Clean URL
+                history.replaceState({}, "", location.pathname);
+            }
+        }, 500);
+    }
+})();
+
+// Typing indicator hook (wire into existing chat input)
+const _chatInput = document.getElementById("chat-input");
+if (_chatInput) {
+    _chatInput.addEventListener("input", onChatInputTyping);
+}
+
+// Hook typing & reaction P2P messages into existing handleIncomingP2P
+const _origHandleP2P = handleIncomingP2P;
+window.handleIncomingP2P = function(fromPeerId, data, roomId) {
+    if (data.type === "typing") {
+        handleTypingMessage(fromPeerId, data.username, data.channelId);
+        return;
+    }
+    if (data.type === "reaction") {
+        handleReaction(data.msgId, data.emoji, fromPeerId);
+        return;
+    }
+    if (data.type === "status_change") {
+        const server = state.servers.find(s => s.id === roomId);
+        const member = server?.members?.find(m => m.peer_id === fromPeerId);
+        if (member) member.status = data.status;
+        updateMembersPanel(roomId);
+        return;
+    }
+    _origHandleP2P(fromPeerId, data, roomId);
+};
+
+// Server invite button in server header (add to settings modal)
+const _origOpenSettings = window.openServerSettingsModal;
+window.openServerSettingsModal = function() {
+    if (_origOpenSettings) _origOpenSettings();
+    // inject invite button if not already present
+    setTimeout(() => {
+        const footer = document.getElementById("modal-footer");
+        if (footer && !footer.querySelector(".invite-modal-btn")) {
+            const btn = document.createElement("button");
+            btn.className = "btn-primary invite-modal-btn";
+            btn.textContent = " Davet Bağlantısı";
+            btn.style.marginRight = "auto";
+            btn.onclick = () => { hideModal(); showInviteModal(state.activeServerId); };
+            footer.insertBefore(btn, footer.firstChild);
+        }
+    }, 100);
+};
+
+// Add reaction button to messages on right-click
+document.addEventListener("contextmenu", (e) => {
+    const bubble = e.target.closest(".message-bubble");
+    if (!bubble) return;
+    const msgId = bubble.getAttribute("data-msg-id");
+    if (!msgId) return;
+    e.preventDefault();
+    let menu = document.getElementById("msg-ctx-menu");
+    if (menu) menu.remove();
+    menu = document.createElement("div");
+    menu.id = "msg-ctx-menu";
+    menu.className = "context-menu";
+    menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;min-width:180px;`;
+    const emojis = ["","","","","",""];
+    const reactionRow = document.createElement("div");
+    reactionRow.style.cssText = "display:flex;gap:6px;padding:6px 10px;border-bottom:1px solid var(--border);";
+    emojis.forEach(emoji => {
+        const btn = document.createElement("span");
+        btn.textContent = emoji;
+        btn.style.cssText = "cursor:pointer;font-size:20px;transition:transform .15s;";
+        btn.onmouseover = () => btn.style.transform = "scale(1.3)";
+        btn.onmouseout = () => btn.style.transform = "";
+        btn.onclick = () => {
+            if (state.mesh) state.mesh.broadcast({ type: "reaction", msgId, emoji });
+            handleReaction(msgId, emoji, state.peerId);
+            menu.remove();
+        };
+        reactionRow.appendChild(btn);
+    });
+    menu.appendChild(reactionRow);
+    const pinItem = document.createElement("div");
+    pinItem.className = "ctx-item";
+    pinItem.textContent = " Sabitle / Kaldır";
+    pinItem.onclick = () => { menu.remove(); /* existing pin logic */ };
+    menu.appendChild(pinItem);
+    document.body.appendChild(menu);
+    setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
+});
+
+// Init status selector on load
+document.addEventListener("DOMContentLoaded", () => {
+    setTimeout(initStatusSelector, 500);
+    setTimeout(refreshDiscovery, 1000);
+});
+
+// Also hook into app start
+const _origStartApp = window.startApp;
+window.startApp = function() {
+    if (_origStartApp) _origStartApp();
+    setTimeout(initStatusSelector, 300);
+    setTimeout(refreshDiscovery, 500);
+};
