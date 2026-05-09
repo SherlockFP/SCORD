@@ -254,6 +254,7 @@
     <div class="voice-header">
       <span class="channel-type-icon voice">🔊</span>
       <span id="voice-channel-name">Sesli Sohbet</span>
+      <span id="voice-participant-count" class="voice-count">0 kişi</span>
     </div>
     <div class="voice-participants" id="voice-participants">
       <p class="voice-empty">Sesli kanala katılmak için aşağıdaki butona tıkla.</p>
@@ -289,7 +290,12 @@
       </button>
     </div>
 
-    <div id="local-screen-preview" class="hidden"
+    <!-- Members panel for voice view -->
+    <aside class="members-panel" id="voice-members-panel">
+      <h4>Üyeler — <span id="voice-member-count">0</span></h4>
+      <div id="voice-members-list"></div>
+    </aside>
+  </div>
       style="position: absolute; margin-top:20px; bottom: 85px; right: 24px; width: 300px; background: rgba(0,0,0,0.8); border: 1px solid var(--border-strong); border-radius: 8px; z-index: 50; padding: 8px;">
       <div id="local-preview-label"
         style="font-size: 12px; font-weight: bold; margin-bottom: 4px; color: var(--green);">Yayındasın (Önizleme)</div>

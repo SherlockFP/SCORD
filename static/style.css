@@ -1271,6 +1271,21 @@ body {
   white-space: nowrap;
 }
 
+#voice-members-panel {
+  position: absolute;
+  right: 24px;
+  top: 100px;
+  width: 200px;
+  background: rgba(13, 13, 26, 0.9);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 16px 10px;
+  max-height: 400px;
+  overflow-y: auto;
+  z-index: 10;
+}
+
 .member-item {
   display: flex;
   align-items: center;
@@ -1446,6 +1461,25 @@ body {
   height: 100%;
   overflow: hidden;
   background: var(--bg-deep);
+}
+
+.voice-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px;
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.voice-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: normal;
 }
 
 .voice-participants {
@@ -2355,6 +2389,12 @@ html.theme-discord textarea {
   letter-spacing: 0.5px;
   box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
   margin-left: 8px;
+}
+
+.share-icon {
+  font-size: 14px;
+  margin-left: 4px;
+  opacity: 0.8;
 }
 
 .screen-overlay {

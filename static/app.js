@@ -46,7 +46,8 @@ let state = {
     history: {}, // Loaded from server
     translationEnabled: false,
     targetLang: "tr",
-    theme: "sapphire"
+    theme: "sapphire",
+    recentVoiceToasts: new Set()
 };
 
 // ── V16 Helpers ───────────────────────────────────────────────
@@ -97,6 +98,28 @@ function toast(message, type = "info") {
     el.textContent = message;
     document.getElementById("toast-container").appendChild(el);
     setTimeout(() => el.remove(), 4000);
+}
+
+function playSound(frequency = 440, duration = 200, type = "sine") {
+    try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        oscillator.frequency.value = frequency;
+        oscillator.type = type;
+
+        gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration / 1000);
+
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + duration / 1000);
+    } catch (e) {
+        // Ignore if Web Audio not supported
+    }
 }
 
 function showModal(title, bodyHTML, footerHTML) {
@@ -363,6 +386,10 @@ function showVoiceView(serverId, channelId) {
     document.getElementById("sidebar-server-name").textContent = server.name;
     updateChannelSidebar(serverId);
     renderVoiceParticipants(serverId, channelId);
+    updateMembersPanel(serverId);
+    // Show share buttons even if not joined
+    document.getElementById("voice-screen-btn")?.classList.remove("hidden");
+    document.getElementById("voice-camera-btn")?.classList.remove("hidden");
 }
 
 /* ── Server rail ──────────────────────────────────────────── */
@@ -473,7 +500,7 @@ async function startCameraShare() {
             if (lbl) lbl.textContent = "Kameran Açık";
         }
 
-        state.mesh.broadcast({ type: "video_status", sharingCamera: true });
+        state.mesh.broadcast({ type: "video_status", sharing: true });
 
         const btn = document.getElementById("voice-camera-btn");
         if (btn) btn.classList.add("active");
@@ -701,20 +728,25 @@ function createChannelItem(channel, serverId) {
 /* ── Members panel ────────────────────────────────────────── */
 function updateMembersPanel(serverId) {
     const server = state.servers.find(s => s.id === serverId);
-    const list = document.getElementById("members-list");
-    const count = document.getElementById("member-count");
-    list.innerHTML = "";
+    const lists = [
+        document.getElementById("members-list"),
+        document.getElementById("voice-members-list")
+    ].filter(l => l);
+    const counts = [
+        document.getElementById("member-count"),
+        document.getElementById("voice-member-count")
+    ].filter(c => c);
+    lists.forEach(l => l.innerHTML = "");
     if (!server) return;
 
     const members = server.members || [];
     const roles = server.roles || {};
-    count.textContent = members.length;
+    counts.forEach(c => c.textContent = members.length);
 
     // Grouping by role
     const groups = {};
-    // Ensure all roles exist as keys
     Object.keys(roles).forEach(rid => groups[rid] = []);
-    groups["member"] = groups["member"] || []; // Fallback
+    groups["member"] = groups["member"] || [];
 
     members.forEach(m => {
         const rid = server.peer_roles?.[m.peer_id] || "member";
@@ -722,90 +754,88 @@ function updateMembersPanel(serverId) {
         groups[rid].push(m);
     });
 
-    // Render roles in order (hoist first)
     const allRids = Array.from(new Set([...Object.keys(roles), ...Object.keys(groups)]));
     const sortedRids = allRids.sort((a, b) => {
-        const ra = roles[a] || { name: ridToName(a), hoist: false };
-        const rb = roles[b] || { name: ridToName(b), hoist: false };
+        const ra = roles[a] || { name: a.charAt(0).toUpperCase() + a.slice(1), hoist: false };
+        const rb = roles[b] || { name: b.charAt(0).toUpperCase() + b.slice(1), hoist: false };
         if (ra.hoist && !rb.hoist) return -1;
         if (!ra.hoist && rb.hoist) return 1;
         return 0;
     });
 
-    function ridToName(rid) {
-        return rid.charAt(0).toUpperCase() + rid.slice(1);
-    }
-
     sortedRids.forEach(rid => {
         const groupMembers = groups[rid];
         if (groupMembers.length === 0) return;
 
-        const cat = document.createElement("div");
-        cat.className = "member-role-cat";
-        const roleData = roles[rid] || { name: ridToName(rid), color: 'inherit' };
-        cat.textContent = `${roleData.name} — ${groupMembers.length}`;
-        cat.style.color = "var(--text-muted)";
-        cat.style.fontSize = "11px";
-        cat.style.fontWeight = "bold";
-        cat.style.padding = "16px 12px 8px";
-        cat.style.textTransform = "uppercase";
-        list.appendChild(cat);
+        const roleData = roles[rid] || { name: rid.charAt(0).toUpperCase() + rid.slice(1), color: 'inherit' };
+        lists.forEach(list => {
+            const cat = document.createElement("div");
+            cat.className = "member-role-cat";
+            cat.textContent = `${roleData.name} — ${groupMembers.length}`;
+            cat.style.color = "var(--text-muted)";
+            cat.style.fontSize = "11px";
+            cat.style.fontWeight = "bold";
+            cat.style.padding = "16px 12px 8px";
+            cat.style.textTransform = "uppercase";
+            list.appendChild(cat);
+        });
 
         groupMembers.forEach(m => {
-            const item = document.createElement("div");
-            item.className = "member-item";
-            item.setAttribute("data-peer-id", m.peer_id);
+            lists.forEach(list => {
+                const item = document.createElement("div");
+                item.className = "member-item";
+                item.setAttribute("data-peer-id", m.peer_id);
 
-            const isAdmin = server.ownerId === state.peerId || server.peer_roles?.[state.peerId] === "admin";
-            if (isAdmin && m.peer_id !== state.peerId) {
-                item.draggable = true;
-                item.ondragstart = (e) => {
-                    e.dataTransfer.setData("peerId", m.peer_id);
-                };
-            }
+                const isAdmin = server.ownerId === state.peerId || server.peer_roles?.[state.peerId] === "admin";
+                if (isAdmin && m.peer_id !== state.peerId) {
+                    item.draggable = true;
+                    item.ondragstart = (e) => {
+                        e.dataTransfer.setData("peerId", m.peer_id);
+                    };
+                }
 
-            const av = document.createElement("div");
-            av.className = "member-avatar";
-            applyAvatarToElement(av, m.avatar_color, m.avatar_image, m.username);
+                const av = document.createElement("div");
+                av.className = "member-avatar";
+                applyAvatarToElement(av, m.avatar_color, m.avatar_image, m.username);
 
-            const dot = document.createElement("div");
-            dot.className = "status-dot";
-            av.appendChild(dot);
+                const dot = document.createElement("div");
+                dot.className = "status-dot";
+                av.appendChild(dot);
 
-            const name = document.createElement("span");
-            name.className = "member-name";
-            name.textContent = m.username;
-            name.style.color = roles[rid]?.color || "inherit";
+                const name = document.createElement("span");
+                name.className = "member-name";
+                name.textContent = m.username;
+                name.style.color = roles[rid]?.color || "inherit";
 
-            if (server.ownerId === m.peer_id) {
-                const crown = document.createElement("span");
-                crown.textContent = " 👑";
-                crown.title = "Sunucu Sahibi";
-                crown.style.fontSize = "12px";
-                name.appendChild(crown);
-            }
+                if (server.ownerId === m.peer_id) {
+                    const crown = document.createElement("span");
+                    crown.textContent = " 👑";
+                    crown.title = "Sunucu Sahibi";
+                    crown.style.fontSize = "12px";
+                    name.appendChild(crown);
+                }
 
-            item.appendChild(av);
-            item.appendChild(name);
+                item.appendChild(av);
+                item.appendChild(name);
 
-            if (m.peer_id === state.peerId) {
-                const tag = document.createElement("span");
-                tag.className = "member-you-tag";
-                tag.textContent = "sen";
-                item.appendChild(tag);
-            } else {
-                item.style.cursor = "pointer";
-                item.onclick = () => openUserProfile(m.peer_id, m.username, m.avatar_image, m.avatar_color);
-                item.oncontextmenu = (e) => {
-                    e.preventDefault();
-                    showContextMenu(m.peer_id, m.username, e.clientX, e.clientY);
-                };
-            }
-            list.appendChild(item);
+                if (m.peer_id === state.peerId) {
+                    const tag = document.createElement("span");
+                    tag.className = "member-you-tag";
+                    tag.textContent = "sen";
+                    item.appendChild(tag);
+                } else {
+                    item.style.cursor = "pointer";
+                    item.onclick = () => openUserProfile(m.peer_id, m.username, m.avatar_image, m.avatar_color);
+                    item.oncontextmenu = (e) => {
+                        e.preventDefault();
+                        showContextMenu(m.peer_id, m.username, e.clientX, e.clientY);
+                    };
+                }
+
+                list.appendChild(item);
+            });
         });
     });
-
-    document.getElementById("member-count").textContent = members.length;
 }
 
 function updatePeerCountBadge(serverId) {
@@ -1180,13 +1210,24 @@ async function joinServer(roomId) {
         ],
         roles: room.roles || {},
         peer_roles: room.peer_roles || {},
-        members: [{
+        members: room.peers ? room.peers.map(p => ({
+            peer_id: p.peer_id,
+            username: p.username,
+            avatar_color: p.avatar_color,
+            avatar_image: p.avatar_image
+        })).concat([{
+            peer_id: state.peerId,
+            username: state.username,
+            avatar_color: state.avatarColor,
+            avatar_image: state.avatarImage,
+        }]) : [{
             peer_id: state.peerId,
             username: state.username,
             avatar_color: state.avatarColor,
             avatar_image: state.avatarImage,
         }],
-        messages: {},
+        messages: room.messages || {},
+        pinned_messages: room.pinned_messages || [],
         unread: {},
         voiceMembers: {},
     };
@@ -1218,6 +1259,13 @@ function connectToRoom(roomId) {
     });
 
     state.mesh.connect(state.username, state.avatarColor, state.avatarImage);
+}
+
+function connectMesh(serverId) {
+    if (!serverId) return;
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    connectToRoom(serverId);
 }
 
 /* ── P2P event handlers ───────────────────────────────────── */
@@ -1259,16 +1307,64 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         if (state.activeServerId === roomId) {
             updateMembersPanel(roomId);
         }
-    } else if (data.type === "voice_join" || data.type === "voice_state_sync") {
+    } else if (data.type === "voice_join") {
+        // Only update local UI/state. Do NOT reply with voice_state_sync here,
+        // otherwise peers can enter a join<->sync ping-pong loop.
         const server = state.servers.find(s => s.id === roomId);
         if (server) {
             if (!server.voiceMembers) server.voiceMembers = {};
+
+            // Remove the user from other voice channels within the same room
             Object.keys(server.voiceMembers).forEach(chId => {
                 if (chId !== data.channelId) {
                     server.voiceMembers[chId] = server.voiceMembers[chId].filter(m => m.peer_id !== fromPeerId);
                 }
             });
+
             if (!server.voiceMembers[data.channelId]) server.voiceMembers[data.channelId] = [];
+            let member = server.voiceMembers[data.channelId].find(m => m.peer_id === fromPeerId);
+
+            if (!member) {
+                member = {
+                    peer_id: fromPeerId,
+                    username: data.username,
+                    avatar_color: data.avatarColor,
+                    avatar_image: data.avatarImage,
+                    isSharingScreen: !!data.isSharingScreen,
+                    isSharingCamera: !!data.isSharingCamera
+                };
+                server.voiceMembers[data.channelId].push(member);
+            } else {
+                member.username = data.username;
+                member.avatar_color = data.avatarColor;
+                member.avatar_image = data.avatarImage;
+                member.isSharingScreen = !!data.isSharingScreen;
+                member.isSharingCamera = !!data.isSharingCamera;
+            }
+
+            updateChannelSidebar(roomId);
+            if (state.activeChannelId === data.channelId) renderVoiceParticipants(roomId, data.channelId);
+            updateMuteStates();
+
+            // Notify user about new participant (join only)
+            if (data.username && data.username !== state.username) {
+                const key = `${fromPeerId}-join`;
+                if (!state.recentVoiceToasts.has(key)) {
+                    toast(`${data.username} sesli kanala katıldı!`, "info");
+                    playSound(523, 300);
+                    state.recentVoiceToasts.add(key);
+                    setTimeout(() => state.recentVoiceToasts.delete(key), 10000);
+                }
+            }
+        }
+
+    } else if (data.type === "voice_state_sync") {
+        // State synchronization: update membership flags only.
+        // No toasts/sounds here.
+        const server = state.servers.find(s => s.id === roomId);
+        if (server && server.voiceMembers) {
+            if (!server.voiceMembers[data.channelId]) server.voiceMembers[data.channelId] = [];
+
             let member = server.voiceMembers[data.channelId].find(m => m.peer_id === fromPeerId);
             if (!member) {
                 member = {
@@ -1287,21 +1383,11 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                 member.isSharingScreen = !!data.isSharingScreen;
                 member.isSharingCamera = !!data.isSharingCamera;
             }
-            if (state.voiceChannelId === data.channelId && state.mesh) {
-                state.mesh.sendTo(fromPeerId, {
-                    type: "voice_state_sync",
-                    channelId: data.channelId,
-                    username: state.username,
-                    avatarColor: state.avatarColor,
-                    avatarImage: state.avatarImage,
-                    isSharingScreen: !!state.screenStream,
-                    isSharingCamera: !!state.cameraStream
-                });
-            }
-            updateChannelSidebar(roomId);
+
             if (state.activeChannelId === data.channelId) renderVoiceParticipants(roomId, data.channelId);
             updateMuteStates();
         }
+
     } else if (data.type === "voice_leave") {
         const server = state.servers.find(s => s.id === roomId);
         if (server?.voiceMembers) {
@@ -1311,6 +1397,18 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
             updateChannelSidebar(roomId);
             if (state.activeServerId === roomId) renderVoiceParticipants(roomId, state.activeChannelId);
             updateMuteStates();
+
+            // Notify user about leaving participant
+            const member = server.members?.find(m => m.peer_id === fromPeerId);
+            if (member && member.username !== state.username) {
+                const key = `${fromPeerId}-leave`;
+                if (!state.recentVoiceToasts.has(key)) {
+                    toast(`${member.username} sesli kanaldan ayrıldı.`, "info");
+                    playSound(330, 300); // Lower tone for leave
+                    state.recentVoiceToasts.add(key);
+                    setTimeout(() => state.recentVoiceToasts.delete(key), 10000);
+                }
+            }
         }
     } else if (data.type === "msg_pin_toggle") {
         const server = state.servers.find(s => s.id === roomId);
@@ -1661,6 +1759,8 @@ async function joinVoiceChannel(channelId) {
 
     state.voiceChannelId = channelId;
 
+    showVoiceView(state.activeServerId, channelId);
+
     // Notify peers
     state.mesh.broadcast({
         type: "voice_join",
@@ -1753,26 +1853,18 @@ function renderVoiceParticipants(serverId, channelId) {
         return;
     }
 
-    const emptyMsg = container.querySelector(".voice-empty");
-    if (emptyMsg) emptyMsg.remove();
+    // Update participant count in header
+    const countEl = document.getElementById("voice-participant-count");
+    if (countEl) countEl.textContent = `${members.length} kişi`;
 
-    // 1. Remove cards for peers who left
-    const currentPeerIds = members.map(m => m.peer_id);
-    const existingCards = container.querySelectorAll('.voice-participant-card');
-    existingCards.forEach(card => {
-        const pid = card.getAttribute('data-peer-id');
-        if (!currentPeerIds.includes(pid)) card.remove();
-    });
+    // Full re-render to avoid duplicates and bugs
+    container.innerHTML = '';
 
-    // 2. Update or Create cards (differential render)
     members.forEach(m => {
-        let card = container.querySelector(`.voice-participant-card[data-peer-id="${m.peer_id}"]`);
-        if (!card) {
-            card = document.createElement("div");
-            card.className = "voice-participant-card";
-            card.setAttribute('data-peer-id', m.peer_id);
-            container.appendChild(card);
-        }
+        const card = document.createElement("div");
+        card.className = "voice-participant-card";
+        card.setAttribute('data-peer-id', m.peer_id);
+        container.appendChild(card);
 
         // Avatar
         let av = card.querySelector('.vpc-avatar');
@@ -1783,10 +1875,15 @@ function renderVoiceParticipants(serverId, channelId) {
         }
         applyAvatarToElement(av, m.avatar_color, m.avatar_image, m.username);
 
-        // Speaking Glow
-        const currentlySpeaking = m.isSpeaking || (m.peer_id === state.peerId && state.isSpeaking);
-        if (currentlySpeaking) card.classList.add("speaking");
-        else card.classList.remove("speaking");
+        // Speaking Glow (make it robust: only one source of truth)
+        const currentlySpeaking = !!m.isSpeaking || (m.peer_id === state.peerId && !!state.isSpeaking);
+        if (currentlySpeaking) {
+            card.classList.add("speaking");
+            av.classList.add("speaking");
+        } else {
+            card.classList.remove("speaking");
+            av.classList.remove("speaking");
+        }
 
         // Name and Badge
         let nameContainer = card.querySelector('.vpc-name-container');
@@ -1807,6 +1904,28 @@ function renderVoiceParticipants(serverId, channelId) {
             nameContainer.appendChild(nameEl);
         }
         nameEl.textContent = m.username + (m.peer_id === state.peerId ? " (sen)" : "");
+
+        // Add sharing icons
+        let shareIcon = nameContainer.querySelector('.share-icon');
+        if (m.isSharingScreen || (m.peer_id === state.peerId && state.screenStream)) {
+            if (!shareIcon) {
+                shareIcon = document.createElement("span");
+                shareIcon.className = "share-icon";
+                shareIcon.textContent = "🖥️";
+                shareIcon.title = "Ekran Paylaşıyor";
+                nameContainer.appendChild(shareIcon);
+            }
+        } else if (m.isSharingCamera || (m.peer_id === state.peerId && state.cameraStream)) {
+            if (!shareIcon) {
+                shareIcon = document.createElement("span");
+                shareIcon.className = "share-icon";
+                shareIcon.textContent = "📹";
+                shareIcon.title = "Kamera Açık";
+                nameContainer.appendChild(shareIcon);
+            }
+        } else if (shareIcon) {
+            shareIcon.remove();
+        }
 
         const isSharing = m.isSharingScreen || m.isSharingCamera || (m.peer_id === state.peerId && (state.screenStream || state.cameraStream));
         let liveBadge = nameContainer.querySelector('.live-badge');
@@ -1975,6 +2094,10 @@ function openScreenOverlay(peerId, username) {
     const video = state.remoteMedia?.[peerId];
     if (!video) return toast("Video akışı bulunamadı.", "error");
 
+    // Prevent duplicates
+    const existing = document.getElementById("screen-overlay");
+    if (existing) existing.remove();
+
     const overlay = document.createElement("div");
     overlay.className = "screen-overlay";
     overlay.id = "screen-overlay";
@@ -1987,13 +2110,24 @@ function openScreenOverlay(peerId, username) {
     const bigVideo = document.createElement("video");
     bigVideo.autoplay = true;
     bigVideo.playsInline = true;
-    bigVideo.srcObject = video.srcObject;
+    bigVideo.srcObject = video.srcObject || null;
     bigVideo.className = "screen-overlay-video";
+
+    // Keep overlay in sync (srcObject can arrive/replace after render)
+    const syncSrc = () => {
+        if (!overlay.isConnected) return;
+        bigVideo.srcObject = video.srcObject || null;
+    };
+    syncSrc();
+    const interval = setInterval(syncSrc, 750);
+    overlay.onremove = () => clearInterval(interval);
 
     overlay.appendChild(closeBtn);
     overlay.appendChild(bigVideo);
     document.body.appendChild(overlay);
 }
+
+
 
 /* ── Modals ───────────────────────────────────────────────── */
 function openCreateServerModal() {
@@ -3594,7 +3728,7 @@ async function joinByInviteCode(code) {
         switchToServer(server.id);
         toast(`"${server.name}" sunucusuna katıldın!`, "success");
     } catch (err) {
-        console.error(err);
+        console.error("Invite join failed", err);
         toast("Sunucuya bağlanırken hata oluştu.", "error");
     }
 }
