@@ -308,10 +308,18 @@ function closeMobileNav() {
 /* ── Views ────────────────────────────────────────────────── */
 function showHomeView() {
     closeMobileNav();
+    if (state.voiceChannelId) {
+        try { leaveVoiceChannel(); } catch (e) { /* noop */ }
+    }
+    if (state.mesh) {
+        try { state.mesh.disconnect(); } catch (e) { /* noop */ }
+        state.mesh = null;
+    }
     document.getElementById("home-view").classList.remove("hidden");
     document.getElementById("chat-view").classList.add("hidden");
     document.getElementById("voice-view").classList.add("hidden");
     state.activeChannelId = null;
+    state.activeServerId = null;
     updateChannelSidebar(null);
     document.querySelectorAll(".rail-icon").forEach(el => el.classList.remove("active"));
     document.getElementById("home-btn").classList.add("active");
@@ -398,11 +406,13 @@ function renderServerRail() {
     container.innerHTML = "";
     state.servers.forEach(server => {
         const btn = document.createElement("button");
-        btn.className = "rail-icon" + (server.id === state.activeServerId ? " active" : "");
+        btn.type = "button";
+        btn.className = "rail-icon rail-server-guild" + (server.id === state.activeServerId ? " active" : "");
+        btn.dataset.serverId = server.id;
         btn.title = server.name;
 
         if (server.icon_url) {
-            btn.innerHTML = `<img src="${server.icon_url}" style="width:100%; height:100%; border-radius:inherit; object-fit:cover;" />`;
+            btn.innerHTML = `<img src="${server.icon_url}" alt="" class="rail-guild-img" />`;
             btn.style.background = "var(--bg-deep)";
             btn.style.padding = "0";
             btn.textContent = "";
@@ -411,12 +421,7 @@ function renderServerRail() {
             btn.style.background = server.color || "var(--accent-light)";
         }
 
-        btn.onclick = () => {
-            state.activeServerId = server.id;
-            const defCh = server.channels.find(c => c.type === "text");
-            if (defCh) showChatView(server.id, defCh.id);
-            renderServerRail();
-        };
+        btn.onclick = () => switchToServer(server.id);
         container.appendChild(btn);
     });
 }
@@ -447,14 +452,32 @@ async function startScreenShare() {
             });
         }
 
-        // Stop automatically if user closes screen from browser UI
         stream.getVideoTracks()[0].onended = () => {
-            stopScreenShare();
+            stream.getTracks().forEach(t => t.stop());
+            state.screenStream = null;
+            if (state.mesh) {
+                state.mesh.screenStream = null;
+                state.mesh.broadcast({
+                    type: "screen_status",
+                    sharing: false,
+                    channelId: state.voiceChannelId || state.activeChannelId,
+                });
+            }
+            document.getElementById("voice-screen-btn")?.classList.remove("active");
+            if (state.activeServerId && state.voiceChannelId) {
+                renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+            }
         };
 
         document.getElementById("voice-screen-btn").classList.add("active");
+        if (state.mesh) {
+            state.mesh.broadcast({
+                type: "screen_status",
+                sharing: true,
+                channelId: state.voiceChannelId || state.activeChannelId,
+            });
+        }
         toast("Ekran başarıyla paylaşıldı!", "success");
-        // Force refresh UI
         if (state.activeServerId && state.voiceChannelId) {
             renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
         }
@@ -500,7 +523,11 @@ async function startCameraShare() {
             if (lbl) lbl.textContent = "Kameran Açık";
         }
 
-        state.mesh.broadcast({ type: "video_status", sharing: true });
+        state.mesh.broadcast({
+            type: "video_status",
+            sharing: true,
+            channelId: state.voiceChannelId || state.activeChannelId,
+        });
 
         const btn = document.getElementById("voice-camera-btn");
         if (btn) btn.classList.add("active");
@@ -534,7 +561,13 @@ function stopCameraShare() {
         const btn = document.getElementById("voice-camera-btn");
         if (btn) btn.classList.remove("active");
 
-        if (state.mesh) state.mesh.broadcast({ type: "video_status", sharingCamera: false });
+        if (state.mesh) {
+            state.mesh.broadcast({
+                type: "video_status",
+                sharing: false,
+                channelId: state.voiceChannelId || state.activeChannelId,
+            });
+        }
 
         const preview = document.getElementById("local-screen-preview");
         const video = document.getElementById("self-share-video");
@@ -1100,12 +1133,15 @@ async function createServer(name) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, owner_id: state.peerId }),
     });
-    const { room_id } = await res.json();
+    const created = await res.json();
+    const room_id = created.room_id;
+    const inviteCode = created.invite_code || "";
 
     const server = {
         id: room_id,
         name: name,
         ownerId: state.peerId,
+        inviteCode,
         channels: [
             { id: "ch-genel", name: "genel", type: "text" },
             { id: "ch-duyurular", name: "duyurular", type: "text" },
@@ -1197,11 +1233,26 @@ async function joinServer(roomId) {
     }
 
     const color = AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)];
+    const peerList = (room.peers || []).map(p => ({
+        peer_id: p.peer_id,
+        username: p.username,
+        avatar_color: p.avatar_color,
+        avatar_image: p.avatar_image ?? null,
+    }));
+    if (!peerList.some(m => m.peer_id === state.peerId)) {
+        peerList.push({
+            peer_id: state.peerId,
+            username: state.username,
+            avatar_color: state.avatarColor,
+            avatar_image: state.avatarImage,
+        });
+    }
     const server = {
         id: roomId,
         name: room.name,
         color,
         ownerId: room.owner_id,
+        inviteCode: room.invite_code,
         channels: room.channels || [
             { id: "ch-genel", name: "genel", type: "text" },
             { id: "ch-duyurular", name: "duyurular", type: "text" },
@@ -1210,22 +1261,7 @@ async function joinServer(roomId) {
         ],
         roles: room.roles || {},
         peer_roles: room.peer_roles || {},
-        members: room.peers ? room.peers.map(p => ({
-            peer_id: p.peer_id,
-            username: p.username,
-            avatar_color: p.avatar_color,
-            avatar_image: p.avatar_image
-        })).concat([{
-            peer_id: state.peerId,
-            username: state.username,
-            avatar_color: state.avatarColor,
-            avatar_image: state.avatarImage,
-        }]) : [{
-            peer_id: state.peerId,
-            username: state.username,
-            avatar_color: state.avatarColor,
-            avatar_image: state.avatarImage,
-        }],
+        members: peerList,
         messages: room.messages || {},
         pinned_messages: room.pinned_messages || [],
         unread: {},
@@ -1235,7 +1271,8 @@ async function joinServer(roomId) {
     state.servers.push(server);
     renderServerRail();
     connectToRoom(roomId);
-    showChatView(server.id, server.channels[0].id);
+    const firstText = server.channels.find(c => c.type === "text");
+    showChatView(server.id, firstText ? firstText.id : server.channels[0].id);
     toast(`"${room.name}" sunucusuna katıldın! 👋`, "success");
 }
 
@@ -1290,22 +1327,32 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
             toast(`Özel Mesaj (DM) - ${data.payload.author}: ${data.payload.text.slice(0, 60)}`, "info");
         }
     } else if (data.type === "identity_announce" || data.type === "profile_update") {
-        // Direct peer announcement (useful for large base64 avatar images that signaling skips)
-        // or runtime profile updates
         const payload = data.type === "identity_announce" ? data : data.payload;
-        const targetPeerId = payload.peerId || payload.authorId || payload.username; // fallback heuristics
+        const uname = payload.username || payload.name;
+        const acol = payload.avatarColor || payload.avatar_color;
+        const aimg = payload.avatarImage ?? payload.avatar_image;
 
-        state.servers.forEach(server => {
-            const memberIdx = server.members?.findIndex(m => m.peer_id === fromPeerId);
-            if (memberIdx > -1) {
-                if (payload.username) server.members[memberIdx].username = payload.username;
-                if (payload.avatarColor) server.members[memberIdx].avatar_color = payload.avatarColor;
-                if (payload.avatarImage) server.members[memberIdx].avatar_image = payload.avatarImage;
+        const server = state.servers.find(s => s.id === roomId);
+        if (server) {
+            if (!server.members) server.members = [];
+            let memberIdx = server.members.findIndex(m => m.peer_id === fromPeerId);
+            if (memberIdx === -1) {
+                server.members.push({
+                    peer_id: fromPeerId,
+                    username: uname || "Anonim",
+                    avatar_color: acol || "#7c3aed",
+                    avatar_image: aimg ?? null,
+                });
+            } else {
+                if (uname) server.members[memberIdx].username = uname;
+                if (acol) server.members[memberIdx].avatar_color = acol;
+                if (aimg !== undefined) server.members[memberIdx].avatar_image = aimg;
             }
-        });
+        }
 
         if (state.activeServerId === roomId) {
             updateMembersPanel(roomId);
+            updatePeerCountBadge(roomId);
         }
     } else if (data.type === "voice_join") {
         // Only update local UI/state. Do NOT reply with voice_state_sync here,
@@ -1449,15 +1496,18 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         }
     } else if (data.type === "screen_status" || data.type === "video_status") {
         const server = state.servers.find(s => s.id === roomId);
-        if (server && server.voiceMembers && server.voiceMembers[state.voiceChannelId]) {
-            const member = server.voiceMembers[state.voiceChannelId].find(m => m.peer_id === fromPeerId);
+        const chId = data.channelId || state.voiceChannelId || state.activeChannelId;
+        if (server?.voiceMembers?.[chId]) {
+            const member = server.voiceMembers[chId].find(m => m.peer_id === fromPeerId);
             if (member) {
                 if (data.type === "screen_status") {
-                    member.isSharingScreen = data.sharing;
+                    member.isSharingScreen = !!data.sharing;
                 } else {
-                    member.isSharingCamera = !!data.sharing;
+                    member.isSharingCamera = !!(data.sharing ?? data.sharingCamera);
                 }
-                renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+                if (state.activeServerId === roomId && (state.activeChannelId === chId || state.voiceChannelId === chId)) {
+                    renderVoiceParticipants(roomId, chId);
+                }
             }
         }
     } else if (data.type === "server_update") {
@@ -1466,7 +1516,8 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         if (idx !== -1) {
             state.servers[idx].name = payload.name;
             state.servers[idx].channels = payload.channels;
-            state.servers[idx].roles = payload.roles;
+            if (payload.roles) state.servers[idx].roles = payload.roles;
+            if (payload.peer_roles) state.servers[idx].peer_roles = payload.peer_roles;
             if (state.activeServerId === payload.id) {
                 document.getElementById("sidebar-server-name").textContent = payload.name;
                 updateChannelSidebar(payload.id);
@@ -1506,14 +1557,14 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         }
     } else if (data.type === "force_kick" && data.target === state.peerId) {
         const server = state.servers.find(s => s.id === roomId);
-        if (server && (server.ownerId === fromPeerId || server.roles?.[fromPeerId] === "admin")) {
+        if (server && (server.ownerId === fromPeerId || server.peer_roles?.[fromPeerId] === "admin")) {
             if (state.voiceChannelId) leaveVoiceChannel();
             if (state.mesh) { state.mesh.disconnect(); state.mesh = null; }
             toast("Bir yönetici tarafından sunucudan atıldın. 🚪", "error");
         }
     } else if (data.type === "force_mute" && data.target === state.peerId) {
         const server = state.servers.find(s => s.id === roomId);
-        if (server && (server.ownerId === fromPeerId || server.roles?.[fromPeerId] === "admin" || server.roles?.[fromPeerId] === "mod")) {
+        if (server && (server.ownerId === fromPeerId || server.peer_roles?.[fromPeerId] === "admin" || server.peer_roles?.[fromPeerId] === "mod")) {
             if (state.mesh?.localStream) {
                 state.mesh.localStream.getAudioTracks().forEach(t => { t.enabled = false; });
                 state.micMuted = true;
@@ -1523,7 +1574,7 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         }
     } else if (data.type === "force_route" && data.target === state.peerId) {
         const server = state.servers.find(s => s.id === roomId);
-        if (server && (server.ownerId === fromPeerId || server.roles?.[fromPeerId] === "admin" || server.roles?.[fromPeerId] === "mod")) {
+        if (server && (server.ownerId === fromPeerId || server.peer_roles?.[fromPeerId] === "admin" || server.peer_roles?.[fromPeerId] === "mod")) {
             toast("Bir yetkili tarafından odan değiştirildi.", "warning");
             if (state.voiceChannelId) leaveVoiceChannel();
             setTimeout(() => joinVoiceChannel(data.targetChannel), 200);
@@ -1848,14 +1899,13 @@ function renderVoiceParticipants(serverId, channelId) {
     const container = document.getElementById("voice-participants");
     if (!container) return;
     const members = server?.voiceMembers?.[channelId] || [];
+    const countEl = document.getElementById("voice-participant-count");
+    if (countEl) countEl.textContent = `${members.length} kişi`;
+
     if (members.length === 0) {
         container.innerHTML = '<p class="voice-empty">Sesli kanalda henüz kimse yok.</p>';
         return;
     }
-
-    // Update participant count in header
-    const countEl = document.getElementById("voice-participant-count");
-    if (countEl) countEl.textContent = `${members.length} kişi`;
 
     // Full re-render to avoid duplicates and bugs
     container.innerHTML = '';
@@ -1996,7 +2046,7 @@ function renderVoiceParticipants(serverId, channelId) {
         }
 
         // Drag and Drop Admin
-        const isAdmin = server && (server.ownerId === state.peerId || server.roles?.[state.peerId] === "admin");
+        const isAdmin = server && (server.ownerId === state.peerId || server.peer_roles?.[state.peerId] === "admin");
         if (isAdmin && m.peer_id !== state.peerId) {
             card.draggable = true;
             card.ondragstart = (e) => { e.dataTransfer.setData("peerId", m.peer_id); };
@@ -2053,46 +2103,14 @@ function hideVoiceStatusBar() {
     document.getElementById("voice-status-bar").classList.add("hidden");
 }
 
-/* ── Discovery (home screen room list) ───────────────────── */
-async function refreshDiscovery() {
-    try {
-        const rooms = await fetch(`${API_BASE}/rooms`).then(r => r.json());
-        const grid = document.getElementById("room-list-home");
-        if (!grid) return;
-        grid.innerHTML = "";
-
-        if (rooms.length === 0) {
-            grid.innerHTML = `<p style="color:var(--text-muted);font-size:13px;padding:20px;text-align:center;width:100%">Henüz aktif sunucu yok. İlk sunucuyu sen oluştur!</p>`;
-            return;
-        }
-
-        rooms.forEach(room => {
-            const isOwner = state.peerId === room.owner_id;
-            const crown = isOwner ? '<span class="crown-icon" title="Sunucu Sahibi">👑</span>' : '';
-
-            const card = document.createElement("div");
-            card.className = "room-card";
-            card.innerHTML = `
-                <div class="room-card-icon" style="background: ${room.color || 'var(--accent)'}">
-                    ${room.icon_url ? `<img src="${room.icon_url}" />` : initials(room.name)}
-                </div>
-                <div class="room-card-info">
-                    <div class="room-card-name">${room.name} ${crown}</div>
-                    <div class="room-card-meta">${room.peer_count || 0} kişi çevrimiçi</div>
-                </div>
-                <button class="btn-primary tiny">Katıl</button>
-            `;
-            card.onclick = () => joinServer(room.room_id);
-            grid.appendChild(card);
-        });
-    } catch (err) {
-        console.warn("[App] Discovery refresh failed", err);
-    }
-}
-
 function openScreenOverlay(peerId, username) {
-    const video = state.remoteMedia?.[peerId];
-    if (!video) return toast("Video akışı bulunamadı.", "error");
+    let video = state.remoteMedia?.[peerId];
+    if (peerId === state.peerId) {
+        video = state.localVideoEl || document.getElementById("self-share-video");
+    }
+    if (!video?.srcObject?.getVideoTracks?.()?.length) {
+        return toast("Video akışı bulunamadı.", "error");
+    }
 
     // Prevent duplicates
     const existing = document.getElementById("screen-overlay");
@@ -2440,7 +2458,7 @@ function showContextMenu(peerId, username, x, y) {
     if ((myRole === "owner" || myRole === "admin") && peerId !== state.peerId) {
         addDivider();
         addSection("Yetki");
-        const cr = server.roles?.[peerId];
+        const cr = server.peer_roles?.[peerId];
         if (server.ownerId !== peerId) {
             if (cr !== "admin") addItem("🛡️", "Yönetici Yap", () => assignRole(peerId, "admin", server));
             if (cr !== "mod") addItem("🟢", "Moderatör Yap", () => assignRole(peerId, "mod", server));
@@ -2518,11 +2536,12 @@ function showMsgContextMenu(msg, x, y) {
 
 function showMemberProfile(peerId, username, server) {
     const m = server.members?.find(m => m.peer_id === peerId);
+    const pr = server.peer_roles?.[peerId];
     const role = server.ownerId === peerId ? "Kurucu 👑"
-        : server.roles?.[peerId] === "admin" ? "Yönetici 🛡️"
-            : server.roles?.[peerId] === "mod" ? "Moderatör 🟢"
+        : pr === "admin" ? "Yönetici 🛡️"
+            : pr === "mod" ? "Moderatör 🟢"
                 : "Üye";
-    const cls = server.ownerId === peerId ? "owner" : server.roles?.[peerId] || "";
+    const cls = server.ownerId === peerId ? "owner" : pr || "";
     showModal(username, `
       <div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:10px 0">
         <div style="width:72px;height:72px;border-radius:50%;font-size:28px;display:flex;align-items:center;justify-content:center;background:${m?.avatar_color || '#7c3aed'};font-weight:700;color:#fff">
@@ -2549,10 +2568,21 @@ function forceMutePeer(peerId, username) {
 }
 
 function assignRole(peerId, role, server) {
-    if (!server.roles) server.roles = {};
-    if (role) server.roles[peerId] = role;
-    else delete server.roles[peerId];
-    if (state.mesh) state.mesh.broadcast({ type: "server_update", payload: { id: server.id, name: server.name, channels: server.channels, roles: server.roles } });
+    if (!server.peer_roles) server.peer_roles = {};
+    if (role) server.peer_roles[peerId] = role;
+    else delete server.peer_roles[peerId];
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: "server_update",
+            payload: {
+                id: server.id,
+                name: server.name,
+                channels: server.channels,
+                roles: server.roles,
+                peer_roles: server.peer_roles,
+            },
+        });
+    }
     updateMembersPanel(server.id);
     toast("Rol güncellendi.", "success");
 }
@@ -3128,7 +3158,13 @@ document.addEventListener("DOMContentLoaded", () => {
             if (state.mesh.screenStream) {
                 state.mesh.stopScreenShare();
                 screenBtn.classList.remove("active");
-                if (state.mesh) state.mesh.broadcast({ type: "screen_status", sharing: false });
+                if (state.mesh) {
+                    state.mesh.broadcast({
+                        type: "screen_status",
+                        sharing: false,
+                        channelId: state.voiceChannelId || state.activeChannelId,
+                    });
+                }
                 const preview = document.getElementById("local-screen-preview");
                 if (preview && !state.cameraStream) preview.classList.add("hidden");
             } else {
@@ -3136,7 +3172,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (success) {
                     screenBtn.classList.add("active");
                     toast("Ekran paylaşımı başlatıldı.", "success");
-                    if (state.mesh) state.mesh.broadcast({ type: "screen_status", sharing: true });
+                    if (state.mesh) {
+                        state.mesh.broadcast({
+                            type: "screen_status",
+                            sharing: true,
+                            channelId: state.voiceChannelId || state.activeChannelId,
+                        });
+                    }
 
                     // Local Preview
                     const preview = document.getElementById("local-screen-preview");
@@ -3338,7 +3380,13 @@ function openUserProfile(peerId, username, avatarImage, avatarColor) {
 window.onLocalScreenShareEnded = function () {
     const screenBtn = document.getElementById("voice-screen-btn");
     if (screenBtn) screenBtn.classList.remove("active");
-    if (state.mesh) state.mesh.broadcast({ type: "screen_status", sharing: false });
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: "screen_status",
+            sharing: false,
+            channelId: state.voiceChannelId || state.activeChannelId,
+        });
+    }
     toast("Ekran paylaşımı durduruldu.", "info");
 
     // V16: Close Local Preview
@@ -3353,7 +3401,7 @@ function updateRoomStats() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
 
-    const count = server.peer_count || 0;
+    const count = server.members?.length ?? server.peer_count ?? 0;
     statsEl.textContent = `${count} üye`;
 }
 
@@ -3361,36 +3409,6 @@ function updateRoomStats() {
 setInterval(() => {
     if (state.activeServerId) updateRoomStats();
 }, 10000);
-async function refreshDiscovery() {
-    const grid = document.getElementById("room-list-home");
-    if (!grid) return;
-    try {
-        const res = await fetch(`${API_BASE}/rooms`);
-        const rooms = await res.json();
-        grid.innerHTML = "";
-        rooms.forEach(room => {
-            const card = document.createElement("div");
-            card.className = "room-card";
-            const iconContent = room.icon_url
-                ? `<img src="${room.icon_url}" class="room-card-img" />`
-                : initials(room.name);
-
-            card.innerHTML = `
-                <div class="room-card-icon" style="background:${AVATAR_COLORS[Math.abs(room.room_id.charCodeAt(0)) % AVATAR_COLORS.length]}">
-                    ${iconContent}
-                </div>
-                <div class="room-card-info">
-                    <div class="room-card-name">${room.name}</div>
-                    <div class="room-card-peers">${room.peer_count} üye</div>
-                </div>
-            `;
-            card.onclick = () => joinServer(room.room_id);
-            grid.appendChild(card);
-        });
-    } catch (e) {
-        console.error("Discovery failed", e);
-    }
-}
 
 async function joinByCode() {
     const code = document.getElementById("join-invite-input").value.trim().toUpperCase();
@@ -3705,23 +3723,40 @@ async function joinByInviteCode(code) {
             toast("Geçersiz veya süresi dolmuş davet kodu.", "error");
             return;
         }
-        // Construct a server object from the room data
+        const peerList = (data.peers || []).map(p => ({
+            peer_id: p.peer_id,
+            username: p.username,
+            avatar_color: p.avatar_color,
+            avatar_image: p.avatar_image ?? null,
+        }));
+        if (!peerList.some(m => m.peer_id === state.peerId)) {
+            peerList.push({
+                peer_id: state.peerId,
+                username: state.username,
+                avatar_color: state.avatarColor,
+                avatar_image: state.avatarImage,
+            });
+        }
         const server = {
             id: data.room_id,
             name: data.name,
             ownerId: data.owner_id,
             channels: data.channels || [],
-            members: data.peers || [],
+            members: peerList,
             roles: data.roles || {},
-            peerRoles: data.peer_roles || {},
-            pinnedMessages: data.pinned_messages || [],
+            peer_roles: data.peer_roles || {},
+            pinned_messages: data.pinned_messages || [],
             messages: data.messages || {},
             inviteCode: data.invite_code,
-            iconUrl: data.icon_url,
+            icon_url: data.icon_url,
             voiceMembers: {},
+            unread: {},
         };
-        // Don't add duplicate
-        if (!state.servers.find(s => s.id === server.id)) {
+        const dupIdx = state.servers.findIndex(s => s.id === server.id);
+        if (dupIdx !== -1) {
+            const prev = state.servers[dupIdx];
+            state.servers[dupIdx] = { ...prev, ...server, voiceMembers: prev.voiceMembers || {} };
+        } else {
             state.servers.push(server);
         }
         renderServerRail();
@@ -3799,18 +3834,37 @@ async function joinDiscoveryRoom(roomId, inviteCode) {
 function switchToServer(serverId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
+
+    if (serverId === state.activeServerId && state.mesh && state.mesh.roomId === serverId) {
+        const firstText = server.channels?.find(c => c.type === "text");
+        if (firstText) showChatView(serverId, firstText.id);
+        updateChannelSidebar(serverId);
+        renderServerRail();
+        document.getElementById("home-btn")?.classList.remove("active");
+        document.querySelectorAll("#server-icons [data-server-id]").forEach(el => {
+            el.classList.toggle("active", el.dataset.serverId === serverId);
+        });
+        return;
+    }
+
+    if (state.voiceChannelId) {
+        try { leaveVoiceChannel(); } catch (e) { /* noop */ }
+    }
+
     state.activeServerId = serverId;
-    // Connect mesh to this room
     connectMesh(serverId);
-    // Select first text channel
     const firstText = server.channels?.find(c => c.type === "text");
     if (firstText) {
         showChatView(serverId, firstText.id);
     }
     updateChannelSidebar(serverId);
+    updateMembersPanel(serverId);
+    updatePeerCountBadge(serverId);
     renderServerRail();
-    document.querySelectorAll(".rail-icon").forEach(el => el.classList.remove("active"));
-    document.querySelector(`.rail-icon[data-server-id="${serverId}"]`)?.classList.add("active");
+    document.getElementById("home-btn")?.classList.remove("active");
+    document.querySelectorAll("#server-icons [data-server-id]").forEach(el => {
+        el.classList.toggle("active", el.dataset.serverId === serverId);
+    });
 }
 
 /*  Voice sidebar activity indicator  */

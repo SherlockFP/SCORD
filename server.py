@@ -170,7 +170,7 @@ def create_room(body: dict):
     rooms[room_id] = Room(room_id, name, owner_id)
     save_db()
     log.info(f"Room created: {name!r} ({room_id}) by {owner_id}")
-    return {"room_id": room_id}
+    return {"room_id": room_id, "invite_code": rooms[room_id].invite_code}
 
 @app.post("/api/rooms/{room_id}/pin")
 def toggle_pin(room_id: str, body: dict):

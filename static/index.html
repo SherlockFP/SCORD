@@ -101,7 +101,7 @@
         <div class="vsb-stream-grid" id="voice-streams"></div>
         <div id="local-screen-preview" class="local-preview hidden">
           <video id="self-share-video" autoplay muted playsinline></video>
-          <span>Kendi Ekranın</span>
+          <span id="local-preview-label">Kendi Ekranın</span>
         </div>
         <div class="vsb-controls">
           <span class="user-bar-name" id="user-bar-name">Loading...</span>
@@ -246,11 +246,9 @@
           </div>
         </div>
       </div>
-  </div>
-  </div>
 
-  <!-- Voice Channel View -->
-  <div id="voice-view" class="voice-view hidden">
+      <!-- Voice Channel View -->
+      <div id="voice-view" class="voice-view hidden">
     <div class="voice-header">
       <span class="channel-type-icon voice">🔊</span>
       <span id="voice-channel-name">Sesli Sohbet</span>
@@ -295,16 +293,9 @@
       <h4>Üyeler — <span id="voice-member-count">0</span></h4>
       <div id="voice-members-list"></div>
     </aside>
-  </div>
-      style="position: absolute; margin-top:20px; bottom: 85px; right: 24px; width: 300px; background: rgba(0,0,0,0.8); border: 1px solid var(--border-strong); border-radius: 8px; z-index: 50; padding: 8px;">
-      <div id="local-preview-label"
-        style="font-size: 12px; font-weight: bold; margin-bottom: 4px; color: var(--green);">Yayındasın (Önizleme)</div>
-      <video id="self-share-video" autoplay playsinline muted
-        style="width: 100%; border-radius: 4px; pointer-events: none;"></video>
-    </div>
-  </div>
-  </div>
-  </main>
+      </div>
+
+    </main>
   </div>
 
   <!-- ── Modals ───────────────────────────────────────────────────────────────── -->
