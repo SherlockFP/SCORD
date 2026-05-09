@@ -423,23 +423,15 @@ async function startScreenShare() {
 
         // Stop automatically if user closes screen from browser UI
         stream.getVideoTracks()[0].onended = () => {
-            stream.getTracks().forEach(t => t.stop());
-            state.screenStream = null;
-            if (state.mesh) state.mesh.screenStream = null;
-            // Remove video senders from all peers
-            for (const [, peerObj] of Object.entries(state.mesh?.peers || {})) {
-                const pc = peerObj.pc;
-                if (!pc) continue;
-                pc.getSenders().filter(s => s.track?.kind === "video").forEach(s => {
-                    try { pc.removeTrack(s); } catch (e) { }
-                });
-            }
-            toast("Ekran paylaşımı durduruldu.", "info");
-            document.getElementById("voice-screen-btn").textContent = "🖥️ Ekran Paylaş";
+            stopScreenShare();
         };
 
-        document.getElementById("voice-screen-btn").classList.remove("active");
+        document.getElementById("voice-screen-btn").classList.add("active");
         toast("Ekran başarıyla paylaşıldı!", "success");
+        // Force refresh UI
+        if (state.activeServerId && state.voiceChannelId) {
+            renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+        }
     } catch (err) {
         if (err.name !== "NotAllowedError") console.error("Screen share error", err);
         toast("Ekran paylaşımı iptal edildi veya hata oluştu.", "error");
@@ -486,6 +478,11 @@ async function startCameraShare() {
 
         const btn = document.getElementById("voice-camera-btn");
         if (btn) btn.classList.add("active");
+
+        // Force UI refresh to show local video in gallery
+        if (state.activeServerId && state.voiceChannelId) {
+            renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+        }
 
         toast("Kamera açıldı!", "success");
     } catch (err) {

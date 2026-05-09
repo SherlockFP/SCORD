@@ -1440,24 +1440,22 @@ body {
   backdrop-filter: blur(16px);
 }
 
-.voice-header {
+.voice-view {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 22px;
-  font-weight: 700;
-}
-
-.channel-type-icon.voice {
-  font-size: 24px;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-deep);
 }
 
 .voice-participants {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
-  width: 100%;
-  max-width: 1200px;
+  padding: 24px;
+  overflow-y: auto;
+  flex: 1;
+  align-content: start;
 }
 
 .voice-empty {
@@ -2719,5 +2717,5 @@ html[data-theme='gold'] {
   --accent-hover: #d97706;
   --accent: #f59e0b;
 }
-.voice-view { height: 100vh; padding: 24px; overflow-y: auto; overflow-x: hidden; box-sizing: border-box; }
 
+/* Unified Voice Overflow Fix applied above */
