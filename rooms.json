@@ -1,0 +1,471 @@
+{
+  "4826b3a8-2b59-47f6-84da-409f1b12f24e": {
+    "room_id": "4826b3a8-2b59-47f6-84da-409f1b12f24e",
+    "name": "Verified Server",
+    "owner_id": "57a54f78-b4dd-457b-bf69-6aecd6a7e109",
+    "channels": [
+      {
+        "id": "general",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "voice",
+        "name": "Ses Kanalı",
+        "type": "voice"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Member",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "57a54f78-b4dd-457b-bf69-6aecd6a7e109": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {
+      "ch-genel": [
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+          "author": "DebuggerBugFixerFinalTester",
+          "authorId": "57a54f78-b4dd-457b-bf69-6aecd6a7e109",
+          "avatarColor": "#7c3aed",
+          "avatarImage": null,
+          "time": "05:26",
+          "id": "87f1e0fe-3036-4d76-9fa1-e03cb3d17dd7",
+          "isPinned": false
+        },
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "https://vignette.wikia.nocookie.net/pixel-arts/images/9/9b/Small_Ghost.png/revision/latest?cb=20180424185718",
+          "author": "DebuggerBugFixerFinalTester",
+          "authorId": "57a54f78-b4dd-457b-bf69-6aecd6a7e109",
+          "avatarColor": "#7c3aed",
+          "avatarImage": null,
+          "time": "05:26",
+          "id": "960029e7-b3fd-436d-b34c-c4cbeb99cdc1",
+          "isPinned": false
+        },
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "Test message",
+          "author": "DebuggerBugFixerFinalTester",
+          "authorId": "57a54f78-b4dd-457b-bf69-6aecd6a7e109",
+          "avatarColor": "#7c3aed",
+          "avatarImage": null,
+          "time": "05:27",
+          "id": "003dbe04-b498-44d3-8a10-11f680a1973b",
+          "isPinned": false
+        }
+      ]
+    },
+    "icon_url": null,
+    "invite_code": "65453B"
+  },
+  "4f0a2778-4133-4fa9-8ade-a397701da89b": {
+    "room_id": "4f0a2778-4133-4fa9-8ade-a397701da89b",
+    "name": "asd",
+    "owner_id": "f246c82d-7270-48d4-befa-6c1266c8b3e2",
+    "channels": [
+      {
+        "id": "general",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "voice",
+        "name": "Ses Kanalı",
+        "type": "voice"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Member",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "f246c82d-7270-48d4-befa-6c1266c8b3e2": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {},
+    "icon_url": null,
+    "invite_code": "E43D7A"
+  },
+  "bd2bb7a7-9a64-4dda-a33e-8f2616b9fd12": {
+    "room_id": "bd2bb7a7-9a64-4dda-a33e-8f2616b9fd12",
+    "name": "sadasd",
+    "owner_id": "bcd2e10c-c284-4960-94f6-83b7b261d1ad",
+    "channels": [
+      {
+        "id": "general",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "voice",
+        "name": "Ses Kanalı",
+        "type": "voice"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Member",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "bcd2e10c-c284-4960-94f6-83b7b261d1ad": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {
+      "ch-genel": [
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "hey",
+          "author": "DebuggerBugFixerFinalTester",
+          "authorId": "bcd2e10c-c284-4960-94f6-83b7b261d1ad",
+          "avatarColor": "#7c3aed",
+          "avatarImage": null,
+          "time": "19:12",
+          "id": "7eaf76ed-b541-4c47-ace9-e5594ff182f9",
+          "isPinned": false
+        },
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "hazed",
+          "author": "DebuggerBugFixerFinalTester",
+          "authorId": "bcd2e10c-c284-4960-94f6-83b7b261d1ad",
+          "avatarColor": "#7c3aed",
+          "avatarImage": null,
+          "time": "19:12",
+          "id": "c1a6543e-53ae-4cc6-8a07-fb46c2526776",
+          "isPinned": false
+        },
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "dazed",
+          "author": "DebuggerBugFixerFinalTester",
+          "authorId": "bcd2e10c-c284-4960-94f6-83b7b261d1ad",
+          "avatarColor": "#7c3aed",
+          "avatarImage": null,
+          "time": "19:12",
+          "id": "42b7833a-0ce9-4e98-a69f-db811b28ae31",
+          "isPinned": false
+        },
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "my nibba",
+          "author": "DebuggerBugFixerFinalTester",
+          "authorId": "bcd2e10c-c284-4960-94f6-83b7b261d1ad",
+          "avatarColor": "#7c3aed",
+          "avatarImage": null,
+          "time": "19:12",
+          "id": "9dd7082e-52b1-4187-ab66-64391b368a45",
+          "isPinned": false
+        },
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "nigga",
+          "author": "DebuggerBugFixerFinalTester",
+          "authorId": "bcd2e10c-c284-4960-94f6-83b7b261d1ad",
+          "avatarColor": "#7c3aed",
+          "avatarImage": null,
+          "time": "19:12",
+          "id": "213294e1-0865-4a34-a851-2a4e91d95c39",
+          "isPinned": false
+        },
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "HEY",
+          "author": "DebuggerBugFixerFinalTester",
+          "authorId": "bcd2e10c-c284-4960-94f6-83b7b261d1ad",
+          "avatarColor": "#7c3aed",
+          "avatarImage": null,
+          "time": "19:12",
+          "id": "bbec5ef6-4917-4558-bbbf-6690a9ddea88",
+          "isPinned": false
+        },
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "rororo",
+          "author": "DebuggerBugFixerFinalTester",
+          "authorId": "bcd2e10c-c284-4960-94f6-83b7b261d1ad",
+          "avatarColor": "#7c3aed",
+          "avatarImage": null,
+          "time": "19:12",
+          "id": "85367d76-e1bd-4435-9df3-5341d4b5d71c",
+          "isPinned": false
+        }
+      ]
+    },
+    "icon_url": null,
+    "invite_code": "5C50B6"
+  },
+  "455f5ef7-8040-479f-a12a-d7a954bdb74f": {
+    "room_id": "455f5ef7-8040-479f-a12a-d7a954bdb74f",
+    "name": "ad",
+    "owner_id": "7ef084fc-652c-4248-878a-33181dde04c4",
+    "channels": [
+      {
+        "id": "general",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "voice",
+        "name": "Ses Kanalı",
+        "type": "voice"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Member",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "7ef084fc-652c-4248-878a-33181dde04c4": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {},
+    "icon_url": null,
+    "invite_code": "973DE0"
+  },
+  "13e5cb58-ae87-42df-b953-f2233e07a161": {
+    "room_id": "13e5cb58-ae87-42df-b953-f2233e07a161",
+    "name": "Test Server",
+    "owner_id": "10413b23-26ad-4b38-9683-3076c55279ce",
+    "channels": [
+      {
+        "id": "ch-genel",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "ch-duyurular",
+        "name": "duyurular",
+        "type": "text"
+      },
+      {
+        "id": "ch-sesli",
+        "name": "sesli-sohbet",
+        "type": "voice"
+      },
+      {
+        "id": "ch-muzik",
+        "name": "müzik",
+        "type": "voice"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Üye",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "10413b23-26ad-4b38-9683-3076c55279ce": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {
+      "ch-genel": [
+        {
+          "type": "chat",
+          "channelId": "ch-genel",
+          "text": "Hello from the test subagent!",
+          "author": "dodorooroTester",
+          "authorId": "10413b23-26ad-4b38-9683-3076c55279ce",
+          "avatarColor": "#4f46e5",
+          "avatarImage": null,
+          "time": "19:23",
+          "id": "fc2853cd-027f-419c-b451-aba01bfb74e3",
+          "isPinned": false
+        }
+      ]
+    },
+    "icon_url": null,
+    "invite_code": "9CBDD9"
+  },
+  "d83db1e2-f75d-4742-9459-5db135ad0a53": {
+    "room_id": "d83db1e2-f75d-4742-9459-5db135ad0a53",
+    "name": "asdasd",
+    "owner_id": "cbcd1661-6cdb-4b42-b32f-1a33be461394",
+    "channels": [
+      {
+        "id": "ch-genel",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "ch-duyurular",
+        "name": "duyurular",
+        "type": "text"
+      },
+      {
+        "id": "ch-sesli",
+        "name": "sesli-sohbet",
+        "type": "voice"
+      },
+      {
+        "id": "ch-muzik",
+        "name": "müzik",
+        "type": "voice"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Üye",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "cbcd1661-6cdb-4b42-b32f-1a33be461394": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {},
+    "icon_url": null,
+    "invite_code": "7472D1"
+  },
+  "833cf972-4120-404b-befa-678c9e77a32e": {
+    "room_id": "833cf972-4120-404b-befa-678c9e77a32e",
+    "name": "Stage",
+    "owner_id": "372189c8-22cb-45d0-85de-e40c600fd407",
+    "channels": [
+      {
+        "id": "ch-genel",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "ch-duyurular",
+        "name": "duyurular",
+        "type": "text"
+      },
+      {
+        "id": "ch-sesli",
+        "name": "sesli-sohbet",
+        "type": "voice"
+      },
+      {
+        "id": "ch-muzik",
+        "name": "müzik",
+        "type": "voice"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Üye",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "372189c8-22cb-45d0-85de-e40c600fd407": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {},
+    "icon_url": null,
+    "invite_code": "26755C"
+  },
+  "ecfabee6-d123-4198-98e1-fe1b75928a30": {
+    "room_id": "ecfabee6-d123-4198-98e1-fe1b75928a30",
+    "name": "Stage",
+    "owner_id": "5024f745-8a50-4987-8094-7362d3b0c05f",
+    "channels": [
+      {
+        "id": "ch-genel",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "ch-duyurular",
+        "name": "duyurular",
+        "type": "text"
+      },
+      {
+        "id": "ch-sesli",
+        "name": "sesli-sohbet",
+        "type": "voice"
+      },
+      {
+        "id": "ch-muzik",
+        "name": "müzik",
+        "type": "voice"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Üye",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "5024f745-8a50-4987-8094-7362d3b0c05f": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {},
+    "icon_url": null,
+    "invite_code": "EAB2E6"
+  }
+}
