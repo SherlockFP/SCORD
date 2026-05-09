@@ -337,14 +337,13 @@ function showChatView(serverId, channelId) {
 }
 
 function updateMuteStates() {
-    if (!state.mesh) return;
-    state.mesh.peers.forEach(peer => {
-        if (peer.stream) {
-            const pInfo = state.mesh.peerInfo[peer.peerId] || {};
-            const sameChannel = (pInfo.voiceChannelId === state.voiceChannelId) && state.voiceChannelId !== null;
-            // Strictly mute if not in same voice channel
-            peer.stream.getTracks().forEach(t => t.enabled = sameChannel);
-        }
+    if (!state.mesh || !state.remoteMedia) return;
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    const activeChannel = state.voiceChannelId;
+    Object.entries(state.remoteMedia).forEach(([peerId, videoEl]) => {
+        const tracks = videoEl.srcObject?.getAudioTracks() || [];
+        const sameChannel = activeChannel && server?.voiceMembers?.[activeChannel]?.some(m => m.peer_id === peerId);
+        tracks.forEach(t => t.enabled = !!sameChannel);
     });
 }
 
@@ -1218,7 +1217,7 @@ function connectToRoom(roomId) {
         onStatusChange: (status) => updateConnectionStatus(status),
     });
 
-    state.mesh.connect(state.username, state.avatarColor);
+    state.mesh.connect(state.username, state.avatarColor, state.avatarImage);
 }
 
 /* ── P2P event handlers ───────────────────────────────────── */
@@ -1264,23 +1263,30 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         const server = state.servers.find(s => s.id === roomId);
         if (server) {
             if (!server.voiceMembers) server.voiceMembers = {};
+            Object.keys(server.voiceMembers).forEach(chId => {
+                if (chId !== data.channelId) {
+                    server.voiceMembers[chId] = server.voiceMembers[chId].filter(m => m.peer_id !== fromPeerId);
+                }
+            });
             if (!server.voiceMembers[data.channelId]) server.voiceMembers[data.channelId] = [];
-            if (!server.voiceMembers[data.channelId].find(m => m.peer_id === fromPeerId)) {
-                server.voiceMembers[data.channelId].push({
+            let member = server.voiceMembers[data.channelId].find(m => m.peer_id === fromPeerId);
+            if (!member) {
+                member = {
                     peer_id: fromPeerId,
                     username: data.username,
                     avatar_color: data.avatarColor,
                     avatar_image: data.avatarImage,
-                    isSharingScreen: !!data.isSharingScreen
-                });
+                    isSharingScreen: !!data.isSharingScreen,
+                    isSharingCamera: !!data.isSharingCamera
+                };
+                server.voiceMembers[data.channelId].push(member);
             } else {
-                // Update existing member info if needed
-                const m = server.voiceMembers[data.channelId].find(m => m.peer_id === fromPeerId);
-                if (m) {
-                    m.isSharingScreen = !!data.isSharingScreen;
-                }
+                member.username = data.username;
+                member.avatar_color = data.avatarColor;
+                member.avatar_image = data.avatarImage;
+                member.isSharingScreen = !!data.isSharingScreen;
+                member.isSharingCamera = !!data.isSharingCamera;
             }
-            // If we are already in this channel, reply to joining peer (or on connection)
             if (state.voiceChannelId === data.channelId && state.mesh) {
                 state.mesh.sendTo(fromPeerId, {
                     type: "voice_state_sync",
@@ -1288,7 +1294,8 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                     username: state.username,
                     avatarColor: state.avatarColor,
                     avatarImage: state.avatarImage,
-                    isSharingScreen: !!state.screenStream
+                    isSharingScreen: !!state.screenStream,
+                    isSharingCamera: !!state.cameraStream
                 });
             }
             updateChannelSidebar(roomId);
@@ -1297,10 +1304,12 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         }
     } else if (data.type === "voice_leave") {
         const server = state.servers.find(s => s.id === roomId);
-        if (server?.voiceMembers?.[data.channelId]) {
-            server.voiceMembers[data.channelId] = server.voiceMembers[data.channelId].filter(m => m.peer_id !== fromPeerId);
+        if (server?.voiceMembers) {
+            Object.keys(server.voiceMembers).forEach(chId => {
+                server.voiceMembers[chId] = server.voiceMembers[chId].filter(m => m.peer_id !== fromPeerId);
+            });
             updateChannelSidebar(roomId);
-            if (state.activeChannelId === data.channelId) renderVoiceParticipants(roomId, data.channelId);
+            if (state.activeServerId === roomId) renderVoiceParticipants(roomId, state.activeChannelId);
             updateMuteStates();
         }
     } else if (data.type === "msg_pin_toggle") {
@@ -1340,12 +1349,16 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                 renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
             }
         }
-    } else if (data.type === "screen_status") {
+    } else if (data.type === "screen_status" || data.type === "video_status") {
         const server = state.servers.find(s => s.id === roomId);
         if (server && server.voiceMembers && server.voiceMembers[state.voiceChannelId]) {
             const member = server.voiceMembers[state.voiceChannelId].find(m => m.peer_id === fromPeerId);
             if (member) {
-                member.isSharingScreen = data.sharing;
+                if (data.type === "screen_status") {
+                    member.isSharingScreen = data.sharing;
+                } else {
+                    member.isSharingCamera = !!data.sharing;
+                }
                 renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
             }
         }
@@ -1439,7 +1452,6 @@ function handlePeerJoined(peerId, info, roomId) {
             avatar_image: image
         });
     } else {
-        // Update existing info
         server.members[existingIdx].username = username;
         server.members[existingIdx].avatar_color = color;
         server.members[existingIdx].avatar_image = image;
@@ -1448,18 +1460,6 @@ function handlePeerJoined(peerId, info, roomId) {
     if (state.activeServerId === roomId) {
         updateMembersPanel(roomId);
         updatePeerCountBadge(roomId);
-        // Only show system message for NEW joins, not historical ones
-        // (but since p2p.js now calls this for room_state, we might need a flag)
-        // For now, keep it simple.
-    }
-
-    // Send history if we are the "boss" or have history
-    if (state.mesh && server.messages && Object.keys(server.messages).length > 0) {
-        state.mesh.sendTo(peerId, {
-            type: "history_sync",
-            messages: server.messages,
-            roles: server.roles || {}
-        });
     }
 
     renderServerRail();
@@ -1498,7 +1498,7 @@ function handleVoiceStream(peerId, stream) {
         const video = document.createElement("video");
         video.autoplay = true;
         video.playsInline = true;
-        video.muted = true;
+        video.muted = peerId === state.peerId;
         video.className = "voice-video";
 
         // Ensure UI updates when video actually starts
@@ -1510,14 +1510,13 @@ function handleVoiceStream(peerId, stream) {
 
         state.remoteMedia[peerId] = video;
 
-        // Let renderVoiceParticipants pick it up if UI is open
         setTimeout(() => {
             renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
-            updateMuteStates(); // Apply channel isolation immediately
+            updateMuteStates();
         }, 500);
     }
     state.remoteMedia[peerId].srcObject = stream;
-    updateMuteStates(); // Re-check isolation whenever a stream is assigned
+    updateMuteStates();
 }
 
 function updateConnectionStatus(status) {
@@ -1528,15 +1527,26 @@ function updateConnectionStatus(status) {
 // Consolidated above
 
 function handlePeerConnected(peerId, roomId) {
-    // When a peer connects, if we are in a voice channel, tell them immediately
-    if (state.voiceChannelId && state.mesh) {
+    const server = state.servers.find(s => s.id === roomId);
+    if (!server || !state.mesh) return;
+
+    if (server.messages && Object.keys(server.messages).length > 0) {
+        state.mesh.sendTo(peerId, {
+            type: "history_sync",
+            messages: server.messages,
+            roles: server.roles || {}
+        });
+    }
+
+    if (state.voiceChannelId) {
         state.mesh.sendTo(peerId, {
             type: "voice_state_sync",
             channelId: state.voiceChannelId,
             username: state.username,
             avatarColor: state.avatarColor,
             avatarImage: state.avatarImage,
-            isSharingScreen: !!state.screenStream
+            isSharingScreen: !!state.screenStream,
+            isSharingCamera: !!state.cameraStream
         });
     }
 }
@@ -1658,6 +1668,8 @@ async function joinVoiceChannel(channelId) {
         username: state.username,
         avatarColor: state.avatarColor,
         avatarImage: state.avatarImage,
+        isSharingScreen: !!state.screenStream,
+        isSharingCamera: !!state.cameraStream
     });
 
     // Add self to voiceMembers
@@ -1796,7 +1808,7 @@ function renderVoiceParticipants(serverId, channelId) {
         }
         nameEl.textContent = m.username + (m.peer_id === state.peerId ? " (sen)" : "");
 
-        const isSharing = m.isSharingScreen || (m.peer_id === state.peerId && state.screenStream);
+        const isSharing = m.isSharingScreen || m.isSharingCamera || (m.peer_id === state.peerId && (state.screenStream || state.cameraStream));
         let liveBadge = nameContainer.querySelector('.live-badge');
         if (isSharing) {
             if (!liveBadge) {

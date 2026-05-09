@@ -52,8 +52,11 @@ class P2PMesh {
     }
 
     /* ── Connect to signaling server ─────────────────────────── */
-    connect(username, avatarColor) {
+    connect(username, avatarColor, avatarImage = null) {
         this._dead = false;
+        this.username = username;
+        this.avatarColor = avatarColor;
+        this.avatarImage = avatarImage;
         const url = `${this.signalingUrl}/${this.roomId}/${this.peerId}?username=${encodeURIComponent(username)}&color=${encodeURIComponent(avatarColor)}`;
         this._setStatus("connecting");
         this.ws = new WebSocket(url);
@@ -74,7 +77,7 @@ class P2PMesh {
             console.warn("[P2P] Signaling disconnected — reconnecting in 3s");
             this._setStatus("disconnected");
             clearTimeout(this._reconnectTimer);
-            this._reconnectTimer = setTimeout(() => this.connect(username, avatarColor), 3000);
+            this._reconnectTimer = setTimeout(() => this.connect(this.username, this.avatarColor, this.avatarImage), 3000);
         };
 
         this.ws.onerror = (e) => console.error("[P2P] WS error:", e);
@@ -160,6 +163,11 @@ class P2PMesh {
             this.screenStream.getTracks().forEach(t => pc.addTrack(t, this.screenStream));
         }
 
+        // Add local camera stream if active
+        if (this.cameraStream) {
+            this.cameraStream.getTracks().forEach(t => pc.addTrack(t, this.cameraStream));
+        }
+
         // Receive remote tracks (Voice + Screen)
         pc.ontrack = (ev) => {
             if (!this.remoteStreams) this.remoteStreams = {};
@@ -214,13 +222,12 @@ class P2PMesh {
             console.log(`[P2P] DataChannel open with ${peerId}`);
             this.cb.onPeerConnected?.(peerId);
 
-            // Broadcast full identity including heavy avatar_image which signaling skips
             dc.send(JSON.stringify({
                 type: "identity_announce",
                 peerId: this.peerId,
-                username: document.getElementById("username")?.textContent || "Anonim",
-                avatarColor: localStorage.getItem("scord_avatar_color"),
-                avatarImage: localStorage.getItem("scord_avatar_image")
+                username: this.username || "Anonim",
+                avatarColor: this.avatarColor || "#7c3aed",
+                avatarImage: this.avatarImage || null
             }));
         };
         dc.onmessage = (ev) => {
@@ -303,11 +310,10 @@ class P2PMesh {
     }
 
     /* ── Voice ───────────────────────────────────────────────── */
-    async startVoice() {
+    async startVoice(stream = null) {
         try {
-            this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            this.localStream = stream || await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             this.voiceActive = true;
-            // Add tracks to all existing peer connections
             for (const [, peerObj] of Object.entries(this.peers)) {
                 this.localStream.getTracks().forEach(t => {
                     try { peerObj.pc.addTrack(t, this.localStream); } catch { }
