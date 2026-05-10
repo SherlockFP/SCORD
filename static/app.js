@@ -10,6 +10,11 @@
 const WS_BASE = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 const API_BASE = "/api";
 
+const CHAT_INITIAL_LIMIT = 200;
+const CHAT_LOAD_MORE_STEP = 150;
+const CHAT_QUEUE_TOAST_COOLDOWN_MS = 9000;
+const A11Y_ANNOUNCE_THROTTLE_MS = 1200;
+
 /** @returns {typeof window.SCORD_TIMING} */
 function SCORD_T() {
     return window.SCORD_TIMING || {};
@@ -59,6 +64,13 @@ let state = {
     peerLatencyMs: {},
     peerIngressMs: {},
     _rttPingTimer: null,
+    _meshHealthTimer: null,
+    _lastMeshStatus: "",
+    _queuedBroadcastToastAt: 0,
+    _a11yAnnounceAt: 0,
+    notifSettings: { chat: true, dm: true, join: true, chatLevel: "all" },
+    compactMode: false,
+    _qsOpen: false,
 };
 
 // ── V16 Helpers ───────────────────────────────────────────────
@@ -97,6 +109,17 @@ function canonicalChannelIdForChat(server, channelId) {
     if (!firstText) return channelId;
     const lid = String(channelId).toLowerCase();
     if (lid === "general" || lid === "ch-genel" || lid === "genel") return firstText.id;
+    const textChs = server.channels.filter(c => c.type === "text");
+    if (textChs.length === 1) return firstText.id;
+    return channelId;
+}
+
+/** Ses kanalı id eşlemesi (farklı istemci / eski kayıtlar). */
+function canonicalVoiceChannelId(server, channelId) {
+    if (!server?.channels || channelId == null || channelId === "") return channelId;
+    if (server.channels.some(c => c.id === channelId && c.type === "voice")) return channelId;
+    const voices = server.channels.filter(c => c.type === "voice");
+    if (voices.length === 1) return voices[0].id;
     return channelId;
 }
 
@@ -118,6 +141,88 @@ function meshBroadcastReliable(payload) {
     }
     if (!state._p2pOutbox) state._p2pOutbox = [];
     state._p2pOutbox.push(payload);
+    if (payload?.type === "chat") {
+        const t = Date.now();
+        if (t - (state._queuedBroadcastToastAt || 0) > CHAT_QUEUE_TOAST_COOLDOWN_MS) {
+            state._queuedBroadcastToastAt = t;
+            toast("P2P veri yolu hazır değil; mesaj sıraya alındı.", "info");
+        }
+    }
+}
+
+/** Fetch with kullanıcıya kısa hata bildirimi */
+async function scordFetch(url, options = {}) {
+    try {
+        const res = await fetch(url, options);
+        if (!res.ok) {
+            const msg = `${res.status} ${res.statusText || ""}`.trim();
+            toast(`İstek başarısız: ${msg}`, "error");
+        }
+        return res;
+    } catch (e) {
+        console.warn("scordFetch", url, e);
+        toast("Ağ hatası — bağlantını kontrol et.", "error");
+        throw e;
+    }
+}
+
+function announceA11y(text) {
+    if (!text) return;
+    const t = Date.now();
+    if (t - state._a11yAnnounceAt < A11Y_ANNOUNCE_THROTTLE_MS) return;
+    state._a11yAnnounceAt = t;
+    const el = document.getElementById("sr-announcer");
+    if (!el) return;
+    el.textContent = "";
+    requestAnimationFrame(() => { el.textContent = text; });
+}
+
+function clearMeshHealthPoll() {
+    if (state._meshHealthTimer) {
+        clearInterval(state._meshHealthTimer);
+        state._meshHealthTimer = null;
+    }
+}
+
+function startMeshHealthPoll() {
+    clearMeshHealthPoll();
+    state._meshHealthTimer = setInterval(() => {
+        if (state.mesh) refreshConnectionBadge();
+    }, 2000);
+}
+
+function refreshConnectionBadge() {
+    const chatEl = document.getElementById("connection-badge");
+    const voiceEl = document.getElementById("voice-connection-badge");
+    const apply = (el) => {
+        if (!el) return;
+        const m = state.mesh;
+        if (!m) {
+            el.textContent = "";
+            el.className = el.id === "voice-connection-badge" ? "connection-badge connection-badge--voice" : "connection-badge";
+            return;
+        }
+        const wsOk = m.ws && m.ws.readyState === WebSocket.OPEN;
+        const dcOpen = anyMeshDcOpen(m);
+        const n = Object.values(m.peers || {}).filter(p => p.dc && p.dc.readyState === "open").length;
+        let label = "";
+        let extra = "";
+        if (!wsOk) {
+            extra = state._lastMeshStatus === "disconnected" ? "err" : "warn";
+            label = state._lastMeshStatus === "disconnected" ? "Sinyal kesildi" : "Sinyale bağlanıyor…";
+        } else if (!dcOpen) {
+            extra = "warn";
+            label = "P2P veri yolu bekleniyor…";
+        } else {
+            extra = "ok";
+            label = `P2P · ${n} kanal`;
+        }
+        el.textContent = label;
+        const base = el.id === "voice-connection-badge" ? "connection-badge connection-badge--voice" : "connection-badge";
+        el.className = `${base} ${extra}`.trim();
+    };
+    apply(chatEl);
+    apply(voiceEl);
 }
 
 function flushP2pOutbox() {
@@ -316,6 +421,9 @@ function applyScordAppearance() {
     const chat = localStorage.getItem("scord_chat_layout") || "bubbles";
     document.documentElement.setAttribute("data-scord-palette", pal);
     document.documentElement.setAttribute("data-scord-chat", chat);
+    if (!document.documentElement.getAttribute("data-msg-density")) {
+        document.documentElement.setAttribute("data-msg-density", localStorage.getItem("scord_msg_density") || "cozy");
+    }
 }
 
 function applyChannelBackground(serverId, channelId) {
@@ -484,7 +592,7 @@ function scrollToChatMessage(messageId) {
 
 async function persistChannelBackground(roomId, channelId, url) {
     try {
-        await fetch(`${API_BASE}/rooms/${roomId}/channel_background`, {
+        await scordFetch(`${API_BASE}/rooms/${roomId}/channel_background`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ channel_id: channelId, url: url || null }),
@@ -591,7 +699,9 @@ function initSetup() {
 function startApp() {
     document.getElementById("setup-overlay").classList.remove("active");
     document.getElementById("app").classList.remove("hidden");
+    loadUserPrefs();
     applyScordAppearance();
+    applyFocusModeButton();
 
     // Apply user info to UI
     const avatar = document.getElementById("user-bar-avatar");
@@ -685,13 +795,19 @@ function closeMobileNav() {
 function showHomeView() {
     closeMobileNav();
     clearRttPingTimer();
+    clearMeshHealthPoll();
+    if (state.activeServerId && state.activeChannelId) {
+        persistChatDraftFor(state.activeServerId, state.activeChannelId);
+    }
     if (state.voiceChannelId) {
         try { leaveVoiceChannel(); } catch (e) { /* noop */ }
     }
     if (state.mesh) {
+        clearMeshHealthPoll();
         try { state.mesh.disconnect(); } catch (e) { /* noop */ }
         state.mesh = null;
     }
+    refreshConnectionBadge();
     document.getElementById("home-view").classList.remove("hidden");
     document.getElementById("chat-view").classList.add("hidden");
     document.getElementById("voice-view").classList.add("hidden");
@@ -716,8 +832,27 @@ function showChatView(serverId, channelId) {
         return;
     }
 
+    const prevSid = state.activeServerId;
+    const prevCid = state.activeChannelId;
+    const chatVisible = document.getElementById("chat-view") && !document.getElementById("chat-view").classList.contains("hidden");
+    if (prevSid && prevCid && chatVisible && (prevSid !== serverId || prevCid !== channelId)) {
+        persistChatDraftFor(prevSid, prevCid);
+    }
+
     state.activeServerId = serverId;
     state.activeChannelId = channelId;
+
+    const canonCh = canonicalChannelIdForChat(server, channelId);
+    if (server._msgListOffset && canonCh) delete server._msgListOffset[canonCh];
+
+    const inp = document.getElementById("chat-input");
+    if (inp) {
+        const dk = draftStorageKey(serverId, channelId);
+        inp.value = localStorage.getItem(dk) || "";
+        inp.style.height = "auto";
+    }
+    hideNewMsgsChip();
+    wireMessagesScroll();
 
     document.getElementById("home-view").classList.add("hidden");
     document.getElementById("chat-view").classList.remove("hidden");
@@ -755,6 +890,11 @@ function showVoiceView(serverId, channelId) {
     const server = state.servers.find(s => s.id === serverId);
     const channel = server?.channels.find(c => c.id === channelId);
     if (!server || !channel) return;
+
+    if (state.activeServerId && state.activeChannelId) {
+        const prevCh = server.channels?.find(c => c.id === state.activeChannelId);
+        if (prevCh?.type === "text") persistChatDraftFor(state.activeServerId, state.activeChannelId);
+    }
 
     state.activeServerId = serverId;
     state.activeChannelId = channelId;
@@ -1080,6 +1220,7 @@ function createChannelItem(channel, serverId) {
     const item = document.createElement("div");
     item.className = "channel-item" + (channel.id === state.activeChannelId ? " active" : "");
     item.id = `ch-${channel.id}`;
+    item.dataset.ch = channel.id;
     if (channel.type === "text" && isChannelMuted(serverId, channel.id)) {
         item.classList.add("channel-muted");
         item.title = "Bu kanal yerel olarak sessize alındı";
@@ -1265,20 +1406,52 @@ function updatePeerCountBadge(serverId) {
 function renderMessages(serverId, channelId) {
     const server = state.servers.find(s => s.id === serverId);
     const area = document.getElementById("messages-area");
-    const messages = server?.messages?.[channelId] || [];
+    const cid = server ? canonicalChannelIdForChat(server, channelId) : channelId;
+    const all = server?.messages?.[cid] || [];
+    const loadWrap = document.getElementById("messages-load-more-wrap");
+    const loadBtn = document.getElementById("messages-load-more-btn");
 
-    if (messages.length === 0) {
+    if (all.length === 0) {
+        if (loadWrap) {
+            loadWrap.classList.add("hidden");
+            const lb = document.getElementById("messages-load-more-btn");
+            if (lb) lb.onclick = null;
+        }
         area.innerHTML = `<div class="messages-welcome">
     <div class="messages-welcome-icon">💬</div>
-    <h3># ${server?.channels.find(c => c.id === channelId)?.name || channelId}</h3>
+    <h3># ${server?.channels.find(c => c.id === cid)?.name || channelId}</h3>
     <p>Bu kanalın başlangıcı. Merhaba! 👋</p>
   </div>`;
         if (server) {
             if (!server.unread) server.unread = {};
-            server.unread[channelId] = 0;
+            server.unread[cid] = 0;
             updateChannelSidebar(serverId);
         }
         return;
+    }
+
+    if (!server._msgListOffset) server._msgListOffset = {};
+    let start = server._msgListOffset[cid];
+    if (typeof start !== "number" || start < 0) {
+        start = Math.max(0, all.length - CHAT_INITIAL_LIMIT);
+        server._msgListOffset[cid] = start;
+    }
+    start = Math.min(start, Math.max(0, all.length - 1));
+    server._msgListOffset[cid] = start;
+    const messages = all.slice(start);
+
+    if (loadWrap && loadBtn) {
+        if (start > 0) {
+            loadWrap.classList.remove("hidden");
+            loadBtn.textContent = `Daha eski mesajlar (${start} önceki)`;
+            loadBtn.onclick = () => {
+                server._msgListOffset[cid] = Math.max(0, start - CHAT_LOAD_MORE_STEP);
+                renderMessages(serverId, channelId);
+            };
+        } else {
+            loadWrap.classList.add("hidden");
+            loadBtn.onclick = null;
+        }
     }
 
     area.innerHTML = "";
@@ -1289,15 +1462,19 @@ function renderMessages(serverId, channelId) {
         const grouped = msg.authorId === lastAuthor && !msg.replyTo;
         const copy = { ...msg };
         if (pins.find(p => p.id === msg.id)) copy.isPinned = true;
-        appendMessageDOM(copy, grouped, serverId);
+        appendMessageDOM(copy, grouped, serverId, { scrollToBottom: true });
         lastAuthor = msg.authorId;
     });
 
     if (server) {
         if (!server.unread) server.unread = {};
-        server.unread[channelId] = 0;
+        server.unread[cid] = 0;
         updateChannelSidebar(serverId);
     }
+    requestAnimationFrame(() => {
+        area.scrollTop = area.scrollHeight;
+        hideNewMsgsChip();
+    });
 }
 
 function hydrateMessageReactions(bubbleEl, msg) {
@@ -1307,7 +1484,8 @@ function hydrateMessageReactions(bubbleEl, msg) {
     updateReactionBar(msg.id, norm);
 }
 
-function appendMessageDOM(msg, grouped = false, serverId = null) {
+function appendMessageDOM(msg, grouped = false, serverId = null, opts = {}) {
+    const forceBottom = opts.scrollToBottom === true;
     const area = document.getElementById("messages-area");
     const sid = serverId || state.activeServerId;
     const isSelf = msg.authorId === state.peerId;
@@ -1392,6 +1570,10 @@ function appendMessageDOM(msg, grouped = false, serverId = null) {
         const img = document.createElement("img");
         img.className = "msg-attach-img";
         img.src = msg.attachment;
+        img.loading = "lazy";
+        img.decoding = "async";
+        img.alt = "Ek";
+        img.onclick = () => img.classList.toggle("msg-attach-img--expanded");
         textDiv.appendChild(img);
     }
 
@@ -1412,8 +1594,14 @@ function appendMessageDOM(msg, grouped = false, serverId = null) {
 
     hydrateMessageReactions(el, msg);
 
+    const stickBottom = forceBottom || !isChatScrolledUp();
     area.appendChild(el);
-    area.scrollTop = area.scrollHeight;
+    if (stickBottom) {
+        area.scrollTop = area.scrollHeight;
+        hideNewMsgsChip();
+    } else if (!isSelf && msg.channelId === state.activeChannelId && sid === state.activeServerId) {
+        showNewMsgsChip();
+    }
 }
 
 function addSystemMessage(text) {
@@ -1421,8 +1609,12 @@ function addSystemMessage(text) {
     const el = document.createElement("div");
     el.className = "system-message";
     el.textContent = text;
+    const stick = !isChatScrolledUp();
     area.appendChild(el);
-    area.scrollTop = area.scrollHeight;
+    if (stick) {
+        area.scrollTop = area.scrollHeight;
+        hideNewMsgsChip();
+    }
 }
 
 /* ── Send chat message ────────────────────────────────────── */
@@ -1622,7 +1814,7 @@ function parseMessageText(text, serverId) {
         if (part.match(urlRegex)) {
             // Check for images
             if (part.match(/\.(jpeg|jpg|gif|png|webp)($|\?)/i)) {
-                return `<a href="${part}" target="_blank" class="rich-link"><img src="${part}" class="chat-embed-img" /></a>`;
+                return `<a href="${part}" target="_blank" class="rich-link"><img src="${part}" class="chat-embed-img" alt="" loading="lazy" decoding="async" /></a>`;
             }
             // Check for YouTube
             const ytMatch = part.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
@@ -1662,8 +1854,9 @@ function saveMessage(serverId, msg) {
     if (!server.messages[normalized.channelId]) server.messages[normalized.channelId] = [];
     server.messages[normalized.channelId].push(normalized);
 
+    const activeCanon = canonicalChannelIdForChat(server, state.activeChannelId);
     // If this is the active channel, append to DOM
-    if (normalized.channelId === state.activeChannelId && serverId === state.activeServerId) {
+    if (normalized.channelId === activeCanon && serverId === state.activeServerId) {
         const msgs = server.messages[normalized.channelId];
         const prev = msgs[msgs.length - 2];
         const grouped = prev && prev.authorId === normalized.authorId && !normalized.replyTo;
@@ -1678,14 +1871,35 @@ function saveMessage(serverId, msg) {
     }
 }
 
+function mergeMessageHistoryIntoServer(server, incoming) {
+    if (!server || !incoming || typeof incoming !== "object") return;
+    if (!server.messages) server.messages = {};
+    Object.keys(incoming).forEach(chId => {
+        const canonical = canonicalChannelIdForChat(server, chId);
+        const inc = incoming[chId];
+        if (!Array.isArray(inc) || inc.length === 0) return;
+        if (!server.messages[canonical]) server.messages[canonical] = [];
+        const target = server.messages[canonical];
+        const seen = new Set(target.map(m => m.id));
+        for (const m of inc) {
+            if (m && m.id && !seen.has(m.id)) {
+                target.push(m);
+                seen.add(m.id);
+            }
+        }
+        target.sort((a, b) => String(a.time || "").localeCompare(String(b.time || ""), "tr"));
+    });
+}
+
 /* ── Server creation ──────────────────────────────────────── */
 async function createServer(name) {
     // POST to signaling server to register the room
-    const res = await fetch(`${API_BASE}/rooms`, {
+    const res = await scordFetch(`${API_BASE}/rooms`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, owner_id: state.peerId }),
     });
+    if (!res.ok) return;
     const created = await res.json();
     const room_id = created.room_id;
     const inviteCode = created.invite_code || "";
@@ -1839,6 +2053,7 @@ function connectToRoom(roomId) {
     clearRttPingTimer();
     // Disconnect old mesh if any
     if (state.mesh) {
+        clearMeshHealthPoll();
         state.mesh.disconnect();
         state.mesh = null;
     }
@@ -1857,6 +2072,8 @@ function connectToRoom(roomId) {
     attachMeshBroadcastSync(state.mesh, roomId);
     state.mesh.connect(state.username, state.avatarColor, state.avatarImage);
     startRttPingTimer();
+    startMeshHealthPoll();
+    refreshConnectionBadge();
 }
 
 function connectMesh(serverId) {
@@ -1901,9 +2118,15 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
     if (data.type === "chat") {
         const msg = data.payload;
         saveMessage(roomId, msg);
-        // Notification
-        if (msg.channelId !== state.activeChannelId || roomId !== state.activeServerId) {
-            toast(`${msg.author}: ${msg.text.slice(0, 60)}`, "info");
+        const srv = state.servers.find(s => s.id === roomId);
+        const msgCanon = srv ? canonicalChannelIdForChat(srv, msg.channelId) : msg.channelId;
+        const activeCanon = srv ? canonicalChannelIdForChat(srv, state.activeChannelId) : state.activeChannelId;
+        const inactive = msgCanon !== activeCanon || roomId !== state.activeServerId;
+        if (inactive && shouldShowChatToast(msg)) {
+            toast(`${msg.author}: ${(msg.text || "").slice(0, 60)}`, "info");
+        }
+        if (!inactive && msg.authorId !== state.peerId) {
+            announceA11y(`${msg.author} yazdı`);
         }
     } else if (data.type === "dm") {
         if (!state.dms) state.dms = {};
@@ -1914,8 +2137,8 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
 
         if (state.activeDM === fromPeerId) {
             renderDMMessages(fromPeerId);
-        } else {
-            toast(`Özel Mesaj (DM) - ${data.payload.author}: ${data.payload.text.slice(0, 60)}`, "info");
+        } else if (state.notifSettings?.dm !== false) {
+            toast(`Özel Mesaj (DM) - ${data.payload.author}: ${(data.payload.text || "").slice(0, 60)}`, "info");
         }
     } else if (data.type === "identity_announce" || data.type === "profile_update") {
         const payload = data.type === "identity_announce" ? data : data.payload;
@@ -1951,21 +2174,22 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         const server = state.servers.find(s => s.id === roomId);
         if (server) {
             if (!server.voiceMembers) server.voiceMembers = {};
+            const ch = canonicalVoiceChannelId(server, data.channelId);
 
             // Remove the user from other voice channels within the same room
             Object.keys(server.voiceMembers).forEach(chId => {
-                if (chId !== data.channelId) {
+                if (chId !== ch) {
                     server.voiceMembers[chId] = server.voiceMembers[chId].filter(m => m.peer_id !== fromPeerId);
                 }
             });
 
-            if (!server.voiceMembers[data.channelId]) server.voiceMembers[data.channelId] = [];
-            const othersBeforeJoin = server.voiceMembers[data.channelId].filter(m => m.peer_id !== fromPeerId);
+            if (!server.voiceMembers[ch]) server.voiceMembers[ch] = [];
+            const othersBeforeJoin = server.voiceMembers[ch].filter(m => m.peer_id !== fromPeerId);
             if (othersBeforeJoin.length === 0) {
-                ensureVoiceSessionHost(server, data.channelId, fromPeerId, data.username);
+                ensureVoiceSessionHost(server, ch, fromPeerId, data.username);
             }
 
-            let member = server.voiceMembers[data.channelId].find(m => m.peer_id === fromPeerId);
+            let member = server.voiceMembers[ch].find(m => m.peer_id === fromPeerId);
 
             if (!member) {
                 member = {
@@ -1976,7 +2200,7 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                     isSharingScreen: !!data.isSharingScreen,
                     isSharingCamera: !!data.isSharingCamera
                 };
-                server.voiceMembers[data.channelId].push(member);
+                server.voiceMembers[ch].push(member);
             } else {
                 member.username = data.username;
                 member.avatar_color = data.avatarColor;
@@ -1986,14 +2210,14 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
             }
 
             updateChannelSidebar(roomId);
-            if (state.activeChannelId === data.channelId) {
-                renderVoiceParticipants(roomId, data.channelId);
+            if (state.activeChannelId === ch || state.voiceChannelId === ch) {
+                renderVoiceParticipants(roomId, ch);
                 updateVoiceSessionMeta();
             }
             updateMuteStates();
 
             // Notify user about new participant (join only)
-            if (data.username && data.username !== state.username) {
+            if (data.username && data.username !== state.username && state.notifSettings?.join !== false) {
                 const key = `${fromPeerId}-join`;
                 if (!state.recentVoiceToasts.has(key)) {
                     toast(`${data.username} sesli kanala katıldı!`, "info");
@@ -2009,9 +2233,10 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         // No toasts/sounds here.
         const server = state.servers.find(s => s.id === roomId);
         if (server && server.voiceMembers) {
-            if (!server.voiceMembers[data.channelId]) server.voiceMembers[data.channelId] = [];
+            const ch = canonicalVoiceChannelId(server, data.channelId);
+            if (!server.voiceMembers[ch]) server.voiceMembers[ch] = [];
 
-            let member = server.voiceMembers[data.channelId].find(m => m.peer_id === fromPeerId);
+            let member = server.voiceMembers[ch].find(m => m.peer_id === fromPeerId);
             if (!member) {
                 member = {
                     peer_id: fromPeerId,
@@ -2021,7 +2246,7 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                     isSharingScreen: !!data.isSharingScreen,
                     isSharingCamera: !!data.isSharingCamera
                 };
-                server.voiceMembers[data.channelId].push(member);
+                server.voiceMembers[ch].push(member);
             } else {
                 member.username = data.username;
                 member.avatar_color = data.avatarColor;
@@ -2030,21 +2255,22 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                 member.isSharingCamera = !!data.isSharingCamera;
             }
 
-            if (state.activeChannelId === data.channelId) renderVoiceParticipants(roomId, data.channelId);
+            if (state.activeChannelId === ch || state.voiceChannelId === ch) renderVoiceParticipants(roomId, ch);
             updateMuteStates();
         }
 
     } else if (data.type === "voice_leave") {
         const server = state.servers.find(s => s.id === roomId);
         if (server?.voiceMembers) {
-            const leaveCh = data.channelId;
+            const leaveCh = data.channelId ? canonicalVoiceChannelId(server, data.channelId) : null;
             if (leaveCh) transferVoiceSessionHost(server, leaveCh, fromPeerId);
             Object.keys(server.voiceMembers).forEach(chId => {
                 server.voiceMembers[chId] = server.voiceMembers[chId].filter(m => m.peer_id !== fromPeerId);
             });
             updateChannelSidebar(roomId);
             if (state.activeServerId === roomId) {
-                renderVoiceParticipants(roomId, state.activeChannelId);
+                const vch = leaveCh || state.voiceChannelId || state.activeChannelId;
+                renderVoiceParticipants(roomId, vch);
                 updateVoiceSessionMeta();
             }
             updateMuteStates();
@@ -2119,11 +2345,22 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         }
     } else if (data.type === "voice_status") {
         const server = state.servers.find(s => s.id === roomId);
-        if (server && server.voiceMembers && server.voiceMembers[state.voiceChannelId]) {
-            const member = server.voiceMembers[state.voiceChannelId].find(m => m.peer_id === fromPeerId);
-            if (member) {
-                member.isSpeaking = data.speaking;
-                renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+        if (server?.voiceMembers) {
+            const prefer = data.channelId != null ? canonicalVoiceChannelId(server, data.channelId) : null;
+            const order = prefer && server.voiceMembers[prefer]
+                ? [prefer, ...Object.keys(server.voiceMembers).filter(k => k !== prefer)]
+                : Object.keys(server.voiceMembers);
+            for (const chId of order) {
+                const list = server.voiceMembers[chId];
+                if (!list) continue;
+                const member = list.find(m => m.peer_id === fromPeerId);
+                if (member) {
+                    member.isSpeaking = !!data.speaking;
+                    if (state.activeServerId === roomId && (state.activeChannelId === chId || state.voiceChannelId === chId)) {
+                        renderVoiceParticipants(roomId, chId);
+                    }
+                    break;
+                }
             }
         }
     } else if (data.type === "screen_status" || data.type === "video_status") {
@@ -2169,17 +2406,8 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
     } else if (data.type === "history_sync") {
         const server = state.servers.find(s => s.id === roomId);
         if (server) {
-            // Merge messages — don't overwrite existing local messages
-            const incoming = data.messages || {};
-            if (!server.messages) server.messages = {};
-            Object.keys(incoming).forEach(chId => {
-                if (!server.messages[chId] || server.messages[chId].length === 0) {
-                    server.messages[chId] = incoming[chId];
-                }
-            });
-            // Merge roles
+            mergeMessageHistoryIntoServer(server, data.messages || {});
             if (data.roles) server.roles = { ...data.roles, ...(server.roles || {}) };
-            // Re-render if we are viewing one of those channels
             if (state.activeServerId === roomId) {
                 renderMessages(roomId, state.activeChannelId);
                 updateMembersPanel(roomId);
@@ -2310,8 +2538,92 @@ function handleVoiceStream(peerId, stream) {
 }
 
 function updateConnectionStatus(status) {
-    // Could display in UI — kept minimal for now
+    state._lastMeshStatus = status || "";
     console.log("[App] Connection status:", status);
+    refreshConnectionBadge();
+}
+
+function loadUserPrefs() {
+    try {
+        const raw = localStorage.getItem("scord_notif_settings");
+        const o = raw ? JSON.parse(raw) : {};
+        const chatLevel = o.chatLevel || (o.chat === false ? "none" : "all");
+        state.notifSettings = {
+            chat: o.chat !== false && chatLevel !== "none",
+            dm: o.dm !== false,
+            join: o.join !== false,
+            chatLevel,
+        };
+    } catch {
+        state.notifSettings = { chat: true, dm: true, join: true, chatLevel: "all" };
+    }
+    state.compactMode = localStorage.getItem("scord_compact_mode") === "1";
+    document.body.classList.toggle("compact-mode", state.compactMode);
+    const dens = localStorage.getItem("scord_msg_density") || "cozy";
+    document.documentElement.setAttribute("data-msg-density", dens);
+    document.documentElement.classList.toggle("scord-high-contrast", localStorage.getItem("scord_high_contrast") === "1");
+    const app = document.getElementById("app");
+    if (app) app.setAttribute("data-scord-focus", localStorage.getItem("scord_focus_mode") === "1" ? "1" : "0");
+}
+
+function applyFocusModeButton() {
+    const btn = document.getElementById("focus-mode-toggle");
+    const app = document.getElementById("app");
+    if (!btn || !app) return;
+    const on = app.getAttribute("data-scord-focus") === "1";
+    btn.classList.toggle("active", on);
+    btn.title = on ? "Odak modunu kapat (üyeleri göster)" : "Odak modu (üye panelini gizle)";
+}
+
+function draftStorageKey(serverId, channelId) {
+    return `scord_draft_${serverId}_${channelId}`;
+}
+
+function persistChatDraftFor(serverId, channelId) {
+    if (!serverId || !channelId) return;
+    const inp = document.getElementById("chat-input");
+    if (!inp) return;
+    const v = inp.value;
+    const key = draftStorageKey(serverId, channelId);
+    if (v.trim()) localStorage.setItem(key, v);
+    else localStorage.removeItem(key);
+}
+
+function shouldShowChatToast(msg) {
+    const ns = state.notifSettings || { chatLevel: "all" };
+    const level = ns.chatLevel || "all";
+    if (level === "none" || ns.chat === false) return false;
+    if (level === "mentions") {
+        const u = (state.username || "").trim();
+        if (!u) return false;
+        const t = msg.text || "";
+        const esc = u.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return new RegExp(`(^|[^\\w#])@${esc}(?!\\w)`, "i").test(t);
+    }
+    return true;
+}
+
+function hideNewMsgsChip() {
+    document.getElementById("new-msgs-chip")?.classList.add("hidden");
+}
+
+function showNewMsgsChip() {
+    document.getElementById("new-msgs-chip")?.classList.remove("hidden");
+}
+
+function isChatScrolledUp() {
+    const area = document.getElementById("messages-area");
+    if (!area) return false;
+    return area.scrollHeight - area.scrollTop - area.clientHeight > 100;
+}
+
+function wireMessagesScroll() {
+    const area = document.getElementById("messages-area");
+    if (!area || area.dataset.scordScrollWired) return;
+    area.dataset.scordScrollWired = "1";
+    area.addEventListener("scroll", () => {
+        if (!isChatScrolledUp()) hideNewMsgsChip();
+    });
 }
 
 // Consolidated above
@@ -2341,6 +2653,7 @@ function handlePeerConnected(peerId, roomId) {
     }
 
     flushP2pOutbox();
+    refreshConnectionBadge();
 }
 
 function handleTrackAdded(peerId, track, stream) {
@@ -2439,7 +2752,13 @@ async function joinVoiceChannel(channelId) {
 
             if (isSpeaking !== state.isSpeaking) {
                 state.isSpeaking = isSpeaking;
-                if (state.mesh) state.mesh.broadcast({ type: "voice_status", speaking: isSpeaking });
+                if (state.mesh) {
+                    state.mesh.broadcast({
+                        type: "voice_status",
+                        speaking: isSpeaking,
+                        channelId: state.voiceChannelId,
+                    });
+                }
                 renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
             }
         }, SCORD_T().VOICE_SPEAKING_POLL_MS ?? 100);
@@ -2452,20 +2771,21 @@ async function joinVoiceChannel(channelId) {
     const ok = await state.mesh.startVoice(processedStream);
     if (!ok) { toast("Ses yayını başlatılamadı.", "error"); return; }
 
-    state.voiceChannelId = channelId;
-
-    showVoiceView(state.activeServerId, channelId);
-
     const server = state.servers.find(s => s.id === state.activeServerId);
+    const canonCh = server ? canonicalVoiceChannelId(server, channelId) : channelId;
+    state.voiceChannelId = canonCh;
+
+    showVoiceView(state.activeServerId, canonCh);
+
     if (server) {
         if (!server.voiceMembers) server.voiceMembers = {};
-        if (!server.voiceMembers[channelId]) server.voiceMembers[channelId] = [];
-        const othersOnly = server.voiceMembers[channelId].filter(m => m.peer_id !== state.peerId);
+        if (!server.voiceMembers[canonCh]) server.voiceMembers[canonCh] = [];
+        const othersOnly = server.voiceMembers[canonCh].filter(m => m.peer_id !== state.peerId);
         if (othersOnly.length === 0) {
-            ensureVoiceSessionHost(server, channelId, state.peerId, state.username);
+            ensureVoiceSessionHost(server, canonCh, state.peerId, state.username);
         }
-        if (!server.voiceMembers[channelId].find(m => m.peer_id === state.peerId)) {
-            server.voiceMembers[channelId].push({ peer_id: state.peerId, username: state.username, avatar_color: state.avatarColor, avatar_image: state.avatarImage });
+        if (!server.voiceMembers[canonCh].find(m => m.peer_id === state.peerId)) {
+            server.voiceMembers[canonCh].push({ peer_id: state.peerId, username: state.username, avatar_color: state.avatarColor, avatar_image: state.avatarImage });
         }
         updateChannelSidebar(state.activeServerId);
     }
@@ -2480,8 +2800,12 @@ async function joinVoiceChannel(channelId) {
         isSharingCamera: !!state.cameraStream
     });
 
-    renderVoiceParticipants(state.activeServerId, channelId);
-    showVoiceStatusBar(state.activeServerId, channelId);
+    renderVoiceParticipants(state.activeServerId, canonCh);
+    showVoiceStatusBar(state.activeServerId, canonCh);
+
+    state.membersOpen = false;
+    document.getElementById("members-panel")?.classList.add("collapsed");
+    document.getElementById("voice-members-panel")?.classList.add("collapsed");
 
     // Toggle buttons
     document.getElementById("voice-join-btn").classList.add("hidden");
@@ -2554,7 +2878,12 @@ function renderVoiceParticipants(serverId, channelId) {
     if (countEl) countEl.textContent = `${members.length} kişi`;
 
     if (members.length === 0) {
-        container.innerHTML = '<p class="voice-empty">Sesli kanalda henüz kimse yok.</p>';
+        container.innerHTML = `
+          <div class="voice-empty-state">
+            <span class="voice-empty-state-icon" aria-hidden="true">🎙️</span>
+            <h4>Burada henüz kimse yok</h4>
+            <p>Arkadaşlarını davet et veya aşağıdan kanala katıl. Ses P2P üzerinden aktarılır.</p>
+          </div>`;
         updateVoiceSessionMeta();
         return;
     }
@@ -2938,12 +3267,27 @@ function openSettingsModal() {
             <input type="file" id="settings-bg-upload" accept="image/*" class="modal-input" style="padding:6px" />
             <p class="modal-info" style="margin-top:6px">Yalnızca senin ekranına hitap eden yerel bir görsel.</p>
           </div>
+          <div class="form-group" style="margin-bottom:14px">
+            <label class="modal-label">Mesaj yoğunluğu</label>
+            <select class="modal-input" id="settings-msg-density">
+              <option value="comfortable" ${(localStorage.getItem("scord_msg_density") || "cozy") === "comfortable" ? "selected" : ""}>Rahat</option>
+              <option value="cozy" ${(localStorage.getItem("scord_msg_density") || "cozy") === "cozy" ? "selected" : ""}>Normal</option>
+              <option value="compact" ${(localStorage.getItem("scord_msg_density") || "") === "compact" ? "selected" : ""}>Sıkı</option>
+            </select>
+          </div>
           <div class="form-group">
             <label class="modal-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;">
               <input type="checkbox" id="settings-compact" ${state.compactMode ? 'checked' : ''}>
               Kompakt Görünüm
             </label>
           </div>
+          <div class="form-group" style="margin-top:12px">
+            <label class="modal-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+              <input type="checkbox" id="settings-high-contrast" ${localStorage.getItem("scord_high_contrast") === "1" ? "checked" : ""}>
+              Yüksek kontrast (kenarlıklar)
+            </label>
+          </div>
+          <p class="modal-info" style="margin-top:8px">Hızlı kanal: <kbd style="padding:2px 6px;border-radius:4px;background:var(--bg-mid)">Ctrl</kbd>+<kbd style="padding:2px 6px;border-radius:4px;background:var(--bg-mid)">K</kbd> · Odak modu: sohbet başlığındaki ⛶</p>
         </div>
         <div id="s-ses" class="s-panel" style="display:none">
           <div class="form-group" style="margin-bottom:12px">
@@ -2974,18 +3318,6 @@ function openSettingsModal() {
               Yankı Engelleme
             </label>
           </div>
-          <div class="form-group">
-            <label class="modal-label">Kısayollar</label>
-            <p class="modal-info" style="margin:2px 0">M — Mikrofon aç/kapat &nbsp;|&nbsp; D — Kulaklık</p>
-          </div>
-        </div>
-        <div id="s-bildirim" class="s-panel" style="display:none">
-          <div class="form-group" style="margin-bottom:12px">
-            <label class="modal-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-              <input type="checkbox" id="notif-chat" ${state.notifSettings?.chat !== false ? 'checked' : ''}>
-              Sohbet bildirimleri
-            </label>
-          </div>
           <div class="form-group" style="margin-bottom:12px">
             <label class="modal-label">Giriş Modu</label>
             <select class="modal-input" id="settings-input-mode">
@@ -2997,6 +3329,20 @@ function openSettingsModal() {
             <label class="modal-label">Kısayol Tuşu (PTT)</label>
             <input type="text" class="modal-input" id="settings-ptt-key" value="${vs.pttKey || 'Control'}" readonly style="cursor:pointer" placeholder="Tuş atamak için tıkla..." />
           </div>
+          <div class="form-group">
+            <label class="modal-label">Kısayollar</label>
+            <p class="modal-info" style="margin:2px 0">M — Mikrofon aç/kapat &nbsp;|&nbsp; D — Kulaklık</p>
+          </div>
+        </div>
+        <div id="s-bildirim" class="s-panel" style="display:none">
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="modal-label">Sohbet bildirimleri (arka planda)</label>
+            <select class="modal-input" id="notif-chat-level">
+              <option value="all" ${(state.notifSettings?.chatLevel || "all") === "all" ? "selected" : ""}>Tüm mesajlar</option>
+              <option value="mentions" ${state.notifSettings?.chatLevel === "mentions" ? "selected" : ""}>Yalnız @${escapeHtml(state.username || "ben")} bahsetme</option>
+              <option value="none" ${state.notifSettings?.chatLevel === "none" ? "selected" : ""}>Kapalı</option>
+            </select>
+          </div>
           <div class="form-group" style="margin-bottom:12px">
             <label class="modal-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
               <input type="checkbox" id="notif-dm" ${state.notifSettings?.dm !== false ? 'checked' : ''}>
@@ -3006,7 +3352,7 @@ function openSettingsModal() {
           <div class="form-group">
             <label class="modal-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
               <input type="checkbox" id="notif-join" ${state.notifSettings?.join !== false ? 'checked' : ''}>
-              Giriş/çıkış bildirimi
+              Ses kanalına katılma bildirimi
             </label>
           </div>
         </div>
@@ -3434,11 +3780,24 @@ function saveSettings() {
         });
     }
 
+    const dens = document.getElementById("settings-msg-density")?.value || "cozy";
+    localStorage.setItem("scord_msg_density", dens);
+    document.documentElement.setAttribute("data-msg-density", dens);
+
+    const highContrast = document.getElementById("settings-high-contrast")?.checked ?? false;
+    localStorage.setItem("scord_high_contrast", highContrast ? "1" : "0");
+    document.documentElement.classList.toggle("scord-high-contrast", highContrast);
+
     // Save notification settings
-    const notifChat = document.getElementById("notif-chat")?.checked ?? true;
+    const chatLevel = document.getElementById("notif-chat-level")?.value || "all";
     const notifDm = document.getElementById("notif-dm")?.checked ?? true;
     const notifJoin = document.getElementById("notif-join")?.checked ?? true;
-    state.notifSettings = { chat: notifChat, dm: notifDm, join: notifJoin };
+    state.notifSettings = {
+        chat: chatLevel !== "none",
+        dm: notifDm,
+        join: notifJoin,
+        chatLevel,
+    };
     localStorage.setItem("scord_notif_settings", JSON.stringify(state.notifSettings));
 
     // Save compact mode
@@ -3773,6 +4132,14 @@ function renderDMMessages(peerId) {
     area.innerHTML = "";
     const messages = state.dms[peerId] || [];
 
+    if (messages.length === 0) {
+        const hint = document.createElement("div");
+        hint.className = "dm-empty-hint";
+        hint.innerHTML = "<p>Henüz mesaj yok.</p><p style=\"margin-top:8px;font-size:12px\">İlk mesajını yaz — uçtan uca P2P ile gider.</p>";
+        area.appendChild(hint);
+        return;
+    }
+
     messages.forEach(msg => {
         const row = document.createElement("div");
         row.className = "dm-msg-row" + (msg.authorId === state.peerId ? " dm-msg-own" : "");
@@ -3824,6 +4191,90 @@ function sendDM() {
     input.value = "";
 }
 
+let _qsActiveIdx = 0;
+let _qsFiltered = [];
+
+function closeQuickSwitcher() {
+    const el = document.getElementById("quick-switcher");
+    if (el) el.classList.add("hidden");
+    state._qsOpen = false;
+}
+
+function openQuickSwitcher() {
+    const el = document.getElementById("quick-switcher");
+    const inp = document.getElementById("quick-switcher-input");
+    if (!el || !inp) return;
+    el.classList.remove("hidden");
+    state._qsOpen = true;
+    inp.value = "";
+    _qsActiveIdx = 0;
+    updateQuickSwitcherFilter("");
+    setTimeout(() => inp.focus(), 30);
+}
+
+function toggleQuickSwitcher() {
+    if (document.getElementById("quick-switcher")?.classList.contains("hidden")) openQuickSwitcher();
+    else closeQuickSwitcher();
+}
+
+function updateQuickSwitcherFilter(q) {
+    const res = document.getElementById("quick-switcher-results");
+    if (!res) return;
+    const qq = (q || "").trim().toLowerCase();
+    const items = [];
+    state.servers.forEach(srv => {
+        (srv.channels || []).forEach(ch => {
+            const label = `${srv.name} / ${ch.type === "voice" ? "🔊" : "#"}${ch.name}`;
+            const hay = `${srv.name} ${ch.name} ${ch.id}`.toLowerCase();
+            if (!qq || hay.includes(qq)) {
+                items.push({ serverId: srv.id, channelId: ch.id, type: ch.type, title: ch.name, sub: srv.name });
+            }
+        });
+    });
+    _qsFiltered = items.slice(0, 40);
+    res.innerHTML = "";
+    _qsFiltered.forEach((it, i) => {
+        const row = document.createElement("div");
+        row.className = "qs-item" + (i === _qsActiveIdx ? " qs-item--active" : "");
+        row.dataset.idx = String(i);
+        row.innerHTML = `<span class="qs-item-title">${escapeHtml(it.title)}</span><span class="qs-item-sub">${escapeHtml(it.sub)} · ${it.type === "voice" ? "ses" : "metin"}</span>`;
+        row.onclick = () => runQuickSwitcherIndex(i);
+        res.appendChild(row);
+    });
+    if (_qsFiltered.length === 0) {
+        res.innerHTML = `<div class="qs-item"><span class="qs-item-sub">Eşleşme yok</span></div>`;
+    }
+}
+
+function runQuickSwitcherIndex(i) {
+    const it = _qsFiltered[i];
+    if (!it) return;
+    closeQuickSwitcher();
+    switchToServer(it.serverId);
+    if (it.type === "voice") showVoiceView(it.serverId, it.channelId);
+    else showChatView(it.serverId, it.channelId);
+}
+
+function fillLastOwnChatLine() {
+    const input = document.getElementById("chat-input");
+    if (!input || !state.activeServerId || !state.activeChannelId) return;
+    const srv = state.servers.find(s => s.id === state.activeServerId);
+    const msgs = srv?.messages?.[state.activeChannelId];
+    if (!msgs?.length) return;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].authorId === state.peerId) {
+            input.value = msgs[i].text || "";
+            input.style.height = "auto";
+            input.style.height = Math.min(input.scrollHeight, 200) + "px";
+            return;
+        }
+    }
+}
+
+const debouncedPersistDraft = UI.debounce(() => {
+    if (state.activeServerId && state.activeChannelId) persistChatDraftFor(state.activeServerId, state.activeChannelId);
+}, 400);
+
 function initMembersPanelResize() {
     const handle = document.getElementById("members-split-handle");
     const panel = document.getElementById("members-panel");
@@ -3870,6 +4321,11 @@ document.addEventListener("DOMContentLoaded", () => {
     // Chat input
     const chatInput = document.getElementById("chat-input");
     chatInput.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowUp" && chatInput.selectionStart === 0 && !e.shiftKey && !chatInput.value.trim()) {
+            e.preventDefault();
+            fillLastOwnChatLine();
+            return;
+        }
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             sendMessage();
@@ -3878,10 +4334,95 @@ document.addEventListener("DOMContentLoaded", () => {
     chatInput.addEventListener("input", () => {
         chatInput.style.height = "auto";
         chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + "px";
+        debouncedPersistDraft();
     });
 
     document.getElementById("send-btn").onclick = sendMessage;
     document.getElementById("reply-preview-close")?.addEventListener("click", () => clearReplyTarget());
+
+    document.getElementById("focus-mode-toggle")?.addEventListener("click", () => {
+        const app = document.getElementById("app");
+        if (!app) return;
+        const next = app.getAttribute("data-scord-focus") === "1" ? "0" : "1";
+        app.setAttribute("data-scord-focus", next);
+        localStorage.setItem("scord_focus_mode", next === "1" ? "1" : "0");
+        applyFocusModeButton();
+    });
+
+    document.getElementById("new-msgs-chip")?.addEventListener("click", () => {
+        const area = document.getElementById("messages-area");
+        if (area) area.scrollTop = area.scrollHeight;
+        hideNewMsgsChip();
+    });
+
+    const qsEl = document.getElementById("quick-switcher");
+    const qsInp = document.getElementById("quick-switcher-input");
+    if (qsEl && qsInp) {
+        qsEl.addEventListener("click", (e) => {
+            if (e.target === qsEl) closeQuickSwitcher();
+        });
+        qsInp.addEventListener("input", () => {
+            _qsActiveIdx = 0;
+            updateQuickSwitcherFilter(qsInp.value);
+        });
+        qsInp.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                closeQuickSwitcher();
+                return;
+            }
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                _qsActiveIdx = Math.min(Math.max(0, _qsFiltered.length - 1), _qsActiveIdx + 1);
+                updateQuickSwitcherFilter(qsInp.value);
+                return;
+            }
+            if (e.key === "ArrowUp") {
+                e.preventDefault();
+                _qsActiveIdx = Math.max(0, _qsActiveIdx - 1);
+                updateQuickSwitcherFilter(qsInp.value);
+                return;
+            }
+            if (e.key === "Enter") {
+                e.preventDefault();
+                runQuickSwitcherIndex(_qsActiveIdx);
+            }
+        });
+    }
+
+    document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === "k") {
+            if (!document.getElementById("modal-backdrop")?.classList.contains("hidden")) return;
+            e.preventDefault();
+            toggleQuickSwitcher();
+            return;
+        }
+        if (e.key === "Escape") {
+            const dmOv = document.getElementById("dm-overlay");
+            if (state.activeDM && dmOv && !dmOv.classList.contains("hidden")) {
+                dmOv.classList.add("hidden");
+                dmOv.setAttribute("aria-hidden", "true");
+                state.activeDM = null;
+                return;
+            }
+            if (state._qsOpen) {
+                closeQuickSwitcher();
+                return;
+            }
+            if (!document.getElementById("modal-backdrop")?.classList.contains("hidden")) {
+                hideModal();
+                return;
+            }
+            if (state.replyTo) {
+                clearReplyTarget();
+                return;
+            }
+            if (state.emojiOpen) {
+                document.getElementById("emoji-picker")?.remove();
+                state.emojiOpen = false;
+            }
+        }
+    }, true);
 
     // Server create / join
     document.getElementById("add-server-btn").onclick = openCreateServerModal;
@@ -3966,14 +4507,6 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
     }
-    document.addEventListener("keydown", (e) => {
-        if (e.key !== "Escape" || !state.activeDM) return;
-        const ov = document.getElementById("dm-overlay");
-        if (!ov || ov.classList.contains("hidden")) return;
-        ov.classList.add("hidden");
-        ov.setAttribute("aria-hidden", "true");
-        state.activeDM = null;
-    });
 
     // Attachments
     const attachBtn = document.getElementById("chat-attach-btn");
@@ -4078,7 +4611,13 @@ document.addEventListener("DOMContentLoaded", () => {
             if (state.originalMicStream) {
                 const track = state.originalMicStream.getAudioTracks()[0];
                 if (track) track.enabled = true;
-                if (state.mesh) state.mesh.broadcast({ type: "voice_status", speaking: true });
+                if (state.mesh) {
+                    state.mesh.broadcast({
+                        type: "voice_status",
+                        speaking: true,
+                        channelId: state.voiceChannelId,
+                    });
+                }
             }
         }
     });
@@ -4088,7 +4627,13 @@ document.addEventListener("DOMContentLoaded", () => {
             if (state.originalMicStream) {
                 const track = state.originalMicStream.getAudioTracks()[0];
                 if (track) track.enabled = false;
-                if (state.mesh) state.mesh.broadcast({ type: "voice_status", speaking: false });
+                if (state.mesh) {
+                    state.mesh.broadcast({
+                        type: "voice_status",
+                        speaking: false,
+                        channelId: state.voiceChannelId,
+                    });
+                }
             }
         }
     });
@@ -4297,7 +4842,8 @@ async function joinByCode() {
     const code = document.getElementById("join-invite-input").value.trim().toUpperCase();
     if (!code) return;
     try {
-        const res = await fetch(`${API_BASE}/rooms/join/${code}`);
+        const res = await scordFetch(`${API_BASE}/rooms/join/${code}`);
+        if (!res.ok) return;
         const room = await res.json();
         if (room.room_id) {
             joinServer(room.room_id);
@@ -4585,7 +5131,8 @@ async function joinByInviteCode(code) {
     if (!code || code.trim().length < 4) return toast("Geçersiz davet kodu.", "error");
     code = code.trim().toUpperCase();
     try {
-        const res = await fetch(`/api/rooms/join/${code}`);
+        const res = await scordFetch(`/api/rooms/join/${code}`);
+        if (!res.ok) return;
         const data = await res.json();
         if (data.error || !data.room_id) {
             toast("Geçersiz veya süresi dolmuş davet kodu.", "error");
@@ -4662,11 +5209,14 @@ function showInviteModal(serverId) {
 
 /*  Server discovery: refresh  */
 async function refreshDiscovery() {
+    const grid = document.getElementById("room-list-home");
+    if (!grid) return;
     try {
-        const res = await fetch("/api/rooms");
+        grid.innerHTML = `<div class="room-grid-skeleton" aria-busy="true">
+            <div class="room-skel-card"></div><div class="room-skel-card"></div><div class="room-skel-card"></div>
+        </div>`;
+        const res = await scordFetch("/api/rooms");
         const rooms = await res.json();
-        const grid = document.getElementById("room-list-home");
-        if (!grid) return;
         grid.innerHTML = "";
         if (!rooms || rooms.length === 0) {
             grid.innerHTML = '<p style="color:var(--text-muted);text-align:center;grid-column:1/-1;">Henüz aktif sunucu yok. Bir tane oluştur!</p>';
@@ -4676,7 +5226,7 @@ async function refreshDiscovery() {
             const card = document.createElement("div");
             card.className = "room-card";
             const icon = room.icon_url
-                ? `<img src="${room.icon_url}" style="width:48px;height:48px;border-radius:12px;object-fit:cover;" />`
+                ? `<img src="${room.icon_url}" alt="" loading="lazy" decoding="async" style="width:48px;height:48px;border-radius:12px;object-fit:cover;" />`
                 : `<div style="width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#7c3aed,#4f46e5);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;">${(room.name||"?")[0].toUpperCase()}</div>`;
             card.innerHTML = `
                 <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
@@ -4694,6 +5244,7 @@ async function refreshDiscovery() {
         });
     } catch (err) {
         console.error("[Discovery] Error:", err);
+        grid.innerHTML = '<p style="color:var(--text-muted);text-align:center;grid-column:1/-1;">Sunucu listesi yüklenemedi. Ağını kontrol edip yenile.</p>';
     }
 }
 

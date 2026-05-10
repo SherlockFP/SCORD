@@ -251,7 +251,10 @@ class P2PMesh {
             } catch { /* ignore malformed */ }
         };
         dc.onerror = (e) => console.warn(`[P2P] DC error with ${peerId}:`, e);
-        dc.onclose = () => console.log(`[P2P] DC closed with ${peerId}`);
+        dc.onclose = () => {
+            console.log(`[P2P] DC closed with ${peerId}`);
+            this.cb.onStatusChange?.("p2p_dc_closed");
+        };
     }
 
     async _handleOffer(fromId, sdp) {
