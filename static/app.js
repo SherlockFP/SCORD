@@ -198,6 +198,50 @@ function startMeshHealthPoll() {
     }, 2000);
 }
 
+function resetConnectionState() {
+    try {
+        // Keep username/color/theme etc, only reset connection identity and cached rooms.
+        localStorage.removeItem("scord_peer_id");
+        localStorage.removeItem("scord_recent_dms");
+        localStorage.removeItem("scord_friends");
+    } catch { }
+    try { state.mesh?.disconnect?.(); } catch { }
+    location.reload();
+}
+
+function maybeOfferP2PTroubleshoot(wsOk, dcOpen) {
+    if (!wsOk || dcOpen) {
+        state._p2pWaitSince = null;
+        state._p2pTriedHelp = false;
+        return;
+    }
+    const nowT = Date.now();
+    if (!state._p2pWaitSince) state._p2pWaitSince = nowT;
+    const waitedMs = nowT - state._p2pWaitSince;
+    if (waitedMs < 12000 || state._p2pTriedHelp) return;
+    state._p2pTriedHelp = true;
+
+    const body = `
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div><b>P2P kurulamadı</b> (DataChannel açılmıyor). Gizli sekmede çalışıp normal sekmede takılıyorsa genelde <b>uzantı / VPN / güvenlik yazılımı</b> WebRTC’yi engelliyordur.</div>
+        <div style="opacity:.9">
+          Denenecekler:
+          <ul style="margin:8px 0 0 18px;display:flex;flex-direction:column;gap:6px">
+            <li>VPN / AdBlock / “privacy” uzantılarını kapat</li>
+            <li>Site verisini temizle veya “Bağlantıyı Sıfırla” de</li>
+            <li>Farklı tarayıcı (Chrome/Edge) dene</li>
+          </ul>
+        </div>
+      </div>
+    `;
+    const footer = `
+      <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+      <button class="btn-primary" onclick="window.scordResetConnection()">Bağlantıyı Sıfırla</button>
+    `;
+    window.scordResetConnection = resetConnectionState;
+    showModal("Bağlantı Sorunu", body, footer);
+}
+
 function refreshConnectionBadge() {
     const chatEl = document.getElementById("connection-badge");
     const voiceEl = document.getElementById("voice-connection-badge");
@@ -227,6 +271,11 @@ function refreshConnectionBadge() {
         el.textContent = label;
         const base = el.id === "voice-connection-badge" ? "connection-badge connection-badge--voice" : "connection-badge";
         el.className = `${base} ${extra}`.trim();
+
+        // Only run once per tick (chat badge is first).
+        if (el.id === "connection-badge") {
+            maybeOfferP2PTroubleshoot(wsOk, dcOpen);
+        }
     };
     apply(chatEl);
     apply(voiceEl);
@@ -1021,6 +1070,9 @@ async function startScreenShare() {
             });
         }
         toast("Ekran başarıyla paylaşıldı!", "success");
+        // Local preview: allow opening fullscreen overlay quickly
+        const preview = document.getElementById("local-screen-preview");
+        if (preview) preview.onclick = () => openScreenOverlay(state.peerId, state.username);
         if (state.activeServerId && state.voiceChannelId) {
             renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
         }
@@ -1064,6 +1116,7 @@ async function startCameraShare() {
             preview.classList.remove("hidden");
             video.srcObject = stream;
             if (lbl) lbl.textContent = "Kameran Açık";
+            preview.onclick = () => openScreenOverlay(state.peerId, state.username);
         }
 
         state.mesh.broadcast({
@@ -3044,7 +3097,8 @@ function renderVoiceParticipants(serverId, channelId) {
 
         let watchBtn = card.querySelector('.watch-btn');
 
-        if (videoEl && videoEl.srcObject?.getVideoTracks().length > 0) {
+        const hasVideoTrack = !!(videoEl && videoEl.srcObject?.getVideoTracks?.()?.length > 0);
+        if (hasVideoTrack) {
             card.classList.add("has-video");
             if (videoEl.parentNode !== card) {
                 videoEl.style.width = "100%";
@@ -3057,20 +3111,26 @@ function renderVoiceParticipants(serverId, channelId) {
                 card.appendChild(videoEl);
                 videoEl.play().catch(() => { });
             }
+        } else {
+            card.classList.remove("has-video");
+            if (videoEl && videoEl.parentNode === card) videoEl.remove();
+        }
 
-            if (!watchBtn && isSharing) {
+        // Watch button should appear as soon as someone is "sharing",
+        // even if the track is still negotiating/loading.
+        if (isSharing) {
+            if (!watchBtn) {
                 watchBtn = document.createElement("button");
                 watchBtn.className = "btn-primary watch-btn";
                 watchBtn.style.marginTop = "8px";
                 watchBtn.style.width = "100%";
-                watchBtn.textContent = "Yayını İzle";
-                watchBtn.onclick = (e) => { e.stopPropagation(); openScreenOverlay(m.peer_id, m.username); };
                 card.appendChild(watchBtn);
             }
-        } else {
-            card.classList.remove("has-video");
-            if (videoEl && videoEl.parentNode === card) videoEl.remove();
-            if (watchBtn) watchBtn.remove();
+            watchBtn.disabled = !hasVideoTrack;
+            watchBtn.textContent = hasVideoTrack ? "Yayını İzle" : "Yükleniyor…";
+            watchBtn.onclick = (e) => { e.stopPropagation(); openScreenOverlay(m.peer_id, m.username); };
+        } else if (watchBtn) {
+            watchBtn.remove();
         }
 
         // Drag and Drop Admin
@@ -3148,17 +3208,25 @@ function openScreenOverlay(peerId, username) {
     const overlay = document.createElement("div");
     overlay.className = "screen-overlay";
     overlay.id = "screen-overlay";
+    overlay.onclick = (e) => {
+        if (e.target === overlay) overlay.remove();
+    };
 
     const closeBtn = document.createElement("button");
     closeBtn.className = "screen-overlay-close";
     closeBtn.textContent = "Kapat";
     closeBtn.onclick = () => overlay.remove();
 
+    const label = document.createElement("div");
+    label.className = "screen-overlay-label";
+    label.textContent = `${username || "Yayın"} — izle`;
+
     const bigVideo = document.createElement("video");
     bigVideo.autoplay = true;
     bigVideo.playsInline = true;
     bigVideo.srcObject = video.srcObject || null;
     bigVideo.className = "screen-overlay-video";
+    bigVideo.onclick = (e) => e.stopPropagation();
 
     // Keep overlay in sync (srcObject can arrive/replace after render)
     const syncSrc = () => {
@@ -3167,9 +3235,23 @@ function openScreenOverlay(peerId, username) {
     };
     syncSrc();
     const interval = setInterval(syncSrc, SCORD_T().SCREEN_OVERLAY_SYNC_INTERVAL_MS ?? 750);
-    overlay.onremove = () => clearInterval(interval);
+    const onKey = (e) => { if (e.key === "Escape") overlay.remove(); };
+    window.addEventListener("keydown", onKey);
+
+    const cleanup = () => {
+        clearInterval(interval);
+        window.removeEventListener("keydown", onKey);
+    };
+    const obs = new MutationObserver(() => {
+        if (!overlay.isConnected) {
+            cleanup();
+            obs.disconnect();
+        }
+    });
+    obs.observe(document.body, { childList: true });
 
     overlay.appendChild(closeBtn);
+    overlay.appendChild(label);
     overlay.appendChild(bigVideo);
     document.body.appendChild(overlay);
 }
