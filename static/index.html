@@ -50,6 +50,13 @@
         <div class="color-swatches" id="color-swatches"></div>
       </div>
 
+      <div class="form-group" style="margin-top:14px">
+        <label for="avatar-url-input">Avatar görsel URL (isteğe bağlı)</label>
+        <input id="avatar-url-input" type="url" placeholder="https://… doğrudan görsel bağlantısı"
+          autocomplete="off" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border-strong);background:var(--bg-deep);color:inherit" />
+        <p style="font-size:11px;color:var(--text-muted);margin-top:6px">Dosya yüklemeden İnternet’ten bir resim kullanmak için.</p>
+      </div>
+
       <button id="enter-btn" class="btn-primary" disabled>Giriş Yap</button>
     </div>
   </div>
@@ -219,6 +226,8 @@
             </div>
           </div>
 
+          <div class="members-split-handle" id="members-split-handle" title="Sürükleyerek üye panelini genişlet"></div>
+
           <!-- Members panel -->
           <aside class="members-panel" id="members-panel">
             <h4>Üyeler — <span id="member-count">0</span></h4>
@@ -227,6 +236,14 @@
         </div>
 
         <div class="chat-input-area">
+          <div id="reply-preview-bar" class="reply-preview-bar hidden" aria-live="polite">
+            <div class="reply-preview-inner">
+              <span class="reply-preview-label">Yanıt</span>
+              <span id="reply-preview-author" class="reply-preview-author"></span>
+              <span id="reply-preview-snippet" class="reply-preview-snippet"></span>
+            </div>
+            <button type="button" id="reply-preview-close" class="reply-preview-close" title="Yanıtı iptal">✕</button>
+          </div>
           <div class="chat-input-wrapper">
             <div id="gif-search-popover" class="gif-popover hidden">
               <input type="text" id="gif-input" placeholder="GIF Ara...">
@@ -253,6 +270,7 @@
       <span class="channel-type-icon voice">🔊</span>
       <span id="voice-channel-name">Sesli Sohbet</span>
       <span id="voice-participant-count" class="voice-count">0 kişi</span>
+      <span id="voice-sync-meta" class="voice-sync-meta" title="SCORD_TIMING ile ayarlanan gecikme ölçümleri"></span>
     </div>
     <div class="voice-participants" id="voice-participants">
       <p class="voice-empty">Sesli kanala katılmak için aşağıdaki butona tıkla.</p>
@@ -326,18 +344,26 @@
     </div>
   </div>
 
-  <!-- ── DM Popup Overlay ─────────────────────────────────────────────────── -->
-  <div id="dm-overlay" class="dm-overlay hidden">
-    <div class="dm-header">
-      <div class="dm-header-title">
-        <span class="dm-status-dot"></span>
-        <span id="dm-target-name">@User</span>
+  <!-- ── DM Overlay (desktop: köşe / mobil: alt sayfa) ─────────────────────── -->
+  <div id="dm-overlay" class="dm-overlay hidden" aria-hidden="true">
+    <div class="dm-sheet">
+      <div class="dm-header">
+        <div class="dm-peer-block">
+          <div id="dm-header-avatar" class="dm-header-avatar" aria-hidden="true"></div>
+          <div class="dm-header-text">
+            <span id="dm-target-name">@User</span>
+            <span class="dm-sub">Özel mesaj · P2P</span>
+          </div>
+        </div>
+        <button type="button" class="dm-close-btn" id="dm-close-btn" title="Kapat (Esc)">✕</button>
       </div>
-      <button class="dm-close-btn" id="dm-close-btn">✕</button>
-    </div>
-    <div class="dm-body" id="dm-messages-area"></div>
-    <div class="dm-input-area">
-      <input type="text" id="dm-input" placeholder="Mesaj Gönder..." maxlength="1000" autocomplete="off" />
+      <div class="dm-body" id="dm-messages-area"></div>
+      <div class="dm-input-area">
+        <textarea id="dm-input" rows="1" placeholder="Mesaj yaz…" maxlength="2000" autocomplete="off"></textarea>
+        <button type="button" class="dm-send-btn" id="dm-send-btn" title="Gönder">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+      </div>
     </div>
   </div>
 
@@ -347,6 +373,7 @@
   <!-- Mobile Navigation Mask -->
   <div id="mobile-nav-mask" class="mobile-mask hidden"></div>
 
+  <script src="/static/timing.js"></script>
   <script src="/static/p2p.js"></script>
   <script src="/static/app.js"></script>
 </body>

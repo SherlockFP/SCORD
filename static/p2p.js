@@ -8,6 +8,10 @@
 
 "use strict";
 
+function _scordTiming() {
+    return typeof window !== "undefined" && window.SCORD_TIMING ? window.SCORD_TIMING : {};
+}
+
 const ICE_SERVERS = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
@@ -49,6 +53,7 @@ class P2PMesh {
         this._pendingIce = {};           // peerId → [candidate, ...]
         this._reconnectTimer = null;
         this._dead = false;
+        this.cameraStream = null;
     }
 
     /* ── Connect to signaling server ─────────────────────────── */
@@ -77,7 +82,10 @@ class P2PMesh {
             console.warn("[P2P] Signaling disconnected — reconnecting in 3s");
             this._setStatus("disconnected");
             clearTimeout(this._reconnectTimer);
-            this._reconnectTimer = setTimeout(() => this.connect(this.username, this.avatarColor, this.avatarImage), 3000);
+            this._reconnectTimer = setTimeout(
+                () => this.connect(this.username, this.avatarColor, this.avatarImage),
+                _scordTiming().P2P_WS_RECONNECT_MS ?? 3000
+            );
         };
 
         this.ws.onerror = (e) => console.error("[P2P] WS error:", e);
@@ -185,14 +193,20 @@ class P2PMesh {
             }
         };
 
-        pc.onnegotiationneeded = async () => {
-            try {
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-                this._send({ type: "offer", target: peerId, sdp: pc.localDescription });
-            } catch (err) {
-                console.error("[P2P] Renegotiation error:", err);
-            }
+        peerObj._negTimer = null;
+        pc.onnegotiationneeded = () => {
+            clearTimeout(peerObj._negTimer);
+            peerObj._negTimer = setTimeout(async () => {
+                try {
+                    if (pc.connectionState === "closed") return;
+                    if (pc.signalingState !== "stable") return;
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    this._send({ type: "offer", target: peerId, sdp: pc.localDescription });
+                } catch (err) {
+                    console.error("[P2P] Renegotiation error:", err);
+                }
+            }, _scordTiming().P2P_NEGOTIATION_DEBOUNCE_MS ?? 150);
         };
 
         pc.onconnectionstatechange = () => {
@@ -295,17 +309,35 @@ class P2PMesh {
     /* ── Send text message over DataChannels ──────────────────── */
     broadcast(data) {
         const raw = JSON.stringify(data);
+        const maxBuf = _scordTiming().P2P_DC_MAX_BUFFERED_BYTES ?? 262144;
         for (const [, peerObj] of Object.entries(this.peers)) {
-            if (peerObj.dc && peerObj.dc.readyState === "open") {
-                peerObj.dc.send(raw);
+            const dc = peerObj.dc;
+            if (!dc || dc.readyState !== "open") continue;
+            if (dc.bufferedAmount > maxBuf) {
+                console.warn("[P2P] DC buffer yüksek, gönderim atlandı:", peerObj);
+                continue;
+            }
+            try {
+                dc.send(raw);
+            } catch (e) {
+                console.warn("[P2P] broadcast send error:", e);
             }
         }
     }
 
     sendTo(targetPeerId, data) {
         const peerObj = this.peers[targetPeerId];
-        if (peerObj && peerObj.dc && peerObj.dc.readyState === "open") {
-            peerObj.dc.send(JSON.stringify(data));
+        const dc = peerObj?.dc;
+        if (!dc || dc.readyState !== "open") return;
+        const maxBuf = _scordTiming().P2P_DC_MAX_BUFFERED_BYTES ?? 262144;
+        if (dc.bufferedAmount > maxBuf) {
+            console.warn("[P2P] sendTo buffer yüksek:", targetPeerId);
+            return;
+        }
+        try {
+            dc.send(JSON.stringify(data));
+        } catch (e) {
+            console.warn("[P2P] sendTo error:", e);
         }
     }
 
@@ -403,9 +435,10 @@ class P2PMesh {
     }
 
     _startPing() {
+        const pingMs = _scordTiming().P2P_SIGNALING_PING_INTERVAL_MS ?? 25000;
         this._pingTimer = setInterval(() => {
             this._send({ type: "ping" });
-        }, 25000);
+        }, pingMs);
     }
 
     get connectedPeerCount() {

@@ -10,6 +10,11 @@
 const WS_BASE = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 const API_BASE = "/api";
 
+/** @returns {typeof window.SCORD_TIMING} */
+function SCORD_T() {
+    return window.SCORD_TIMING || {};
+}
+
 const AVATAR_COLORS = [
     "#7c3aed", "#4f46e5", "#0ea5e9", "#10b981", "#f59e0b",
     "#ef4444", "#ec4899", "#8b5cf6", "#06b6d4", "#84cc16",
@@ -47,7 +52,13 @@ let state = {
     translationEnabled: false,
     targetLang: "tr",
     theme: "sapphire",
-    recentVoiceToasts: new Set()
+    recentVoiceToasts: new Set(),
+    /** @type {{ messageId: string, author: string, authorId: string, text: string } | null} */
+    replyTo: null,
+    _p2pOutbox: [],
+    peerLatencyMs: {},
+    peerIngressMs: {},
+    _rttPingTimer: null,
 };
 
 // ── V16 Helpers ───────────────────────────────────────────────
@@ -63,7 +74,7 @@ const UI = {
 
 const updateMembersDebounced = UI.debounce(() => {
     if (state.activeServerId) updateMembersPanel(state.activeServerId);
-}, 300);
+}, SCORD_T().MEMBERS_PANEL_DEBOUNCE_MS ?? 300);
 
 /* ── Helpers ──────────────────────────────────────────────── */
 function genId() {
@@ -76,6 +87,160 @@ function now() {
 
 function initials(name) {
     return (name || "?").slice(0, 2).toUpperCase();
+}
+
+/** Map legacy / mismatched text channel ids so messages land in the same bucket as the UI. */
+function canonicalChannelIdForChat(server, channelId) {
+    if (!server?.channels || channelId == null || channelId === "") return channelId;
+    if (server.channels.some(c => c.id === channelId)) return channelId;
+    const firstText = server.channels.find(c => c.type === "text");
+    if (!firstText) return channelId;
+    const lid = String(channelId).toLowerCase();
+    if (lid === "general" || lid === "ch-genel" || lid === "genel") return firstText.id;
+    return channelId;
+}
+
+function getLocalShareStream() {
+    return state.screenStream || state.mesh?.screenStream || null;
+}
+
+function anyMeshDcOpen(mesh) {
+    if (!mesh?.peers) return false;
+    return Object.values(mesh.peers).some(p => p.dc && p.dc.readyState === "open");
+}
+
+/** Queue until at least one DataChannel is open so chat is not silently dropped. */
+function meshBroadcastReliable(payload) {
+    if (!state.mesh) return;
+    if (anyMeshDcOpen(state.mesh)) {
+        state.mesh.broadcast(payload);
+        return;
+    }
+    if (!state._p2pOutbox) state._p2pOutbox = [];
+    state._p2pOutbox.push(payload);
+}
+
+function flushP2pOutbox() {
+    if (!state.mesh || !state._p2pOutbox?.length) return;
+    if (!anyMeshDcOpen(state.mesh)) return;
+    const batch = state._p2pOutbox.splice(0);
+    for (const item of batch) {
+        state.mesh.broadcast(item);
+    }
+}
+
+/** Ses oturumunu ilk boş kanala katılan belirler (senkron referans / UI). */
+function ensureVoiceSessionHost(server, channelId, peerId, username) {
+    if (!server || !channelId || !peerId) return;
+    if (!server.voiceSessionHost) server.voiceSessionHost = {};
+    if (server.voiceSessionHost[channelId]) return;
+    server.voiceSessionHost[channelId] = { peerId, username: username || "?", at: Date.now() };
+}
+
+function transferVoiceSessionHost(server, channelId, leftPeerId) {
+    if (!server?.voiceSessionHost?.[channelId]) return;
+    const cur = server.voiceSessionHost[channelId];
+    if (cur.peerId !== leftPeerId) return;
+    const remaining = (server.voiceMembers?.[channelId] || []).filter(m => m.peer_id !== leftPeerId);
+    const next = remaining[0];
+    if (next) {
+        server.voiceSessionHost[channelId] = {
+            peerId: next.peer_id,
+            username: next.username,
+            at: Date.now(),
+        };
+    } else {
+        delete server.voiceSessionHost[channelId];
+    }
+}
+
+/** Mesh yayınlarına zaman damgası + oturum host bilgisi (çok kullanıcı gecikme senkronu). */
+function attachMeshBroadcastSync(mesh, roomId) {
+    const orig = mesh.broadcast.bind(mesh);
+    mesh.broadcast = function (payload) {
+        if (!payload || typeof payload !== "object") return orig(payload);
+        if (payload.type === "latency_ping" || payload.type === "latency_pong") return orig(payload);
+        const server = state.servers.find(s => s.id === roomId);
+        const ch = state.voiceChannelId;
+        let voiceHostId = null;
+        let voiceHostName = null;
+        if (server && ch && server.voiceSessionHost?.[ch]) {
+            voiceHostId = server.voiceSessionHost[ch].peerId;
+            voiceHostName = server.voiceSessionHost[ch].username;
+        }
+        return orig({
+            ...payload,
+            _sync: {
+                sentAt: Date.now(),
+                voiceHostId,
+                voiceHostName,
+                originPeerId: state.peerId,
+            },
+        });
+    };
+}
+
+function updateVoiceSessionMeta() {
+    const el = document.getElementById("voice-sync-meta");
+    const voiceView = document.getElementById("voice-view");
+    if (!el || !voiceView || voiceView.classList.contains("hidden")) {
+        if (el) el.textContent = "";
+        return;
+    }
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    const ch = state.voiceChannelId || state.activeChannelId;
+    if (!server || !ch) {
+        el.textContent = "";
+        return;
+    }
+    const host = server.voiceSessionHost?.[ch];
+    const rt = state.peerLatencyMs || {};
+    const vals = Object.values(rt).filter(n => typeof n === "number" && n >= 0);
+    const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+    const ing = state.peerIngressMs || {};
+    const ingVals = Object.values(ing).filter(n => typeof n === "number");
+    const ingAvg = ingVals.length ? Math.round(ingVals.reduce((a, b) => a + b, 0) / ingVals.length) : null;
+    const st = SCORD_T();
+    const parts = [];
+    if (host) parts.push(`Oturumu ilk açan: ${host.username}`);
+    if (avg != null) parts.push(`RTT ~${avg}ms`);
+    if (ingAvg != null) parts.push(`paket ~${ingAvg}ms`);
+    parts.push(
+        `UI ${st.VOICE_SPEAKING_POLL_MS ?? 100}/${st.VOICE_SPEAKING_HOLD_MS ?? 250}ms · overlay ${st.SCREEN_OVERLAY_SYNC_INTERVAL_MS ?? 750}ms · neg ${st.P2P_NEGOTIATION_DEBOUNCE_MS ?? 150}ms · ping ${st.RTT_PING_INTERVAL_MS ?? 4000}ms`
+    );
+    el.textContent = parts.join(" · ");
+    el.title = [
+        host ? `Ses oturumunu ilk başlatan: ${host.username}` : null,
+        avg != null ? `Ölçülen ortalama RTT (yaklaşık tek yön ×2): ~${avg} ms` : null,
+        ingAvg != null ? `Paket üzerinden tahmini gecikme: ~${ingAvg} ms` : null,
+        `timing.js sabitleri — konuşma tarama ${st.VOICE_SPEAKING_POLL_MS}ms, histerezis ${st.VOICE_SPEAKING_HOLD_MS}ms, uzak video UI ${st.VOICE_TRACK_RENDER_DELAY_MS}ms, akış UI ${st.VOICE_STREAM_RENDER_DELAY_MS}ms, ekran overlay ${st.SCREEN_OVERLAY_SYNC_INTERVAL_MS}ms, WebRTC offer debounce ${st.P2P_NEGOTIATION_DEBOUNCE_MS}ms, WS yeniden bağlanma ${st.P2P_WS_RECONNECT_MS}ms, sinyal ping ${st.P2P_SIGNALING_PING_INTERVAL_MS}ms, üye paneli ${st.MEMBERS_PANEL_DEBOUNCE_MS}ms, RTT ölçüm ${st.RTT_PING_INTERVAL_MS}ms`,
+    ]
+        .filter(Boolean)
+        .join("\n");
+}
+
+function sendPeerLatencyPings() {
+    if (!state.mesh || !anyMeshDcOpen(state.mesh)) return;
+    const t0 = Date.now();
+    const pingId = genId();
+    for (const pid of Object.keys(state.mesh.peers)) {
+        if (pid === state.peerId) continue;
+        state.mesh.sendTo(pid, { type: "latency_ping", pingId, t0 });
+    }
+}
+
+function clearRttPingTimer() {
+    if (state._rttPingTimer) {
+        clearInterval(state._rttPingTimer);
+        state._rttPingTimer = null;
+    }
+}
+
+function startRttPingTimer() {
+    clearRttPingTimer();
+    const ms = SCORD_T().RTT_PING_INTERVAL_MS ?? 4000;
+    sendPeerLatencyPings();
+    state._rttPingTimer = setInterval(sendPeerLatencyPings, ms);
 }
 
 function applyAvatarToElement(el, color, image, name) {
@@ -97,7 +262,7 @@ function toast(message, type = "info") {
     el.className = `toast ${type}`;
     el.textContent = message;
     document.getElementById("toast-container").appendChild(el);
-    setTimeout(() => el.remove(), 4000);
+    setTimeout(() => el.remove(), SCORD_T().TOAST_DURATION_MS ?? 4000);
 }
 
 function playSound(frequency = 440, duration = 200, type = "sine") {
@@ -124,9 +289,209 @@ function playSound(frequency = 440, duration = 200, type = "sine") {
 
 function showModal(title, bodyHTML, footerHTML) {
     document.getElementById("modal-title").textContent = title;
-    document.getElementById("modal-body").innerHTML = bodyHTML;
-    document.getElementById("modal-footer").innerHTML = footerHTML;
+    const mb = document.getElementById("modal-body");
+    mb.innerHTML = "";
+    if (typeof bodyHTML === "string") mb.innerHTML = bodyHTML;
+    else if (bodyHTML && bodyHTML.nodeType === 1) mb.appendChild(bodyHTML);
+    document.getElementById("modal-footer").innerHTML = footerHTML || "";
     document.getElementById("modal-backdrop").classList.remove("hidden");
+}
+
+function mergeRoomPayloadIntoServer(server, payload) {
+    if (!server || !payload) return;
+    if (payload.name != null && String(payload.name).trim() !== "") server.name = payload.name;
+    if (payload.channels) server.channels = payload.channels;
+    if (payload.roles) server.roles = payload.roles;
+    if (payload.peer_roles) server.peer_roles = payload.peer_roles;
+    if (payload.channel_backgrounds) server.channel_backgrounds = payload.channel_backgrounds;
+    const inv = payload.inviteCode ?? payload.invite_code;
+    if (inv != null && inv !== "") server.inviteCode = inv;
+    const icon = payload.icon_url ?? payload.iconUrl;
+    if (icon !== undefined && icon !== "") server.icon_url = icon;
+}
+
+/** Modüler UI: `data-scord-palette` renk seti, `data-scord-chat` balon / klasik */
+function applyScordAppearance() {
+    const pal = localStorage.getItem("scord_palette") || "glass";
+    const chat = localStorage.getItem("scord_chat_layout") || "bubbles";
+    document.documentElement.setAttribute("data-scord-palette", pal);
+    document.documentElement.setAttribute("data-scord-chat", chat);
+}
+
+function applyChannelBackground(serverId, channelId) {
+    const server = state.servers.find(s => s.id === serverId);
+    const raw = server?.channel_backgrounds?.[channelId];
+    const chatView = document.getElementById("chat-view");
+    const voiceView = document.getElementById("voice-view");
+    const overlay = "linear-gradient(rgba(6, 6, 16, 0.88), rgba(6, 6, 16, 0.94))";
+    const urlOk = raw && /^https?:\/\//i.test(String(raw).trim());
+    [chatView, voiceView].filter(Boolean).forEach(el => {
+        if (urlOk) {
+            const u = JSON.stringify(String(raw).trim());
+            el.style.backgroundImage = `${overlay}, url(${u})`;
+            el.style.backgroundSize = "cover";
+            el.style.backgroundPosition = "center";
+            el.style.backgroundAttachment = "fixed";
+        } else {
+            el.style.backgroundImage = "";
+            el.style.backgroundAttachment = "";
+        }
+    });
+}
+
+function getMyEffectiveRole(server) {
+    if (!server) return "member";
+    if (server.ownerId === state.peerId) return "owner";
+    return server.peer_roles?.[state.peerId] || "member";
+}
+
+function normalizeReactionsMap(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object") return out;
+    for (const [emoji, peers] of Object.entries(raw)) {
+        if (peers instanceof Set) out[emoji] = [...peers];
+        else if (Array.isArray(peers)) out[emoji] = peers.filter(Boolean);
+        else out[emoji] = [];
+    }
+    return out;
+}
+
+function escapeHtml(s) {
+    if (s == null) return "";
+    const d = document.createElement("div");
+    d.textContent = String(s);
+    return d.innerHTML;
+}
+
+function chMuteStorageKey(serverId) {
+    return `scord_ch_mute_${serverId}`;
+}
+
+function getChannelMuteSet(serverId) {
+    try {
+        const a = JSON.parse(localStorage.getItem(chMuteStorageKey(serverId)) || "[]");
+        return Array.isArray(a) ? a : [];
+    } catch {
+        return [];
+    }
+}
+
+function isChannelMuted(serverId, channelId) {
+    return getChannelMuteSet(serverId).includes(channelId);
+}
+
+function toggleChannelMuteLocal(serverId, channelId) {
+    const set = [...getChannelMuteSet(serverId)];
+    const i = set.indexOf(channelId);
+    if (i >= 0) {
+        set.splice(i, 1);
+        toast("Kanal bildirimleri açık.", "info");
+    } else {
+        set.push(channelId);
+        toast("Kanal sessize alındı (sadece bu cihaz).", "info");
+    }
+    localStorage.setItem(chMuteStorageKey(serverId), JSON.stringify(set));
+    updateChannelSidebar(serverId);
+}
+
+function markChannelRead(serverId, channelId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    if (!server.unread) server.unread = {};
+    server.unread[channelId] = 0;
+    updateChannelSidebar(serverId);
+}
+
+function showChannelContextMenu(ev, channel, serverId) {
+    closeContextMenu();
+    ev.preventDefault();
+    ev.stopPropagation();
+    const x = ev.clientX;
+    const y = ev.clientY;
+    const menu = document.createElement("div");
+    menu.className = "ctx-menu ctx-menu--chat";
+    menu.id = "ctx-menu";
+    menu.style.left = `${Math.min(x, window.innerWidth - 260)}px`;
+    menu.style.top = `${Math.min(y, window.innerHeight - 280)}px`;
+
+    const addItem = (icon, label, action) => {
+        const item = document.createElement("div");
+        item.className = "ctx-item";
+        item.innerHTML = `<span class="ctx-icon">${icon}</span>${label}`;
+        item.onclick = () => { closeContextMenu(); action(); };
+        menu.appendChild(item);
+    };
+
+    if (channel.type === "text") {
+        addItem("✓", "Okundu olarak işaretle", () => markChannelRead(serverId, channel.id));
+        const muted = isChannelMuted(serverId, channel.id);
+        addItem(muted ? "🔔" : "🔕", muted ? "Sessize almayı kaldır" : "Kanalı sessize al (yerel)", () => toggleChannelMuteLocal(serverId, channel.id));
+    }
+    if (channel.type === "voice") {
+        addItem("🔊", "Kanala katıl", () => {
+            joinVoiceChannel(channel.id);
+            updateChannelSidebar(serverId);
+        });
+    }
+    addItem("📋", "Kanal ID kopyala", () => {
+        const id = channel.id || "";
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(id).then(() => toast("Kanal ID kopyalandı", "info")).catch(() => toast("Kopyalanamadı", "error"));
+        }
+    });
+
+    document.body.appendChild(menu);
+    setTimeout(() => {
+        document.addEventListener("click", closeContextMenu, { once: true });
+    }, 10);
+}
+
+function setReplyTarget(msg) {
+    state.replyTo = {
+        messageId: msg.id,
+        author: msg.author,
+        authorId: msg.authorId,
+        text: msg.text || "",
+    };
+    const bar = document.getElementById("reply-preview-bar");
+    const auth = document.getElementById("reply-preview-author");
+    const snip = document.getElementById("reply-preview-snippet");
+    if (bar && auth && snip) {
+        bar.classList.remove("hidden");
+        auth.textContent = msg.author || "";
+        snip.textContent = (msg.text || "").replace(/\s+/g, " ").slice(0, 100);
+    }
+    document.getElementById("chat-input")?.focus();
+}
+
+function clearReplyTarget() {
+    state.replyTo = null;
+    document.getElementById("reply-preview-bar")?.classList.add("hidden");
+}
+
+function scrollToChatMessage(messageId) {
+    if (!messageId) return;
+    const rid = String(messageId).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const row = document.querySelector(`[data-msg-id="${rid}"]`);
+    if (!row) {
+        toast("Mesaj bu görünümde yok veya silindi.", "info");
+        return;
+    }
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.classList.add("msg-highlight");
+    setTimeout(() => row.classList.remove("msg-highlight"), 2400);
+}
+
+async function persistChannelBackground(roomId, channelId, url) {
+    try {
+        await fetch(`${API_BASE}/rooms/${roomId}/channel_background`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ channel_id: channelId, url: url || null }),
+        });
+    } catch (e) {
+        console.warn("persistChannelBackground", e);
+    }
 }
 
 function hideModal() {
@@ -163,6 +528,11 @@ function initSetup() {
     enterBtn.addEventListener("click", () => {
         state.username = nameInput.value.trim();
         state.peerId = genId();
+        const avUrl = document.getElementById("avatar-url-input")?.value?.trim();
+        if (avUrl && /^https?:\/\//i.test(avUrl)) {
+            state.avatarImage = avUrl;
+            localStorage.setItem("scord_avatar_image", avUrl);
+        }
         localStorage.setItem("scord_username", state.username);
         localStorage.setItem("scord_color", state.avatarColor);
         localStorage.setItem("scord_peer_id", state.peerId);
@@ -189,6 +559,7 @@ function initSetup() {
         state.theme = saved.theme;
         document.documentElement.className = saved.theme;
     }
+    applyScordAppearance();
     if (saved.bg) {
         state.appBackground = saved.bg;
         document.body.style.backgroundImage = `url(${saved.bg})`;
@@ -198,7 +569,11 @@ function initSetup() {
     if (saved.voice) {
         try { state.voiceSettings = JSON.parse(saved.voice); } catch (e) { }
     }
-    if (saved.image) state.avatarImage = saved.image;
+    if (saved.image) {
+        state.avatarImage = saved.image;
+        const urlIn = document.getElementById("avatar-url-input");
+        if (urlIn && /^https?:\/\//i.test(saved.image)) urlIn.value = saved.image;
+    }
     if (saved.username) {
         nameInput.value = saved.username;
         enterBtn.disabled = false;
@@ -216,6 +591,7 @@ function initSetup() {
 function startApp() {
     document.getElementById("setup-overlay").classList.remove("active");
     document.getElementById("app").classList.remove("hidden");
+    applyScordAppearance();
 
     // Apply user info to UI
     const avatar = document.getElementById("user-bar-avatar");
@@ -254,7 +630,7 @@ function startApp() {
     showHomeView();
     refreshDiscovery();
     initMobileNav();
-    setInterval(refreshDiscovery, 15000);
+    setInterval(refreshDiscovery, SCORD_T().DISCOVERY_REFRESH_INTERVAL_MS ?? 15000);
 }
 
 function initMobileNav() {
@@ -308,6 +684,7 @@ function closeMobileNav() {
 /* ── Views ────────────────────────────────────────────────── */
 function showHomeView() {
     closeMobileNav();
+    clearRttPingTimer();
     if (state.voiceChannelId) {
         try { leaveVoiceChannel(); } catch (e) { /* noop */ }
     }
@@ -354,13 +731,8 @@ function showChatView(serverId, channelId) {
     document.getElementById("sidebar-server-name").textContent = server.name;
     updateChannelSidebar(serverId);
 
-    // V16: Render History
-    const area = document.getElementById("messages-area");
-    area.innerHTML = "";
-    const history = server.messages ? server.messages[state.activeChannelId] : [];
-    if (history) {
-        history.forEach(m => appendMessageDOM(m));
-    }
+    renderMessages(serverId, channelId);
+    applyChannelBackground(serverId, channelId);
 
     updateMuteStates();
     updateMembersDebounced();
@@ -398,6 +770,8 @@ function showVoiceView(serverId, channelId) {
     // Show share buttons even if not joined
     document.getElementById("voice-screen-btn")?.classList.remove("hidden");
     document.getElementById("voice-camera-btn")?.classList.remove("hidden");
+    updateVoiceSessionMeta();
+    applyChannelBackground(serverId, channelId);
 }
 
 /* ── Server rail ──────────────────────────────────────────── */
@@ -702,9 +1076,14 @@ function renderHomeSidebar() {
 }
 
 function createChannelItem(channel, serverId) {
+    const server = state.servers.find(s => s.id === serverId);
     const item = document.createElement("div");
     item.className = "channel-item" + (channel.id === state.activeChannelId ? " active" : "");
     item.id = `ch-${channel.id}`;
+    if (channel.type === "text" && isChannelMuted(serverId, channel.id)) {
+        item.classList.add("channel-muted");
+        item.title = "Bu kanal yerel olarak sessize alındı";
+    }
 
     const icon = document.createElement("span");
     icon.className = "ch-icon";
@@ -718,7 +1097,6 @@ function createChannelItem(channel, serverId) {
     item.appendChild(name);
 
     // Unread badge
-    const server = state.servers.find(s => s.id === serverId);
     const unread = server?.unread?.[channel.id] || 0;
     if (unread > 0) {
         const badge = document.createElement("span");
@@ -737,6 +1115,12 @@ function createChannelItem(channel, serverId) {
         if (channel.type === "voice") {
             joinVoiceChannel(channel.id);
         }
+    };
+
+    item.oncontextmenu = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showChannelContextMenu(e, channel, serverId);
     };
 
     if (channel.type === "voice") {
@@ -881,24 +1265,34 @@ function updatePeerCountBadge(serverId) {
 function renderMessages(serverId, channelId) {
     const server = state.servers.find(s => s.id === serverId);
     const area = document.getElementById("messages-area");
-    area.innerHTML = `<div class="messages-welcome">
+    const messages = server?.messages?.[channelId] || [];
+
+    if (messages.length === 0) {
+        area.innerHTML = `<div class="messages-welcome">
     <div class="messages-welcome-icon">💬</div>
     <h3># ${server?.channels.find(c => c.id === channelId)?.name || channelId}</h3>
     <p>Bu kanalın başlangıcı. Merhaba! 👋</p>
   </div>`;
+        if (server) {
+            if (!server.unread) server.unread = {};
+            server.unread[channelId] = 0;
+            updateChannelSidebar(serverId);
+        }
+        return;
+    }
 
-    const messages = server?.messages?.[channelId] || [];
+    area.innerHTML = "";
     let lastAuthor = null;
 
     const pins = server?.pinned_messages || [];
     messages.forEach(msg => {
-        const grouped = msg.authorId === lastAuthor;
-        if (pins.find(p => p.id === msg.id)) msg.isPinned = true;
-        appendMessageDOM(msg, grouped);
+        const grouped = msg.authorId === lastAuthor && !msg.replyTo;
+        const copy = { ...msg };
+        if (pins.find(p => p.id === msg.id)) copy.isPinned = true;
+        appendMessageDOM(copy, grouped, serverId);
         lastAuthor = msg.authorId;
     });
 
-    // Clear unread
     if (server) {
         if (!server.unread) server.unread = {};
         server.unread[channelId] = 0;
@@ -906,25 +1300,42 @@ function renderMessages(serverId, channelId) {
     }
 }
 
-function appendMessageDOM(msg, grouped = false) {
+function hydrateMessageReactions(bubbleEl, msg) {
+    const norm = normalizeReactionsMap(msg.reactions);
+    msg.reactions = norm;
+    if (Object.keys(norm).length === 0) return;
+    updateReactionBar(msg.id, norm);
+}
+
+function appendMessageDOM(msg, grouped = false, serverId = null) {
     const area = document.getElementById("messages-area");
+    const sid = serverId || state.activeServerId;
+    const isSelf = msg.authorId === state.peerId;
     const el = document.createElement("div");
-    el.className = "message" + (grouped ? " grouped" : "");
+    el.className = "message message-bubble msg-row" + (isSelf ? " msg-row--self" : " msg-row--other") + (grouped ? " grouped" : "");
+    el.dataset.msgId = msg.id;
+    el.style.position = "relative";
+
+    const inner = document.createElement("div");
+    inner.className = "msg-row-inner";
 
     const avatarDiv = document.createElement("div");
     avatarDiv.className = "msg-avatar";
     applyAvatarToElement(avatarDiv, msg.avatarColor, msg.avatarImage, msg.author);
 
-    const content = document.createElement("div");
-    content.className = "msg-content";
+    const stack = document.createElement("div");
+    stack.className = "msg-stack";
+
+    const bubble = document.createElement("div");
+    bubble.className = "msg-bubble" + (isSelf ? " msg-bubble--self" : " msg-bubble--other");
 
     if (!grouped) {
         const header = document.createElement("div");
         header.className = "msg-header";
         const authorSpan = document.createElement("span");
-        authorSpan.className = "msg-author" + (msg.authorId === state.peerId ? " is-you" : "");
+        authorSpan.className = "msg-author" + (isSelf ? " is-you" : "");
         authorSpan.textContent = msg.author;
-        if (msg.authorId !== state.peerId) {
+        if (!isSelf) {
             authorSpan.style.cursor = "pointer";
             authorSpan.onclick = () => openUserProfile(msg.authorId, msg.author, msg.avatarImage, msg.avatarColor);
             authorSpan.oncontextmenu = (e) => {
@@ -937,41 +1348,70 @@ function appendMessageDOM(msg, grouped = false) {
         timeSpan.textContent = msg.time;
         header.appendChild(authorSpan);
         header.appendChild(timeSpan);
-        content.appendChild(header);
+        bubble.appendChild(header);
+    }
+
+    if (msg.replyTo?.messageId) {
+        const ref = document.createElement("button");
+        ref.type = "button";
+        ref.className = "msg-reply-ref" + (grouped ? " msg-reply-ref--compact" : "");
+        const sn = escapeHtml((msg.replyTo.snippet || msg.replyTo.text || "").replace(/\s+/g, " ").slice(0, 80));
+        ref.innerHTML = `<span class="msg-reply-bar"></span><span class="msg-reply-meta">@${escapeHtml(msg.replyTo.author || "?")}</span><span class="msg-reply-snippet">${sn}</span>`;
+        ref.onclick = (e) => {
+            e.preventDefault();
+            scrollToChatMessage(msg.replyTo.messageId);
+        };
+        if (!grouped) bubble.insertBefore(ref, bubble.firstChild);
+        else bubble.appendChild(ref);
     }
 
     const textDiv = document.createElement("div");
     textDiv.className = "msg-text";
-    textDiv.innerHTML = parseMessageText(msg.text); // Use innerHTML for embeds
+    textDiv.innerHTML = parseMessageText(msg.text, sid);
+    textDiv.addEventListener("click", (e) => {
+        const elM = e.target.closest(".mention");
+        if (!elM) return;
+        const pid = elM.getAttribute("data-peer");
+        if (!pid) return;
+        const server = state.servers.find(s => s.id === sid);
+        const member = server?.members?.find(m => m.peer_id === pid);
+        if (member) {
+            e.preventDefault();
+            openUserProfile(pid, member.username, member.avatar_image, member.avatar_color);
+        }
+    });
 
-    // Check if pinned
+    const onCtx = (e) => {
+        e.preventDefault();
+        showMsgContextMenu(msg, e.clientX, e.clientY);
+    };
+    el.oncontextmenu = onCtx;
+    bubble.oncontextmenu = onCtx;
+
+    if (msg.attachment) {
+        const img = document.createElement("img");
+        img.className = "msg-attach-img";
+        img.src = msg.attachment;
+        textDiv.appendChild(img);
+    }
+
+    bubble.appendChild(textDiv);
+    stack.appendChild(bubble);
+    inner.appendChild(avatarDiv);
+    inner.appendChild(stack);
+    el.appendChild(inner);
+
     if (msg.isPinned) {
         el.classList.add("pinned");
         const pinIcon = document.createElement("span");
         pinIcon.className = "pin-badge";
         pinIcon.innerHTML = "📌";
         pinIcon.title = "Sabitlenmiş Mesaj";
-        el.appendChild(pinIcon);
+        bubble.appendChild(pinIcon);
     }
 
-    textDiv.oncontextmenu = (e) => {
-        e.preventDefault();
-        showMsgContextMenu(msg, e.clientX, e.clientY);
-    };
+    hydrateMessageReactions(el, msg);
 
-    if (msg.attachment) {
-        const img = document.createElement("img");
-        img.src = msg.attachment;
-        img.style.maxWidth = "200px";
-        img.style.borderRadius = "8px";
-        img.style.marginTop = "8px";
-        img.style.display = "block";
-        textDiv.appendChild(img);
-    }
-
-    content.appendChild(textDiv);
-    el.appendChild(avatarDiv);
-    el.appendChild(content);
     area.appendChild(el);
     area.scrollTop = area.scrollHeight;
 }
@@ -991,32 +1431,64 @@ async function sendMessage() {
     const text = input.value.trim();
     if (!text || !state.activeServerId || !state.activeChannelId) return;
 
-    // Music Bot Intercepts
+    // Music Bot — yalnızca sesli kanaldaysan; P2P’de voiceChannelId ile aynı odayı eşle
     if (text.startsWith("!play ")) {
+        if (!state.voiceChannelId) {
+            toast("Müzik için önce bir sesli kanala katıl.", "warning");
+            return;
+        }
         const query = text.slice(6).trim();
-        addSystemMessage(`🎵 Müzik Botu YouTube'da arıyor: "${query}"...`);
+        if (!query) {
+            toast("Kullanım: !play şarkı adı veya YouTube linki", "info");
+            return;
+        }
+        input.value = "";
+        input.style.height = "auto";
+
+        const vch = state.voiceChannelId;
+        const firePlay = (videoId) => {
+            const startAt = Date.now();
+            meshBroadcastReliable({
+                type: "music_play",
+                videoId,
+                startAt,
+                voiceChannelId: vch,
+            });
+            startMusicBot(videoId, startAt);
+        };
+
+        const directId = extractYouTubeVideoId(query);
+        if (directId) {
+            addSystemMessage("🎵 YouTube videosu başlatılıyor…");
+            firePlay(directId);
+            return;
+        }
+
+        addSystemMessage(`🎵 Aranıyor: "${query}"…`);
         fetch(`${API_BASE}/ytsearch?q=${encodeURIComponent(query)}`)
             .then(res => res.json())
             .then(data => {
-                if (data.id) {
-                    const startAt = Date.now();
-                    if (state.mesh) state.mesh.broadcast({ type: "music_play", videoId: data.id, startAt });
-                    startMusicBot(data.id, startAt);
-                } else {
-                    addSystemMessage("❌ Müzik bulunamadı.");
-                }
-            });
-        input.value = "";
-        input.style.height = "auto";
+                if (data.id) firePlay(data.id);
+                else addSystemMessage("❌ Müzik bulunamadı.");
+            })
+            .catch(() => addSystemMessage("❌ Sunucu araması başarısız."));
         return;
     } else if (text === "!stop" || text === "!skip") {
-        if (state.mesh) state.mesh.broadcast({ type: "music_stop" });
+        if (!state.voiceChannelId) {
+            toast("Sesli kanalda değilsin.", "warning");
+            return;
+        }
+        meshBroadcastReliable({ type: "music_stop", voiceChannelId: state.voiceChannelId });
         stopMusicBot();
         input.value = "";
         input.style.height = "auto";
         return;
     } else if (text === "!pause") {
-        if (state.mesh) state.mesh.broadcast({ type: "music_pause" });
+        if (!state.voiceChannelId) {
+            toast("Sesli kanalda değilsin.", "warning");
+            return;
+        }
+        meshBroadcastReliable({ type: "music_pause", voiceChannelId: state.voiceChannelId });
         if (state.musicBot && state.musicBot.player && typeof state.musicBot.player.pauseVideo === "function") {
             state.musicBot.player.pauseVideo();
         }
@@ -1024,7 +1496,11 @@ async function sendMessage() {
         input.style.height = "auto";
         return;
     } else if (text === "!resume") {
-        if (state.mesh) state.mesh.broadcast({ type: "music_resume" });
+        if (!state.voiceChannelId) {
+            toast("Sesli kanalda değilsin.", "warning");
+            return;
+        }
+        meshBroadcastReliable({ type: "music_resume", voiceChannelId: state.voiceChannelId });
         if (state.musicBot && state.musicBot.player && typeof state.musicBot.player.playVideo === "function") {
             state.musicBot.player.playVideo();
         }
@@ -1052,6 +1528,16 @@ async function sendMessage() {
         isPinned: false
     };
 
+    if (state.replyTo?.messageId) {
+        msg.replyTo = {
+            messageId: state.replyTo.messageId,
+            author: state.replyTo.author,
+            authorId: state.replyTo.authorId,
+            snippet: (state.replyTo.text || "").slice(0, 120),
+            text: (state.replyTo.text || "").slice(0, 200),
+        };
+    }
+
     // V16: Server-side Persistence
     fetch(`${API_BASE}/rooms/${state.activeServerId}/messages`, {
         method: "POST",
@@ -1062,30 +1548,91 @@ async function sendMessage() {
     input.value = "";
     input.style.height = "auto";
 
+    clearReplyTarget();
     saveMessage(state.activeServerId, msg);
-    if (state.mesh) {
-        state.mesh.broadcast({ type: "chat", payload: msg });
-    }
+    meshBroadcastReliable({ type: "chat", payload: msg });
 }
 
-function parseMessageText(text) {
+/** !play: youtube.com/watch, embed/, youtu.be veya 11 karakter id */
+function extractYouTubeVideoId(query) {
+    const s = String(query || "").trim();
+    const m = s.match(/(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+    if (m) return m[1];
+    if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+    return null;
+}
+
+function renderPlainChatSegment(segment, serverId) {
+    const chunks = [];
+    let i = 0;
+    const str = String(segment);
+    while (i < str.length) {
+        const o = str.indexOf("||", i);
+        if (o === -1) {
+            chunks.push({ kind: "text", v: str.slice(i) });
+            break;
+        }
+        if (o > i) chunks.push({ kind: "text", v: str.slice(i, o) });
+        const c = str.indexOf("||", o + 2);
+        if (c === -1) {
+            chunks.push({ kind: "text", v: str.slice(o) });
+            break;
+        }
+        chunks.push({ kind: "spoiler", v: str.slice(o + 2, c) });
+        i = c + 2;
+    }
+    return chunks.map(ch => {
+        if (ch.kind === "spoiler") {
+            return `<span class="spoiler" title="Göstermek için tıkla" onclick="this.classList.toggle('revealed')">${escapeHtml(ch.v)}</span>`;
+        }
+        return applyMentionsThenEscape(ch.v, serverId);
+    }).join("");
+}
+
+function applyMentionsThenEscape(text, serverId) {
+    let s = String(text);
+    const ph = [];
+    if (serverId) {
+        const server = state.servers.find(ss => ss.id === serverId);
+        const members = server?.members || [];
+        const names = [...new Set(members.map(m => m.username).filter(Boolean))].sort((a, b) => b.length - a.length);
+        names.forEach(name => {
+            const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const re = new RegExp(`(^|\\s)@${escaped}(?!\\w)`, "g");
+            s = s.replace(re, (full, lead) => {
+                const member = members.find(mm => mm.username === name);
+                const idx = ph.length;
+                ph.push(`<span class="mention" data-peer="${escapeHtml(member?.peer_id || "")}">${escapeHtml("@" + (member?.username || name))}</span>`);
+                return `${lead}\uE000${idx}\uE001`;
+            });
+        });
+    }
+    s = escapeHtml(s);
+    for (let i = 0; i < ph.length; i++) {
+        s = s.split(`\uE000${i}\uE001`).join(ph[i]);
+    }
+    return s;
+}
+
+function parseMessageText(text, serverId) {
     if (!text) return "";
+    const sid = arguments.length >= 2 ? serverId : state.activeServerId;
     const urlRegex = /(https?:\/\/[^\s]+)/g;
-    return text.split(urlRegex).map(part => {
+    return String(text).split(urlRegex).map(part => {
         if (part.match(urlRegex)) {
             // Check for images
             if (part.match(/\.(jpeg|jpg|gif|png|webp)($|\?)/i)) {
                 return `<a href="${part}" target="_blank" class="rich-link"><img src="${part}" class="chat-embed-img" /></a>`;
             }
             // Check for YouTube
-            const ytMatch = part.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+            const ytMatch = part.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
             if (ytMatch) {
                 return `<div class="chat-embed-video"><iframe src="https://www.youtube.com/embed/${ytMatch[1]}" frameborder="0" allowfullscreen></iframe></div>`;
             }
             // Generic link
             return `<a href="${part}" target="_blank" class="chat-link">${part}</a>`;
         }
-        return part;
+        return renderPlainChatSegment(part, sid);
     }).join("");
 }
 
@@ -1107,20 +1654,26 @@ async function translateText(text, target = "tr") {
 function saveMessage(serverId, msg) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
+    if (msg.reactions) msg.reactions = normalizeReactionsMap(msg.reactions);
+    const cid = canonicalChannelIdForChat(server, msg.channelId);
+    const normalized = cid !== msg.channelId ? { ...msg, channelId: cid } : msg;
+
     if (!server.messages) server.messages = {};
-    if (!server.messages[msg.channelId]) server.messages[msg.channelId] = [];
-    server.messages[msg.channelId].push(msg);
+    if (!server.messages[normalized.channelId]) server.messages[normalized.channelId] = [];
+    server.messages[normalized.channelId].push(normalized);
 
     // If this is the active channel, append to DOM
-    if (msg.channelId === state.activeChannelId && serverId === state.activeServerId) {
-        const msgs = server.messages[msg.channelId];
+    if (normalized.channelId === state.activeChannelId && serverId === state.activeServerId) {
+        const msgs = server.messages[normalized.channelId];
         const prev = msgs[msgs.length - 2];
-        const grouped = prev && prev.authorId === msg.authorId;
-        appendMessageDOM(msg, grouped);
+        const grouped = prev && prev.authorId === normalized.authorId && !normalized.replyTo;
+        appendMessageDOM(normalized, grouped, serverId);
     } else {
-        // Mark unread
-        if (!server.unread) server.unread = {};
-        server.unread[msg.channelId] = (server.unread[msg.channelId] || 0) + 1;
+        // Mark unread (skip when this channel is locally muted)
+        if (!isChannelMuted(serverId, normalized.channelId)) {
+            if (!server.unread) server.unread = {};
+            server.unread[normalized.channelId] = (server.unread[normalized.channelId] || 0) + 1;
+        }
         updateChannelSidebar(serverId);
     }
 }
@@ -1162,6 +1715,8 @@ async function createServer(name) {
         messages: {},
         unread: {},
         voiceMembers: {},
+        voiceSessionHost: {},
+        channel_backgrounds: {},
     };
 
     state.servers.push(server);
@@ -1266,6 +1821,8 @@ async function joinServer(roomId) {
         pinned_messages: room.pinned_messages || [],
         unread: {},
         voiceMembers: {},
+        voiceSessionHost: {},
+        channel_backgrounds: room.channel_backgrounds || {},
     };
 
     state.servers.push(server);
@@ -1278,6 +1835,8 @@ async function joinServer(roomId) {
 
 /* ── P2P Mesh connection management ──────────────────────── */
 function connectToRoom(roomId) {
+    state._p2pOutbox = [];
+    clearRttPingTimer();
     // Disconnect old mesh if any
     if (state.mesh) {
         state.mesh.disconnect();
@@ -1295,7 +1854,9 @@ function connectToRoom(roomId) {
         onStatusChange: (status) => updateConnectionStatus(status),
     });
 
+    attachMeshBroadcastSync(state.mesh, roomId);
     state.mesh.connect(state.username, state.avatarColor, state.avatarImage);
+    startRttPingTimer();
 }
 
 function connectMesh(serverId) {
@@ -1307,6 +1868,36 @@ function connectMesh(serverId) {
 
 /* ── P2P event handlers ───────────────────────────────────── */
 function handleIncomingP2P(fromPeerId, data, roomId) {
+    if (data && data.type === "broadcast" && data.payload && typeof data.payload === "object") {
+        handleIncomingP2P(fromPeerId, data.payload, roomId);
+        return;
+    }
+    if (!data || typeof data !== "object") return;
+
+    if (data.type === "latency_ping") {
+        state.mesh?.sendTo(fromPeerId, { type: "latency_pong", pingId: data.pingId, t0: data.t0 });
+        return;
+    }
+    if (data.type === "latency_pong" && data.t0 != null) {
+        const rtt = Date.now() - data.t0;
+        state.peerRttMs = state.peerRttMs || {};
+        state.peerLatencyMs = state.peerLatencyMs || {};
+        state.peerRttMs[fromPeerId] = rtt;
+        state.peerLatencyMs[fromPeerId] = Math.round(rtt / 2);
+        updateVoiceSessionMeta();
+        return;
+    }
+
+    if (data._sync) {
+        const trip = Date.now() - data._sync.sentAt;
+        const oneWay = Math.min(9999, Math.round(trip / 2));
+        state.peerIngressMs = state.peerIngressMs || {};
+        state.peerIngressMs[fromPeerId] = oneWay;
+        const { _sync, ...rest } = data;
+        data = rest;
+        updateVoiceSessionMeta();
+    }
+
     if (data.type === "chat") {
         const msg = data.payload;
         saveMessage(roomId, msg);
@@ -1369,6 +1960,11 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
             });
 
             if (!server.voiceMembers[data.channelId]) server.voiceMembers[data.channelId] = [];
+            const othersBeforeJoin = server.voiceMembers[data.channelId].filter(m => m.peer_id !== fromPeerId);
+            if (othersBeforeJoin.length === 0) {
+                ensureVoiceSessionHost(server, data.channelId, fromPeerId, data.username);
+            }
+
             let member = server.voiceMembers[data.channelId].find(m => m.peer_id === fromPeerId);
 
             if (!member) {
@@ -1390,7 +1986,10 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
             }
 
             updateChannelSidebar(roomId);
-            if (state.activeChannelId === data.channelId) renderVoiceParticipants(roomId, data.channelId);
+            if (state.activeChannelId === data.channelId) {
+                renderVoiceParticipants(roomId, data.channelId);
+                updateVoiceSessionMeta();
+            }
             updateMuteStates();
 
             // Notify user about new participant (join only)
@@ -1398,9 +1997,9 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                 const key = `${fromPeerId}-join`;
                 if (!state.recentVoiceToasts.has(key)) {
                     toast(`${data.username} sesli kanala katıldı!`, "info");
-                    playSound(523, 300);
+                    playSound(523, SCORD_T().SOUND_JOIN_MS ?? 300);
                     state.recentVoiceToasts.add(key);
-                    setTimeout(() => state.recentVoiceToasts.delete(key), 10000);
+                    setTimeout(() => state.recentVoiceToasts.delete(key), SCORD_T().VOICE_NOTIFY_DEDUP_MS ?? 10000);
                 }
             }
         }
@@ -1438,11 +2037,16 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
     } else if (data.type === "voice_leave") {
         const server = state.servers.find(s => s.id === roomId);
         if (server?.voiceMembers) {
+            const leaveCh = data.channelId;
+            if (leaveCh) transferVoiceSessionHost(server, leaveCh, fromPeerId);
             Object.keys(server.voiceMembers).forEach(chId => {
                 server.voiceMembers[chId] = server.voiceMembers[chId].filter(m => m.peer_id !== fromPeerId);
             });
             updateChannelSidebar(roomId);
-            if (state.activeServerId === roomId) renderVoiceParticipants(roomId, state.activeChannelId);
+            if (state.activeServerId === roomId) {
+                renderVoiceParticipants(roomId, state.activeChannelId);
+                updateVoiceSessionMeta();
+            }
             updateMuteStates();
 
             // Notify user about leaving participant
@@ -1451,37 +2055,65 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                 const key = `${fromPeerId}-leave`;
                 if (!state.recentVoiceToasts.has(key)) {
                     toast(`${member.username} sesli kanaldan ayrıldı.`, "info");
-                    playSound(330, 300); // Lower tone for leave
+                    playSound(330, SCORD_T().SOUND_LEAVE_MS ?? 300);
                     state.recentVoiceToasts.add(key);
-                    setTimeout(() => state.recentVoiceToasts.delete(key), 10000);
+                    setTimeout(() => state.recentVoiceToasts.delete(key), SCORD_T().VOICE_NOTIFY_DEDUP_MS ?? 10000);
                 }
             }
         }
     } else if (data.type === "msg_pin_toggle") {
         const server = state.servers.find(s => s.id === roomId);
-        if (server) {
+        if (server && data.payload) {
             const { msgId, isPinned, msg } = data.payload;
+            const chId = msg?.channelId;
             if (!server.pinned_messages) server.pinned_messages = [];
-            if (isPinned) {
+            if (isPinned && msg) {
                 if (!server.pinned_messages.find(m => m.id === msgId)) server.pinned_messages.push(msg);
             } else {
                 server.pinned_messages = server.pinned_messages.filter(m => m.id !== msgId);
             }
-            renderMessages(roomId, state.activeChannelId);
+            if (chId && server.messages?.[chId]) {
+                const live = server.messages[chId].find(m => m.id === msgId);
+                if (live) live.isPinned = !!isPinned;
+            }
+            if (state.activeServerId === roomId && chId && state.activeChannelId === chId) {
+                renderMessages(roomId, chId);
+                applyChannelBackground(roomId, chId);
+            }
+        }
+    } else if (data.type === "msg_delete") {
+        const { channelId: delCh, msgId } = data.payload || {};
+        const server = state.servers.find(s => s.id === roomId);
+        if (server && delCh && msgId && server.messages?.[delCh]) {
+            server.messages[delCh] = server.messages[delCh].filter(m => m.id !== msgId);
+            server.pinned_messages = (server.pinned_messages || []).filter(m => m.id !== msgId);
+            if (state.activeServerId === roomId && state.activeChannelId === delCh) {
+                renderMessages(roomId, delCh);
+            }
+        }
+    } else if (data.type === "voice_force_disconnect") {
+        if (data.target === state.peerId && state.voiceChannelId) {
+            leaveVoiceChannel();
+            toast("Bir moderatör seni ses kanalından çıkardı.", "warning");
         }
     } else if (data.type === "music_play") {
-        if (state.voiceChannelId) {
-            startMusicBot(data.videoId, data.startAt);
-        }
+        const vch = data.voiceChannelId;
+        if (!state.voiceChannelId) return;
+        if (vch && vch !== state.voiceChannelId) return;
+        startMusicBot(data.videoId, data.startAt);
     } else if (data.type === "music_stop") {
-        if (state.voiceChannelId) {
-            stopMusicBot();
-        }
+        const vch = data.voiceChannelId;
+        if (vch && state.voiceChannelId && vch !== state.voiceChannelId) return;
+        if (state.voiceChannelId) stopMusicBot();
     } else if (data.type === "music_pause") {
+        const vch = data.voiceChannelId;
+        if (vch && state.voiceChannelId && vch !== state.voiceChannelId) return;
         if (state.voiceChannelId && state.musicBot.player && typeof state.musicBot.player.pauseVideo === "function") {
             state.musicBot.player.pauseVideo();
         }
     } else if (data.type === "music_resume") {
+        const vch = data.voiceChannelId;
+        if (vch && state.voiceChannelId && vch !== state.voiceChannelId) return;
         if (state.voiceChannelId && state.musicBot.player && typeof state.musicBot.player.playVideo === "function") {
             state.musicBot.player.playVideo();
         }
@@ -1514,14 +2146,12 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         const payload = data.payload;
         const idx = state.servers.findIndex(s => s.id === payload.id);
         if (idx !== -1) {
-            state.servers[idx].name = payload.name;
-            state.servers[idx].channels = payload.channels;
-            if (payload.roles) state.servers[idx].roles = payload.roles;
-            if (payload.peer_roles) state.servers[idx].peer_roles = payload.peer_roles;
+            mergeRoomPayloadIntoServer(state.servers[idx], payload);
             if (state.activeServerId === payload.id) {
-                document.getElementById("sidebar-server-name").textContent = payload.name;
+                document.getElementById("sidebar-server-name").textContent = state.servers[idx].name;
                 updateChannelSidebar(payload.id);
                 updateMembersPanel(payload.id);
+                applyChannelBackground(payload.id, state.activeChannelId);
             }
         }
     } else if (data.type === "channel_create") {
@@ -1577,7 +2207,7 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         if (server && (server.ownerId === fromPeerId || server.peer_roles?.[fromPeerId] === "admin" || server.peer_roles?.[fromPeerId] === "mod")) {
             toast("Bir yetkili tarafından odan değiştirildi.", "warning");
             if (state.voiceChannelId) leaveVoiceChannel();
-            setTimeout(() => joinVoiceChannel(data.targetChannel), 200);
+            setTimeout(() => joinVoiceChannel(data.targetChannel), SCORD_T().FORCE_ROUTE_VOICE_JOIN_DELAY_MS ?? 200);
         }
     }
 }
@@ -1620,12 +2250,23 @@ function handlePeerLeft(peerId, roomId) {
 
     server.members = (server.members || []).filter(m => m.peer_id !== peerId);
 
-    // Remove from voice channels
+    if (server.voiceMembers && server.voiceSessionHost) {
+        Object.keys(server.voiceMembers).forEach(chId => {
+            if ((server.voiceMembers[chId] || []).some(m => m.peer_id === peerId)) {
+                transferVoiceSessionHost(server, chId, peerId);
+            }
+        });
+    }
+
     if (server.voiceMembers) {
         Object.keys(server.voiceMembers).forEach(chId => {
             server.voiceMembers[chId] = server.voiceMembers[chId].filter(m => m.peer_id !== peerId);
         });
     }
+
+    if (state.peerLatencyMs) delete state.peerLatencyMs[peerId];
+    if (state.peerIngressMs) delete state.peerIngressMs[peerId];
+    if (state.peerRttMs) delete state.peerRttMs[peerId];
 
     if (state.activeServerId === roomId) {
         updateMembersPanel(roomId);
@@ -1662,7 +2303,7 @@ function handleVoiceStream(peerId, stream) {
         setTimeout(() => {
             renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
             updateMuteStates();
-        }, 500);
+        }, SCORD_T().VOICE_STREAM_RENDER_DELAY_MS ?? 500);
     }
     state.remoteMedia[peerId].srcObject = stream;
     updateMuteStates();
@@ -1694,10 +2335,12 @@ function handlePeerConnected(peerId, roomId) {
             username: state.username,
             avatarColor: state.avatarColor,
             avatarImage: state.avatarImage,
-            isSharingScreen: !!state.screenStream,
+            isSharingScreen: !!getLocalShareStream(),
             isSharingCamera: !!state.cameraStream
         });
     }
+
+    flushP2pOutbox();
 }
 
 function handleTrackAdded(peerId, track, stream) {
@@ -1711,12 +2354,12 @@ function handleTrackAdded(peerId, track, stream) {
     }
 
     if (track.kind === "video") {
-        // Force re-render UI to pick up the new video track
         setTimeout(() => {
-            if (state.activeServerId && state.activeChannelId) {
-                renderVoiceParticipants(state.activeServerId, state.activeChannelId);
+            const ch = state.voiceChannelId || state.activeChannelId;
+            if (state.activeServerId && ch) {
+                renderVoiceParticipants(state.activeServerId, ch);
             }
-        }, 1000);
+        }, SCORD_T().VOICE_TRACK_RENDER_DELAY_MS ?? 400);
     }
     updateMuteStates();
 }
@@ -1791,14 +2434,15 @@ async function joinVoiceChannel(channelId) {
                 state._lastSpeakTime = Date.now();
             }
 
-            const isSpeaking = (Date.now() - (state._lastSpeakTime || 0)) < 250;
+            const holdMs = SCORD_T().VOICE_SPEAKING_HOLD_MS ?? 250;
+            const isSpeaking = (Date.now() - (state._lastSpeakTime || 0)) < holdMs;
 
             if (isSpeaking !== state.isSpeaking) {
                 state.isSpeaking = isSpeaking;
                 if (state.mesh) state.mesh.broadcast({ type: "voice_status", speaking: isSpeaking });
                 renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
             }
-        }, 100);
+        }, SCORD_T().VOICE_SPEAKING_POLL_MS ?? 100);
     } catch (err) {
         console.error("Audio error", err);
         toast("Mikrofon hatası: İzin verilmedi.", "error");
@@ -1812,27 +2456,29 @@ async function joinVoiceChannel(channelId) {
 
     showVoiceView(state.activeServerId, channelId);
 
-    // Notify peers
-    state.mesh.broadcast({
-        type: "voice_join",
-        channelId,
-        username: state.username,
-        avatarColor: state.avatarColor,
-        avatarImage: state.avatarImage,
-        isSharingScreen: !!state.screenStream,
-        isSharingCamera: !!state.cameraStream
-    });
-
-    // Add self to voiceMembers
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (server) {
         if (!server.voiceMembers) server.voiceMembers = {};
         if (!server.voiceMembers[channelId]) server.voiceMembers[channelId] = [];
+        const othersOnly = server.voiceMembers[channelId].filter(m => m.peer_id !== state.peerId);
+        if (othersOnly.length === 0) {
+            ensureVoiceSessionHost(server, channelId, state.peerId, state.username);
+        }
         if (!server.voiceMembers[channelId].find(m => m.peer_id === state.peerId)) {
             server.voiceMembers[channelId].push({ peer_id: state.peerId, username: state.username, avatar_color: state.avatarColor, avatar_image: state.avatarImage });
         }
         updateChannelSidebar(state.activeServerId);
     }
+
+    meshBroadcastReliable({
+        type: "voice_join",
+        channelId,
+        username: state.username,
+        avatarColor: state.avatarColor,
+        avatarImage: state.avatarImage,
+        isSharingScreen: !!getLocalShareStream(),
+        isSharingCamera: !!state.cameraStream
+    });
 
     renderVoiceParticipants(state.activeServerId, channelId);
     showVoiceStatusBar(state.activeServerId, channelId);
@@ -1844,6 +2490,7 @@ async function joinVoiceChannel(channelId) {
     document.getElementById("voice-camera-btn")?.classList.remove("hidden");
 
     updateMuteStates();
+    updateVoiceSessionMeta();
     toast("Sesli kanala katıldın! 🎙️", "success");
 }
 
@@ -1866,15 +2513,17 @@ function leaveVoiceChannel() {
         state._speakingLoop = null;
     }
 
-    state.mesh.broadcast({ type: "voice_leave", channelId });
+    meshBroadcastReliable({ type: "voice_leave", channelId });
 
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (server?.voiceMembers?.[channelId]) {
+        transferVoiceSessionHost(server, channelId, state.peerId);
         server.voiceMembers[channelId] = server.voiceMembers[channelId].filter(m => m.peer_id !== state.peerId);
         updateChannelSidebar(state.activeServerId);
     }
 
     renderVoiceParticipants(state.activeServerId, channelId);
+    updateVoiceSessionMeta();
     hideVoiceStatusBar();
 
     document.getElementById("voice-join-btn").classList.remove("hidden");
@@ -1882,11 +2531,13 @@ function leaveVoiceChannel() {
     document.getElementById("voice-screen-btn")?.classList.add("hidden");
     document.getElementById("voice-camera-btn")?.classList.add("hidden");
 
+    try {
+        if (state.mesh?.screenStream) state.mesh.stopScreenShare();
+    } catch (e) { /* noop */ }
     if (state.screenStream) {
-        state.screenStream.getTracks().forEach(t => t.stop());
+        try { state.screenStream.getTracks().forEach(t => t.stop()); } catch (e) { /* noop */ }
         state.screenStream = null;
     }
-    if (state.mesh) state.mesh.screenStream = null;
 
     if (state.cameraStream) stopCameraShare(); // Reset camera state
 
@@ -1904,6 +2555,7 @@ function renderVoiceParticipants(serverId, channelId) {
 
     if (members.length === 0) {
         container.innerHTML = '<p class="voice-empty">Sesli kanalda henüz kimse yok.</p>';
+        updateVoiceSessionMeta();
         return;
     }
 
@@ -1957,7 +2609,7 @@ function renderVoiceParticipants(serverId, channelId) {
 
         // Add sharing icons
         let shareIcon = nameContainer.querySelector('.share-icon');
-        if (m.isSharingScreen || (m.peer_id === state.peerId && state.screenStream)) {
+        if (m.isSharingScreen || (m.peer_id === state.peerId && getLocalShareStream())) {
             if (!shareIcon) {
                 shareIcon = document.createElement("span");
                 shareIcon.className = "share-icon";
@@ -1977,7 +2629,7 @@ function renderVoiceParticipants(serverId, channelId) {
             shareIcon.remove();
         }
 
-        const isSharing = m.isSharingScreen || m.isSharingCamera || (m.peer_id === state.peerId && (state.screenStream || state.cameraStream));
+        const isSharing = m.isSharingScreen || m.isSharingCamera || (m.peer_id === state.peerId && (getLocalShareStream() || state.cameraStream));
         let liveBadge = nameContainer.querySelector('.live-badge');
         if (isSharing) {
             if (!liveBadge) {
@@ -1995,7 +2647,7 @@ function renderVoiceParticipants(serverId, channelId) {
 
         // Handle local user's own streams!
         if (m.peer_id === state.peerId) {
-            const localStream = state.screenStream || state.cameraStream;
+            const localStream = getLocalShareStream() || state.cameraStream;
             if (localStream) {
                 if (!state.localVideoEl) {
                     state.localVideoEl = document.createElement("video");
@@ -2089,6 +2741,7 @@ function renderVoiceParticipants(serverId, channelId) {
 
         if (card.parentNode !== container) container.appendChild(card);
     });
+    updateVoiceSessionMeta();
 }
 
 
@@ -2137,7 +2790,7 @@ function openScreenOverlay(peerId, username) {
         bigVideo.srcObject = video.srcObject || null;
     };
     syncSrc();
-    const interval = setInterval(syncSrc, 750);
+    const interval = setInterval(syncSrc, SCORD_T().SCREEN_OVERLAY_SYNC_INTERVAL_MS ?? 750);
     overlay.onremove = () => clearInterval(interval);
 
     overlay.appendChild(closeBtn);
@@ -2248,14 +2901,36 @@ function openSettingsModal() {
             <input type="file" id="settings-avatar-upload" accept="image/*" class="modal-input" style="padding:6px" />
             <p class="modal-info" style="margin-top:10px">Max ~500KB önerilir (P2P için).</p>
           </div>
+          <div class="form-group" style="margin-bottom:14px">
+            <label class="modal-label">Avatar URL (dosya yerine)</label>
+            <input class="modal-input" id="settings-avatar-url" type="url" placeholder="https://… doğrudan görsel" value="" />
+          </div>
         </div>
         <div id="s-gorunum" class="s-panel" style="display:none">
           <div class="form-group" style="margin-bottom:14px">
-            <label class="modal-label">Tema</label>
+            <label class="modal-label">Arayüz şablonu (layout)</label>
             <select class="modal-input" id="settings-theme">
-              <option value="">SCORD — Glassmorphism</option>
-              <option value="theme-neon">⚡ Neon Hacker</option>
-              <option value="theme-discord">💬 Discord Klasik</option>
+              <option value="">SCORD — Glass</option>
+              <option value="theme-neon">⚡ Neon grid</option>
+              <option value="theme-discord">💬 Kompakt panel</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:14px">
+            <label class="modal-label">Renk paleti (modüler)</label>
+            <select class="modal-input" id="settings-palette">
+              <option value="glass">Cam — varsayılan</option>
+              <option value="aurora">Aurora (mor–camgöbeği)</option>
+              <option value="ember">Ember (sıcak kırmızı)</option>
+              <option value="paper">Paper (açık, düşük kontrast)</option>
+              <option value="forest">Forest (yeşil derin)</option>
+              <option value="midnight">Midnight saf (OLED)</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:14px">
+            <label class="modal-label">Sohbet düzeni</label>
+            <select class="modal-input" id="settings-chat-layout">
+              <option value="bubbles">Balonlar (kendi / diğer renk)</option>
+              <option value="classic">Klasik satır</option>
             </select>
           </div>
           <div class="form-group" style="margin-bottom:14px">
@@ -2350,6 +3025,11 @@ function openSettingsModal() {
          <button class="btn-primary" style="width:auto;padding:10px 24px" onclick="saveSettings()">Kaydet</button>`
     );
 
+    const avUrlField = document.getElementById("settings-avatar-url");
+    if (avUrlField && state.avatarImage && /^https?:\/\//i.test(String(state.avatarImage))) {
+        avUrlField.value = state.avatarImage;
+    }
+
     // Tab switching logic
     document.querySelectorAll("#stabs button").forEach(btn => {
         btn.onclick = () => {
@@ -2373,6 +3053,10 @@ function openSettingsModal() {
             }
             if (btn.dataset.tab === "s-gorunum") {
                 document.getElementById("settings-theme").value = themeVal;
+                const pal = document.getElementById("settings-palette");
+                if (pal) pal.value = localStorage.getItem("scord_palette") || "glass";
+                const cl = document.getElementById("settings-chat-layout");
+                if (cl) cl.value = localStorage.getItem("scord_chat_layout") || "bubbles";
             }
         };
     });
@@ -2454,8 +3138,10 @@ function showContextMenu(peerId, username, x, y) {
 
     addItem("👤", "Profili Görüntüle", () => showMemberProfile(peerId, username, server));
 
+    const canAssignRoles = (myRole === "owner" || myRole === "admin") && peerId !== state.peerId;
+    const canModerate = ["owner", "admin", "mod"].includes(myRole) && peerId !== state.peerId;
 
-    if ((myRole === "owner" || myRole === "admin") && peerId !== state.peerId) {
+    if (canAssignRoles) {
         addDivider();
         addSection("Yetki");
         const cr = server.peer_roles?.[peerId];
@@ -2464,8 +3150,19 @@ function showContextMenu(peerId, username, x, y) {
             if (cr !== "mod") addItem("🟢", "Moderatör Yap", () => assignRole(peerId, "mod", server));
             if (cr) addItem("👤", "Rolü Kaldır", () => assignRole(peerId, null, server));
         }
+    }
+
+    if (canModerate) {
         addDivider();
-        addItem("🚪", "Sunucudan At (Kick)", () => kickPeer(peerId, username), true);
+        addSection("Moderasyon");
+        addItem("🔇", "Zorla Sessize Al", () => forceMutePeer(peerId, username));
+        const sameVoice = state.voiceChannelId && server.voiceMembers?.[state.voiceChannelId]?.some(m => m.peer_id === peerId);
+        if (sameVoice) {
+            addItem("📴", "Ses Kanalından Çıkar", () => voiceDisconnectPeer(peerId, username), true);
+        }
+        if (server.ownerId !== peerId) {
+            addItem("🚪", "Sunucudan At", () => kickPeer(peerId, username), true);
+        }
     }
 
     document.body.appendChild(menu);
@@ -2481,15 +3178,15 @@ function showMsgContextMenu(msg, x, y) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
 
-    const myRole = server.ownerId === state.peerId ? "owner"
-        : server.peer_roles?.[state.peerId] === "admin" ? "admin"
-            : server.peer_roles?.[state.peerId] === "mod" ? "mod" : "member";
+    const myRole = getMyEffectiveRole(server);
+    const canMod = ["owner", "admin", "mod"].includes(myRole);
+    const isAuthor = msg.authorId === state.peerId;
 
     const menu = document.createElement("div");
-    menu.className = "ctx-menu";
+    menu.className = "ctx-menu ctx-menu--chat";
     menu.id = "ctx-menu";
-    menu.style.left = `${Math.min(x, window.innerWidth - 220)}px`;
-    menu.style.top = `${Math.min(y, window.innerHeight - 300)}px`;
+    menu.style.left = `${Math.min(x, window.innerWidth - 280)}px`;
+    menu.style.top = `${Math.min(y, window.innerHeight - 380)}px`;
 
     const addItem = (icon, label, action, danger = false) => {
         const item = document.createElement("div");
@@ -2499,14 +3196,35 @@ function showMsgContextMenu(msg, x, y) {
         menu.appendChild(item);
     };
 
-    const isOwnerOrAdmin = myRole === "owner" || myRole === "admin" || myRole === "mod";
-    // Pin message action
-    if (isOwnerOrAdmin) {
-        const isPinned = msg.isPinned;
-        addItem("📌", isPinned ? "Mesajı Sabitlemeden Kaldır" : "Mesajı Sabitle", async () => {
+    addItem("📋", "Metni Kopyala", () => {
+        const t = msg.text || "";
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(t).then(() => toast("Panoya kopyalandı", "info")).catch(() => toast("Kopyalanamadı", "error"));
+        }
+    });
+
+    addItem("↩️", "Yanıtla", () => setReplyTarget(msg));
+    addItem("⤴️", "Mesaja git", () => scrollToChatMessage(msg.id));
+    addItem("🆔", "Mesaj ID kopyala", () => {
+        const id = msg.id || "";
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(id).then(() => toast("Mesaj ID kopyalandı", "info")).catch(() => toast("Kopyalanamadı", "error"));
+        }
+    });
+
+    ["👍", "❤️", "😂", "🔥", "🎉"].forEach(emoji => {
+        addItem(emoji, `Tepki ${emoji}`, () => {
+            if (state.mesh) state.mesh.broadcast({ type: "reaction", msgId: msg.id, emoji, channelId: state.activeChannelId });
+            handleReaction(msg.id, emoji, state.peerId);
+        });
+    });
+
+    if (canMod) {
+        const isPinned = !!(msg.isPinned || server.pinned_messages?.some(p => p.id === msg.id));
+        addItem("📌", isPinned ? "Sabitlemeyi Kaldır" : "Mesajı Sabitle", () => {
             msg.isPinned = !isPinned;
             if (state.mesh) {
-                state.mesh.broadcast({ type: "msg_pin_toggle", payload: { msgId: msg.id, isPinned: msg.isPinned, msg: msg } });
+                state.mesh.broadcast({ type: "msg_pin_toggle", payload: { msgId: msg.id, isPinned: msg.isPinned, msg } });
             }
             if (!server.pinned_messages) server.pinned_messages = [];
             if (msg.isPinned) {
@@ -2514,24 +3232,36 @@ function showMsgContextMenu(msg, x, y) {
             } else {
                 server.pinned_messages = server.pinned_messages.filter(m => m.id !== msg.id);
             }
-
-            // Re-render
+            const live = server.messages?.[msg.channelId]?.find(m => m.id === msg.id);
+            if (live) live.isPinned = msg.isPinned;
             renderMessages(state.activeServerId, state.activeChannelId);
-
-            // Notify server via REST
             fetch(`${API_BASE}/rooms/${state.activeServerId}/pin`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: msg })
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: msg }),
             });
-
-            toast("Mesaj sabitlemesi güncellendi.", "info");
+            toast("Sabitleme güncellendi.", "info");
         });
+    }
+
+    if (isAuthor || canMod) {
+        addItem("🗑️", "Mesajı Sil", () => deleteChatMessage(msg), true);
     }
 
     document.body.appendChild(menu);
     setTimeout(() => {
         document.addEventListener("click", closeContextMenu, { once: true });
     }, 10);
+}
+
+function deleteChatMessage(msg) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server?.messages?.[msg.channelId]) return;
+    server.messages[msg.channelId] = server.messages[msg.channelId].filter(m => m.id !== msg.id);
+    server.pinned_messages = (server.pinned_messages || []).filter(m => m.id !== msg.id);
+    meshBroadcastReliable({ type: "msg_delete", payload: { channelId: msg.channelId, msgId: msg.id } });
+    renderMessages(state.activeServerId, state.activeChannelId);
+    toast("Mesaj silindi.", "info");
 }
 
 function showMemberProfile(peerId, username, server) {
@@ -2561,6 +3291,12 @@ function kickPeer(peerId, username) {
     toast(`${username} sunucudan atıldı.`, "info");
 }
 
+function voiceDisconnectPeer(peerId, username) {
+    if (!state.mesh) return;
+    state.mesh.broadcast({ type: "voice_force_disconnect", target: peerId });
+    toast(`${username} ses kanalından çıkarıldı.`, "info");
+}
+
 function forceMutePeer(peerId, username) {
     if (!state.mesh) return;
     state.mesh.broadcast({ type: "force_mute", target: peerId });
@@ -2580,6 +3316,9 @@ function assignRole(peerId, role, server) {
                 channels: server.channels,
                 roles: server.roles,
                 peer_roles: server.peer_roles,
+                channel_backgrounds: server.channel_backgrounds || {},
+                inviteCode: server.inviteCode,
+                icon_url: server.icon_url,
             },
         });
     }
@@ -2621,10 +3360,26 @@ function saveSettings() {
         document.documentElement.className = theme;
     }
 
+    const palette = document.getElementById("settings-palette")?.value;
+    if (palette) {
+        localStorage.setItem("scord_palette", palette);
+    }
+    const chatLayout = document.getElementById("settings-chat-layout")?.value;
+    if (chatLayout) {
+        localStorage.setItem("scord_chat_layout", chatLayout);
+    }
+    applyScordAppearance();
+
     if (state._tempAvatarImage) {
         state.avatarImage = state._tempAvatarImage;
         localStorage.setItem("scord_avatar_image", state.avatarImage);
         state._tempAvatarImage = null;
+    } else {
+        const avUrl = document.getElementById("settings-avatar-url")?.value?.trim();
+        if (avUrl && /^https?:\/\//i.test(avUrl)) {
+            state.avatarImage = avUrl;
+            localStorage.setItem("scord_avatar_image", avUrl);
+        }
     }
 
     if (state._tempBgImage) {
@@ -2701,28 +3456,40 @@ function openServerSettingsModal() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
 
-    // Check privileges
     const isOwner = server.ownerId === state.peerId;
-    const isAdmin = isOwner || server.roles?.[state.peerId] === "admin";
+    const isAdmin = isOwner || server.peer_roles?.[state.peerId] === "admin";
     if (!isAdmin) return toast("Bu işlem için yönetici yetkisi gerekli.", "error");
 
+    const activeChMeta = server.channels?.find(c => c.id === state.activeChannelId);
+    const chLabel = activeChMeta ? `#${activeChMeta.name}` : (state.activeChannelId || "kanal");
+    const bgUrl = (server.channel_backgrounds || {})[state.activeChannelId] || "";
+    const inv = server.inviteCode || server.invite_code || "";
+
     showModal(
-        `Sunucu Ayarları: ${server.name}`,
+        `Sunucu Ayarları: ${escapeHtml(server.name)}`,
         `<div class="settings-tabs" style="display:flex; gap:16px; margin-bottom:16px; border-bottom:1px solid var(--border); padding-bottom:8px;">
             <div id="stab-general" onclick="window._stabSwitch('general')" style="color:var(--accent-light); cursor:pointer; font-weight:600;">Genel</div>
-            <div id="stab-roles" onclick="window._stabSwitch('roles')" style="color:var(--text-muted); cursor:pointer;">Üyeler & Rolller</div>
+            <div id="stab-roles" onclick="window._stabSwitch('roles')" style="color:var(--text-muted); cursor:pointer;">Üyeler &amp; Roller</div>
             <div id="stab-advanced" onclick="window._stabSwitch('advanced')" style="color:var(--text-muted); cursor:pointer;">Gelişmiş</div>
          </div>
          <div id="s-tab-general">
             <div class="form-group" style="margin-bottom: 12px">
                 <label class="modal-label">Sunucu Adı</label>
-                <input class="modal-input" id="sv-name" value="${server.name}" ${isOwner ? "" : "disabled"} />
+                <input class="modal-input" id="sv-name" value="${escapeHtml(server.name)}" ${isOwner ? "" : "disabled"} />
             </div>
             <div class="form-group" style="margin-bottom: 12px">
                 <label class="modal-label">Sunucu İkonu (URL)</label>
                 <div style="display:flex; gap:8px">
-                    <input class="modal-input" id="sv-icon" value="${server.icon_url || ""}" placeholder="https://imgur.com/..." style="flex:1" />
-                    <button class="hero-btn tiny" onclick="updateServerIcon('${server.id}', document.getElementById('sv-icon').value)">Güncelle</button>
+                    <input class="modal-input" id="sv-icon" value="${escapeHtml(server.icon_url || "")}" placeholder="https://…" style="flex:1" />
+                    <button type="button" class="hero-btn tiny" onclick="updateServerIcon('${server.id}', document.getElementById('sv-icon').value)">Güncelle</button>
+                </div>
+            </div>
+            <div class="form-group" style="margin-bottom: 12px">
+                <label class="modal-label">Kanal arka planı (${chLabel})</label>
+                <p class="modal-info" style="margin-top:4px;font-size:11px">Seçili kanal: <code>${escapeHtml(state.activeChannelId || "")}</code> — boş bırakırsan sıfırlanır.</p>
+                <div style="display:flex; gap:8px; margin-top:8px">
+                    <input class="modal-input" id="sv-ch-bg" value="${escapeHtml(bgUrl)}" placeholder="https://… görsel URL" style="flex:1" />
+                    <button type="button" class="hero-btn tiny" onclick="window._applyChannelBg && window._applyChannelBg()">Uygula</button>
                 </div>
             </div>
             <div class="form-group" style="margin-bottom: 12px">
@@ -2736,83 +3503,111 @@ function openServerSettingsModal() {
             </div>
          </div>
          <div id="s-tab-roles" style="display:none;">
-            <div style="max-height:200px; overflow-y:auto;">
-                <table style="width:100%; text-align:left; color:#fff;" id="sv-roles-list">
-                    <tr><th>Üye</th><th>Yetki</th></tr>
-                </table>
+            <div style="max-height:220px; overflow-y:auto;">
+                <table style="width:100%; text-align:left; color:#fff;" id="sv-roles-list"></table>
             </div>
          </div>
          <div id="s-tab-advanced" style="display:none;">
             <div class="form-group">
                 <label class="modal-label">Davet Kodu</label>
-                <div class="peer-id-display" style="display:flex; justify-content:space-between; align-items:center;">
-                    <span>${server.invite_code || "YOK"}</span>
-                    <button class="hero-btn tiny" onclick="navigator.clipboard.writeText('${server.invite_code}'); toast('Kod kopyalandı!','info')">Kopyala</button>
+                <div class="peer-id-display" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                    <span id="sv-invite-code-live" style="letter-spacing:3px;font-weight:700">${escapeHtml(inv || "—")}</span>
+                    <button type="button" class="hero-btn tiny" onclick="navigator.clipboard.writeText(document.getElementById('sv-invite-code-live').textContent.trim()); toast('Kod kopyalandı!','info')">Kopyala</button>
                 </div>
-                <p class="modal-info">Arkadaşların bu kodu ana sayfadaki 'Katıl' kutusuna yazarak gelebilirler.</p>
+                <p class="modal-info">Ana sayfadaki «Katıl» kutusu ve ?invite= bağlantısı bu kodla senkron.</p>
+                ${isOwner ? `<button type="button" class="btn-secondary" style="margin-top:10px" onclick="window._rotateInviteCode && window._rotateInviteCode()">Yeni kod üret</button>` : ""}
             </div>
             ${isOwner ? `
             <div class="form-group" style="margin-top:24px">
-                <button class="btn-primary" style="background:var(--red); border:none;" onclick="deleteServer('${server.id}')">Sunucuyu Kapat/Kaldır</button>
+                <button type="button" class="btn-primary" style="background:var(--red); border:none;" onclick="deleteServer('${server.id}')">Sunucuyu Kapat/Kaldır</button>
             </div>` : ""}
          </div>`,
-        `<button class="btn-secondary" onclick="hideModal()">Kapat</button>
-         <button class="btn-primary" style="width:auto;padding:10px 24px" onclick="saveServerSettings()">Kaydet</button>`
+        `<button type="button" class="btn-secondary" onclick="hideModal()">Kapat</button>
+         <button type="button" class="btn-primary" style="width:auto;padding:10px 24px" onclick="saveServerSettings()">Kaydet</button>`
     );
 
     window._stabSwitch = (tab) => {
         ["general", "roles", "advanced"].forEach(t => {
             document.getElementById(`s-tab-${t}`).style.display = t === tab ? "block" : "none";
-            document.getElementById(`stab-${t}`).style.color = t === tab ? "var(--accent-light)" : "var(--text-muted)";
-            document.getElementById(`stab-${t}`).style.fontWeight = t === tab ? "600" : "400";
+            const stab = document.getElementById(`stab-${t}`);
+            if (stab) {
+                stab.style.color = t === tab ? "var(--accent-light)" : "var(--text-muted)";
+                stab.style.fontWeight = t === tab ? "600" : "400";
+            }
         });
     };
 
-    // Populate roles
     const tbody = document.getElementById("sv-roles-list");
-    server.members.forEach(m => {
+    tbody.innerHTML = "<tr><th>Üye</th><th>Yetki</th></tr>";
+    (server.members || []).forEach(m => {
         if (m.peer_id === server.ownerId) {
-            tbody.innerHTML += `< tr ><td>${m.username}</td><td>Kurucu 👑</td></tr > `;
+            tbody.innerHTML += `<tr><td>${escapeHtml(m.username)}</td><td>Kurucu 👑</td></tr>`;
         } else {
-            const isAdm = server.roles?.[m.peer_id] === "admin";
-            tbody.innerHTML += `< tr >
-                <td>${m.username}</td>
+            const pr = server.peer_roles?.[m.peer_id] || "member";
+            tbody.innerHTML += `<tr>
+                <td>${escapeHtml(m.username)}</td>
                 <td>
-                   <select ${!isOwner ? 'disabled' : ''} onchange="window._tmpSetRole('${m.peer_id}', this.value)" class="modal-input" style="padding:2px; height:auto; background:var(--bg-active);">
-                     <option value="member" ${!isAdm ? 'selected' : ''}>Üye</option>
-                     <option value="admin" ${isAdm ? 'selected' : ''}>Yönetici</option>
+                   <select ${!isOwner ? "disabled" : ""} onchange="window._tmpSetPeerRole('${m.peer_id}', this.value)" class="modal-input" style="padding:2px; height:auto; background:var(--bg-active);">
+                     <option value="member" ${pr === "member" ? "selected" : ""}>Üye</option>
+                     <option value="mod" ${pr === "mod" ? "selected" : ""}>Moderatör</option>
+                     <option value="admin" ${pr === "admin" ? "selected" : ""}>Yönetici</option>
                    </select>
                 </td>
-            </tr > `;
+            </tr>`;
         }
     });
 
-    window._tmpPendingRoles = { ...(server.roles || {}) };
-    window._tmpSetRole = (peerId, val) => {
-        if (val === "admin") window._tmpPendingRoles[peerId] = "admin";
-        else delete window._tmpPendingRoles[peerId];
+    window._tmpPendingPeerRoles = { ...(server.peer_roles || {}) };
+    window._tmpSetPeerRole = (peerId, val) => {
+        if (val === "member") delete window._tmpPendingPeerRoles[peerId];
+        else window._tmpPendingPeerRoles[peerId] = val;
     };
 
-    window._tmpAddChannel = () => {
-        if (!isOwner) return;
-        const cname = document.getElementById("sv-new-channel").value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
-        if (!cname) return;
-        server.channels.push({ id: genId(), name: cname, type: "text" });
-        toast("Kanal eklendi. Uygula'ya basarak kaydedin.", "success");
-        document.getElementById("sv-new-channel").value = "";
+    window._applyChannelBg = async () => {
+        const srv = state.servers.find(s => s.id === state.activeServerId);
+        const url = document.getElementById("sv-ch-bg")?.value?.trim() || "";
+        if (!srv || !state.activeChannelId) return toast("Önce bir kanal seç.", "warn");
+        if (!srv.channel_backgrounds) srv.channel_backgrounds = {};
+        if (url) srv.channel_backgrounds[state.activeChannelId] = url;
+        else delete srv.channel_backgrounds[state.activeChannelId];
+        await persistChannelBackground(srv.id, state.activeChannelId, url);
+        applyChannelBackground(srv.id, state.activeChannelId);
+        if (state.mesh) {
+            state.mesh.broadcast({
+                type: "server_update",
+                payload: { id: srv.id, channel_backgrounds: srv.channel_backgrounds },
+            });
+        }
+        toast("Kanal arka planı güncellendi.", "success");
     };
 
-    document.getElementById("stab-general").onclick = () => {
-        document.getElementById("stab-general").style.color = "var(--accent-light)";
-        document.getElementById("stab-roles").style.color = "var(--text-muted)";
-        document.getElementById("s-tab-general").style.display = "block";
-        document.getElementById("s-tab-roles").style.display = "none";
-    };
-    document.getElementById("stab-roles").onclick = () => {
-        document.getElementById("stab-roles").style.color = "var(--accent-light)";
-        document.getElementById("stab-general").style.color = "var(--text-muted)";
-        document.getElementById("s-tab-general").style.display = "none";
-        document.getElementById("s-tab-roles").style.display = "block";
+    window._rotateInviteCode = async () => {
+        const srv = state.servers.find(s => s.id === state.activeServerId);
+        if (!srv || srv.ownerId !== state.peerId) return;
+        try {
+            const res = await fetch(`${API_BASE}/rooms/${srv.id}/invite_rotate`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ owner_id: state.peerId }),
+            });
+            const data = await res.json();
+            if (data.invite_code) {
+                srv.inviteCode = data.invite_code;
+                const el = document.getElementById("sv-invite-code-live");
+                if (el) el.textContent = data.invite_code;
+                toast("Yeni davet kodu oluşturuldu.", "success");
+                if (state.mesh) {
+                    state.mesh.broadcast({
+                        type: "server_update",
+                        payload: { id: srv.id, inviteCode: srv.inviteCode },
+                    });
+                }
+            } else {
+                toast(data.error || "Kod yenilenemedi.", "error");
+            }
+        } catch (e) {
+            toast("Sunucu yanıt vermedi.", "error");
+        }
     };
 }
 
@@ -2821,25 +3616,38 @@ function saveServerSettings() {
     if (!server) return;
 
     const isOwner = server.ownerId === state.peerId;
-    const isAdmin = isOwner || server.roles?.[state.peerId] === "admin";
+    const isAdmin = isOwner || server.peer_roles?.[state.peerId] === "admin";
     if (!isAdmin) return;
 
     if (isOwner) {
-        const nname = document.getElementById("sv-name").value.trim();
+        const nname = document.getElementById("sv-name")?.value.trim();
         if (nname) server.name = nname;
     }
 
-    if (isAdmin) {
-        server.roles = window._tmpPendingRoles;
-        document.getElementById("sidebar-server-name").textContent = server.name;
+    if (isOwner && window._tmpPendingPeerRoles) {
+        server.peer_roles = { ...window._tmpPendingPeerRoles };
     }
 
-    // Broadcast changes
+    document.getElementById("sidebar-server-name").textContent = server.name;
+
     if (state.mesh) {
-        state.mesh.broadcast({ type: "server_update", payload: server });
+        state.mesh.broadcast({
+            type: "server_update",
+            payload: {
+                id: server.id,
+                name: server.name,
+                channels: server.channels,
+                roles: server.roles,
+                peer_roles: server.peer_roles,
+                channel_backgrounds: server.channel_backgrounds || {},
+                inviteCode: server.inviteCode,
+                icon_url: server.icon_url,
+            },
+        });
     }
     renderServerRail();
     updateChannelSidebar(server.id);
+    updateMembersPanel(server.id);
     hideModal();
     toast("Sunucu güncellendi.", "success");
 }
@@ -2848,10 +3656,15 @@ function saveServerSettings() {
 function openDM(peerId, name, avatarColor = null, avatarImage = null) {
     state.activeDM = peerId;
     document.getElementById("dm-target-name").textContent = "@" + name;
-    document.getElementById("dm-overlay").classList.remove("hidden");
+    const av = document.getElementById("dm-header-avatar");
+    if (av) applyAvatarToElement(av, avatarColor, avatarImage, name);
+    const ov = document.getElementById("dm-overlay");
+    ov.classList.remove("hidden");
+    ov.setAttribute("aria-hidden", "false");
 
     addToRecentDMs(peerId, name, avatarColor, avatarImage);
     renderDMMessages(peerId);
+    setTimeout(() => document.getElementById("dm-input")?.focus(), 80);
 }
 
 function addToRecentDMs(peerId, name, avatarColor, avatarImage) {
@@ -2961,30 +3774,28 @@ function renderDMMessages(peerId) {
     const messages = state.dms[peerId] || [];
 
     messages.forEach(msg => {
-        const el = document.createElement("div");
-        el.className = "message";
+        const row = document.createElement("div");
+        row.className = "dm-msg-row" + (msg.authorId === state.peerId ? " dm-msg-own" : "");
+
         const av = document.createElement("div");
-        av.className = "msg-avatar";
+        av.className = "msg-avatar dm-msg-avatar";
         applyAvatarToElement(av, msg.avatarColor, msg.avatarImage, msg.author);
 
-        const content = document.createElement("div");
-        content.className = "msg-content";
-        const header = document.createElement("div");
-        header.className = "msg-header";
-        const authorSp = document.createElement("span");
-        authorSp.className = "msg-author" + (msg.authorId === state.peerId ? " is-you" : "");
-        authorSp.textContent = msg.author;
-        header.appendChild(authorSp);
+        const bubble = document.createElement("div");
+        bubble.className = "dm-bubble";
+        const meta = document.createElement("div");
+        meta.className = "dm-bubble-meta";
+        meta.innerHTML = `<span class="dm-bubble-author">${escapeHtml(msg.author)}</span><span class="dm-bubble-time">${escapeHtml(msg.time || "")}</span>`;
 
         const text = document.createElement("div");
-        text.className = "msg-text";
-        text.textContent = msg.text;
+        text.className = "dm-bubble-text";
+        text.innerHTML = parseMessageText(msg.text, null);
 
-        content.appendChild(header);
-        content.appendChild(text);
-        el.appendChild(av);
-        el.appendChild(content);
-        area.appendChild(el);
+        bubble.appendChild(meta);
+        bubble.appendChild(text);
+        row.appendChild(av);
+        row.appendChild(bubble);
+        area.appendChild(row);
     });
     area.scrollTop = area.scrollHeight;
 }
@@ -3013,9 +3824,41 @@ function sendDM() {
     input.value = "";
 }
 
+function initMembersPanelResize() {
+    const handle = document.getElementById("members-split-handle");
+    const panel = document.getElementById("members-panel");
+    if (!handle || !panel) return;
+    const saved = parseInt(localStorage.getItem("scord_members_panel_w") || "", 10);
+    if (!Number.isNaN(saved) && saved >= 200 && saved <= 560) {
+        panel.style.width = `${saved}px`;
+        panel.style.flexShrink = "0";
+    }
+    let startX = 0;
+    let startW = 0;
+    handle.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        startX = e.clientX;
+        startW = panel.getBoundingClientRect().width;
+        const onMove = (ev) => {
+            const dx = startX - ev.clientX;
+            const nw = Math.min(560, Math.max(180, startW + dx));
+            panel.style.width = `${nw}px`;
+            panel.style.flexShrink = "0";
+        };
+        const onUp = () => {
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            localStorage.setItem("scord_members_panel_w", String(Math.round(panel.getBoundingClientRect().width)));
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+    });
+}
+
 /* ── Event listeners ──────────────────────────────────────── */
 document.addEventListener("DOMContentLoaded", () => {
     initSetup();
+    initMembersPanelResize();
     document.getElementById("server-settings-btn").onclick = openServerSettingsModal;
 
     // Modal close
@@ -3038,6 +3881,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     document.getElementById("send-btn").onclick = sendMessage;
+    document.getElementById("reply-preview-close")?.addEventListener("click", () => clearReplyTarget());
 
     // Server create / join
     document.getElementById("add-server-btn").onclick = openCreateServerModal;
@@ -3090,7 +3934,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         };
         const gifInput = document.getElementById("gif-input");
-        gifInput.addEventListener("input", UI.debounce((e) => searchGifs(e.target.value), 500));
+        gifInput.addEventListener("input", UI.debounce((e) => searchGifs(e.target.value), SCORD_T().GIF_SEARCH_DEBOUNCE_MS ?? 500));
     }
 
     // Settings
@@ -3107,18 +3951,29 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // DM overlay interactions
     document.getElementById("dm-close-btn").onclick = () => {
-        document.getElementById("dm-overlay").classList.add("hidden");
+        const ov = document.getElementById("dm-overlay");
+        ov.classList.add("hidden");
+        ov.setAttribute("aria-hidden", "true");
         state.activeDM = null;
     };
+    document.getElementById("dm-send-btn")?.addEventListener("click", sendDM);
     const dmInput = document.getElementById("dm-input");
     if (dmInput) {
         dmInput.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
+            if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 sendDM();
             }
         });
     }
+    document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape" || !state.activeDM) return;
+        const ov = document.getElementById("dm-overlay");
+        if (!ov || ov.classList.contains("hidden")) return;
+        ov.classList.add("hidden");
+        ov.setAttribute("aria-hidden", "true");
+        state.activeDM = null;
+    });
 
     // Attachments
     const attachBtn = document.getElementById("chat-attach-btn");
@@ -3142,10 +3997,18 @@ document.addEventListener("DOMContentLoaded", () => {
                     time: now(),
                     id: genId(),
                 };
-                saveMessage(state.activeServerId, msg);
-                if (state.mesh) {
-                    state.mesh.broadcast({ type: "chat", payload: msg });
+                if (state.replyTo?.messageId) {
+                    msg.replyTo = {
+                        messageId: state.replyTo.messageId,
+                        author: state.replyTo.author,
+                        authorId: state.replyTo.authorId,
+                        snippet: (state.replyTo.text || "").slice(0, 120),
+                        text: (state.replyTo.text || "").slice(0, 200),
+                    };
                 }
+                clearReplyTarget();
+                saveMessage(state.activeServerId, msg);
+                meshBroadcastReliable({ type: "chat", payload: msg });
             });
         };
     }
@@ -3170,6 +4033,7 @@ document.addEventListener("DOMContentLoaded", () => {
             } else {
                 const success = await state.mesh.startScreenShare();
                 if (success) {
+                    state.screenStream = state.mesh.screenStream;
                     screenBtn.classList.add("active");
                     toast("Ekran paylaşımı başlatıldı.", "success");
                     if (state.mesh) {
@@ -3247,7 +4111,7 @@ function showPinnedMessages() {
             item.className = "pins-modal-item";
             item.innerHTML = `
                 <div style="font-weight:bold; font-size:12px; margin-bottom:4px; color:var(--accent-light)">${m.author} • ${m.time}</div>
-                <div style="font-size:14px;">${parseMessageText(m.text)}</div>
+                <div style="font-size:14px;">${parseMessageText(m.text, state.activeServerId)}</div>
             `;
             body.appendChild(item);
         });
@@ -3284,11 +4148,17 @@ function updateMuteStates() {
 
 /* ── Music Bot (YouTube IFrame API) ───────────────────────── */
 state.musicBot = { active: false, videoId: null, player: null, volume: 30 };
+state._musicBotPending = null;
 let ytReady = false;
 
 // Global callback for YouTube script
 window.onYouTubeIframeAPIReady = function () {
     ytReady = true;
+    if (state._musicBotPending && state.voiceChannelId) {
+        const p = state._musicBotPending;
+        state._musicBotPending = null;
+        startMusicBot(p.videoId, p.startAt);
+    }
 };
 
 function startMusicBot(videoId, startAt) {
@@ -3318,6 +4188,12 @@ function startMusicBot(videoId, startAt) {
 
     const offset = Math.max(0, (Date.now() - startAt) / 1000);
 
+    if (!state.musicBot.player && !ytReady) {
+        state._musicBotPending = { videoId, startAt };
+        toast("YouTube oynatıcı yükleniyor… Hazır olunca çalacak.", "info");
+        return;
+    }
+
     if (!state.musicBot.player && ytReady) {
         state.musicBot.player = new YT.Player("yt-player", {
             height: "1",
@@ -3334,22 +4210,27 @@ function startMusicBot(videoId, startAt) {
     } else if (state.musicBot.player) {
         state.musicBot.player.loadVideoById(videoId, Math.floor(offset));
         state.musicBot.player.setVolume(state.musicBot.volume);
+        try {
+            state.musicBot.player.playVideo();
+        } catch (e) { /* noop */ }
     }
 }
 
 function stopMusicBot() {
     state.musicBot.active = false;
     state.musicBot.videoId = null;
+    state._musicBotPending = null;
 
     if (state.musicBot.player) {
         state.musicBot.player.stopVideo();
     }
 
     const server = state.servers.find(s => s.id === state.activeServerId);
-    if (server && server.voiceMembers && server.voiceMembers[state.voiceChannelId]) {
-        server.voiceMembers[state.voiceChannelId] = server.voiceMembers[state.voiceChannelId].filter(m => m.peer_id !== "bot_music");
-        if (state.activeChannelId === state.voiceChannelId) {
-            renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+    const ch = state.voiceChannelId;
+    if (server && ch && server.voiceMembers?.[ch]) {
+        server.voiceMembers[ch] = server.voiceMembers[ch].filter(m => m.peer_id !== "bot_music");
+        if (state.activeChannelId === ch) {
+            renderVoiceParticipants(state.activeServerId, ch);
         }
         updateChannelSidebar(state.activeServerId);
     }
@@ -3380,6 +4261,7 @@ function openUserProfile(peerId, username, avatarImage, avatarColor) {
 window.onLocalScreenShareEnded = function () {
     const screenBtn = document.getElementById("voice-screen-btn");
     if (screenBtn) screenBtn.classList.remove("active");
+    state.screenStream = null;
     if (state.mesh) {
         state.mesh.broadcast({
             type: "screen_status",
@@ -3389,9 +4271,11 @@ window.onLocalScreenShareEnded = function () {
     }
     toast("Ekran paylaşımı durduruldu.", "info");
 
-    // V16: Close Local Preview
     const preview = document.getElementById("local-screen-preview");
     if (preview) preview.classList.add("hidden");
+    if (state.activeServerId && state.voiceChannelId) {
+        renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+    }
 };
 
 function updateRoomStats() {
@@ -3405,10 +4289,9 @@ function updateRoomStats() {
     statsEl.textContent = `${count} üye`;
 }
 
-// Update stats every 10 seconds
 setInterval(() => {
     if (state.activeServerId) updateRoomStats();
-}, 10000);
+}, SCORD_T().ROOM_STATS_POLL_MS ?? 10000);
 
 async function joinByCode() {
     const code = document.getElementById("join-invite-input").value.trim().toUpperCase();
@@ -3429,9 +4312,10 @@ async function joinByCode() {
 
 function updateTheme(themeName) {
     state.theme = themeName;
-    document.documentElement.setAttribute("data-theme", themeName);
-    localStorage.setItem("scord_theme", themeName);
-    toast(`Tema değiştirildi: ${themeName.toUpperCase()}`, "success");
+    document.documentElement.className = themeName || "";
+    localStorage.setItem("scord_theme", themeName || "");
+    applyScordAppearance();
+    toast(`Tema güncellendi.`, "success");
 }
 
 async function deleteServer(serverId) {
@@ -3515,29 +4399,6 @@ function toggleEmojiPicker() {
     picker.classList.toggle("hidden", !state.emojiOpen);
 }
 
-// Message Parsing (Rich Media)
-function parseMessageText(text) {
-    if (!text) return "";
-
-    // YouTube
-    const ytRegex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:[^\s]*)/;
-    const ytMatch = text.match(ytRegex);
-    if (ytMatch) {
-        const id = ytMatch[1];
-        return text.replace(ytRegex, `<div class="yt-embed"><iframe src="https://www.youtube.com/embed/${id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>`);
-    }
-
-    // Images (more permissive to handle Wikia/Thumbnails)
-    const imgRegex = /(https?:\/\/[^\s]+(?:\.png|\.jpg|\.jpeg|\.gif|\.webp)(?:[^\s]*))/i;
-    if (imgRegex.test(text)) {
-        return text.replace(imgRegex, `<img src="$1" class="chat-img" onclick="window.open('$1', '_blank')" />`);
-    }
-
-    // Standard Links
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    return text.replace(urlRegex, (url) => `<a href="${url}" target="_blank" class="chat-link">${url}</a>`);
-}
-
 // Global initialization
 document.addEventListener("DOMContentLoaded", () => {
     console.log("[App] DOM Loaded, initializing...");
@@ -3583,12 +4444,13 @@ let _lastTypingSent = 0;
 
 function onChatInputTyping() {
     const now = Date.now();
-    if (state.mesh && now - _lastTypingSent > 2500) {
+    const typingGap = SCORD_T().TYPING_SEND_MIN_GAP_MS ?? 2500;
+    if (state.mesh && now - _lastTypingSent > typingGap) {
         _lastTypingSent = now;
         state.mesh.broadcast({ type: "typing", username: state.username, channelId: state.activeChannelId });
     }
     clearTimeout(_typingTimer);
-    _typingTimer = setTimeout(clearTypingIndicator, 4000);
+    _typingTimer = setTimeout(clearTypingIndicator, SCORD_T().TYPING_INDICATOR_CLEAR_MS ?? 4000);
 }
 
 function clearTypingIndicator() {
@@ -3613,7 +4475,7 @@ function handleTypingMessage(fromPeerId, username, channelId) {
         const remaining = Object.values(state.typingPeers);
         const el2 = document.getElementById("typing-indicator");
         if (el2) el2.textContent = remaining.length ? remaining.join(", ") + " yazıyor..." : "";
-    }, 4000);
+    }, SCORD_T().TYPING_INDICATOR_CLEAR_MS ?? 4000);
 }
 
 /*  Message reactions  */
@@ -3624,14 +4486,18 @@ function handleReaction(msgId, emoji, fromPeerId) {
     const msg = msgs.find(m => m.id === msgId);
     if (!msg) return;
     if (!msg.reactions) msg.reactions = {};
-    if (!msg.reactions[emoji]) msg.reactions[emoji] = new Set();
-    msg.reactions[emoji].add(fromPeerId);
+    const norm = normalizeReactionsMap(msg.reactions);
+    msg.reactions = norm;
+    if (!msg.reactions[emoji]) msg.reactions[emoji] = [];
+    const arr = msg.reactions[emoji];
+    if (!arr.includes(fromPeerId)) arr.push(fromPeerId);
     updateReactionBar(msgId, msg.reactions);
 }
 
 function updateReactionBar(msgId, reactions) {
-    const bubble = document.querySelector(`.message-bubble[data-msg-id="${msgId}"]`);
-    if (!bubble) return;
+    const row = document.querySelector(`.message-bubble[data-msg-id="${msgId}"]`);
+    if (!row) return;
+    const bubble = row.querySelector(".msg-bubble") || row;
     let bar = bubble.querySelector(".reaction-bar");
     if (!bar) {
         bar = document.createElement("div");
@@ -3639,12 +4505,14 @@ function updateReactionBar(msgId, reactions) {
         bubble.appendChild(bar);
     }
     bar.innerHTML = "";
-    for (const [emoji, peers] of Object.entries(reactions)) {
-        if (peers.size === 0) continue;
+    const norm = normalizeReactionsMap(reactions);
+    for (const [emoji, peers] of Object.entries(norm)) {
+        const list = Array.isArray(peers) ? peers : [];
+        if (list.length === 0) continue;
         const pill = document.createElement("span");
         pill.className = "reaction-pill";
-        pill.textContent = `${emoji} ${peers.size}`;
-        pill.title = [...peers].join(", ");
+        pill.textContent = `${emoji} ${list.length}`;
+        pill.title = list.join(", ");
         pill.onclick = () => {
             if (state.mesh) {
                 state.mesh.broadcast({ type: "reaction", msgId, emoji });
@@ -3750,12 +4618,19 @@ async function joinByInviteCode(code) {
             inviteCode: data.invite_code,
             icon_url: data.icon_url,
             voiceMembers: {},
+            voiceSessionHost: {},
             unread: {},
+            channel_backgrounds: data.channel_backgrounds || {},
         };
         const dupIdx = state.servers.findIndex(s => s.id === server.id);
         if (dupIdx !== -1) {
             const prev = state.servers[dupIdx];
-            state.servers[dupIdx] = { ...prev, ...server, voiceMembers: prev.voiceMembers || {} };
+            state.servers[dupIdx] = {
+                ...prev,
+                ...server,
+                voiceMembers: prev.voiceMembers || {},
+                voiceSessionHost: prev.voiceSessionHost || {},
+            };
         } else {
             state.servers.push(server);
         }
@@ -3911,7 +4786,7 @@ if (_joinInput) {
                 // Clean URL
                 history.replaceState({}, "", location.pathname);
             }
-        }, 500);
+        }, SCORD_T().INVITE_URL_POLL_MS ?? 500);
     }
 })();
 
@@ -3959,45 +4834,6 @@ window.openServerSettingsModal = function() {
         }
     }, 100);
 };
-
-// Add reaction button to messages on right-click
-document.addEventListener("contextmenu", (e) => {
-    const bubble = e.target.closest(".message-bubble");
-    if (!bubble) return;
-    const msgId = bubble.getAttribute("data-msg-id");
-    if (!msgId) return;
-    e.preventDefault();
-    let menu = document.getElementById("msg-ctx-menu");
-    if (menu) menu.remove();
-    menu = document.createElement("div");
-    menu.id = "msg-ctx-menu";
-    menu.className = "context-menu";
-    menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;z-index:9999;min-width:180px;`;
-    const emojis = ["","","","","",""];
-    const reactionRow = document.createElement("div");
-    reactionRow.style.cssText = "display:flex;gap:6px;padding:6px 10px;border-bottom:1px solid var(--border);";
-    emojis.forEach(emoji => {
-        const btn = document.createElement("span");
-        btn.textContent = emoji;
-        btn.style.cssText = "cursor:pointer;font-size:20px;transition:transform .15s;";
-        btn.onmouseover = () => btn.style.transform = "scale(1.3)";
-        btn.onmouseout = () => btn.style.transform = "";
-        btn.onclick = () => {
-            if (state.mesh) state.mesh.broadcast({ type: "reaction", msgId, emoji });
-            handleReaction(msgId, emoji, state.peerId);
-            menu.remove();
-        };
-        reactionRow.appendChild(btn);
-    });
-    menu.appendChild(reactionRow);
-    const pinItem = document.createElement("div");
-    pinItem.className = "ctx-item";
-    pinItem.textContent = " Sabitle / Kaldır";
-    pinItem.onclick = () => { menu.remove(); /* existing pin logic */ };
-    menu.appendChild(pinItem);
-    document.body.appendChild(menu);
-    setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
-});
 
 // Init status selector on load
 document.addEventListener("DOMContentLoaded", () => {

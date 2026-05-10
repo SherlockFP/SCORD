@@ -12,10 +12,11 @@ import time
 import uuid
 import asyncio
 import logging
+import threading
 import urllib.request
 import urllib.parse
 import re
-from typing import Dict, Set
+from typing import Dict, Set, Optional
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -42,6 +43,28 @@ def save_db():
     except Exception as e:
         log.error(f"Failed to save db: {e}")
 
+
+_db_save_timer: Optional[threading.Timer] = None
+_db_save_lock = threading.Lock()
+
+
+def schedule_save_db(delay_sec: float = 1.2):
+    """Birleşik disk yazımı — pin/ikon/rol gibi sık uçları yığında tek save."""
+    global _db_save_timer
+
+    def _flush():
+        global _db_save_timer
+        with _db_save_lock:
+            save_db()
+            _db_save_timer = None
+
+    with _db_save_lock:
+        if _db_save_timer:
+            _db_save_timer.cancel()
+        _db_save_timer = threading.Timer(delay_sec, _flush)
+        _db_save_timer.daemon = True
+        _db_save_timer.start()
+
 def load_db():
     if not os.path.exists(DATABASE_FILE):
         return
@@ -55,6 +78,7 @@ def load_db():
             room.peer_roles = rdata.get("peer_roles", room.peer_roles)
             room.pinned_messages = rdata.get("pinned_messages", [])
             room.messages = rdata.get("messages", {})
+            room.channel_backgrounds = rdata.get("channel_backgrounds", {})
             room.icon_url = rdata.get("icon_url", None)
             room.invite_code = rdata.get("invite_code", str(uuid.uuid4())[:6].upper())
             rooms[rid] = room
@@ -85,6 +109,7 @@ class Room:
         self.peer_roles = {owner_id: "admin"}
         self.pinned_messages = []
         self.messages = {}  # channel_id -> list[dict]
+        self.channel_backgrounds = {}  # channel_id -> image url
         self.icon_url = None
         self.invite_code = str(uuid.uuid4())[:6].upper()
 
@@ -99,6 +124,7 @@ class Room:
             "peer_roles": self.peer_roles,
             "pinned_messages": self.pinned_messages,
             "messages": self.messages,
+            "channel_backgrounds": self.channel_backgrounds,
             "icon_url": self.icon_url,
             "invite_code": self.invite_code,
         }
@@ -114,6 +140,7 @@ class Room:
             "roles": self.roles,
             "peer_roles": self.peer_roles,
             "pinned_messages": self.pinned_messages,
+            "channel_backgrounds": self.channel_backgrounds,
             "icon_url": self.icon_url,
             "invite_code": self.invite_code,
             "messages": self.messages, # Sent for history sync
@@ -188,7 +215,7 @@ def toggle_pin(room_id: str, body: dict):
     else:
         room.pinned_messages.append(msg)
     
-    save_db()
+    schedule_save_db()
     return {"pinned": room.pinned_messages}
 
 @app.post("/api/rooms/{room_id}/messages")
@@ -217,8 +244,37 @@ def update_icon(room_id: str, body: dict):
     if room_id not in rooms: return {"error": "Not found"}
     room = rooms[room_id]
     room.icon_url = body.get("url")
-    save_db()
+    schedule_save_db()
     return {"success": True}
+
+
+@app.post("/api/rooms/{room_id}/channel_background")
+def set_channel_background(room_id: str, body: dict):
+    if room_id not in rooms:
+        return {"error": "Not found"}
+    room = rooms[room_id]
+    ch = body.get("channel_id")
+    url = body.get("url")
+    if not ch:
+        return {"error": "channel_id required"}
+    if not url:
+        room.channel_backgrounds.pop(ch, None)
+    else:
+        room.channel_backgrounds[ch] = url
+    schedule_save_db()
+    return {"success": True, "channel_backgrounds": room.channel_backgrounds}
+
+
+@app.post("/api/rooms/{room_id}/invite_rotate")
+def rotate_invite(room_id: str, body: dict):
+    if room_id not in rooms:
+        return {"error": "Not found"}
+    room = rooms[room_id]
+    if body.get("owner_id") != room.owner_id:
+        return {"error": "Unauthorized"}
+    room.invite_code = str(uuid.uuid4())[:6].upper()
+    schedule_save_db(0.4)
+    return {"invite_code": room.invite_code}
 
 @app.get("/api/rooms/join/{invite_code}")
 def get_room_by_code(invite_code: str):
@@ -249,7 +305,7 @@ def add_channel(room_id: str, body: dict):
         "type": body.get("type", "text")
     }
     room.channels.append(new_ch)
-    save_db()
+    schedule_save_db()
     return new_ch
 
 @app.post("/api/rooms/{room_id}/roles")
@@ -263,7 +319,7 @@ def add_role(room_id: str, body: dict):
         "color": body.get("color", "#94a3b8"),
         "hoist": body.get("hoist", False)
     }
-    save_db()
+    schedule_save_db()
     return {"role_id": role_id}
 
 @app.post("/api/rooms/{room_id}/assign_role")
@@ -275,7 +331,7 @@ def assign_role(room_id: str, body: dict):
     role_id = body.get("role_id")
     if peer_id and role_id in room.roles:
         room.peer_roles[peer_id] = role_id
-        save_db()
+        schedule_save_db()
         return {"success": True}
     return {"error": "Invalid data"}
 
