@@ -210,7 +210,8 @@ function resetConnectionState() {
 }
 
 function maybeOfferP2PTroubleshoot(wsOk, dcOpen) {
-    if (!wsOk || dcOpen) {
+    const peerCount = state.mesh ? Object.keys(state.mesh.peers || {}).length : 0;
+    if (!wsOk || dcOpen || peerCount === 0) {
         state._p2pWaitSince = null;
         state._p2pTriedHelp = false;
         return;
@@ -255,6 +256,7 @@ function refreshConnectionBadge() {
         }
         const wsOk = m.ws && m.ws.readyState === WebSocket.OPEN;
         const dcOpen = anyMeshDcOpen(m);
+        const peerCount = Object.values(m.peers || {}).length;
         const n = Object.values(m.peers || {}).filter(p => p.dc && p.dc.readyState === "open").length;
         let label = "";
         let extra = "";
@@ -262,8 +264,13 @@ function refreshConnectionBadge() {
             extra = state._lastMeshStatus === "disconnected" ? "err" : "warn";
             label = state._lastMeshStatus === "disconnected" ? "Sinyal kesildi" : "Sinyale bağlanıyor…";
         } else if (!dcOpen) {
-            extra = "warn";
-            label = "P2P veri yolu bekleniyor…";
+            if (peerCount === 0) {
+                extra = "ok";
+                label = "Henüz kimse yok";
+            } else {
+                extra = "warn";
+                label = "P2P veri yolu bekleniyor…";
+            }
         } else {
             extra = "ok";
             label = `P2P · ${n} kanal`;
@@ -3228,14 +3235,35 @@ function openScreenOverlay(peerId, username) {
     bigVideo.className = "screen-overlay-video";
     bigVideo.onclick = (e) => e.stopPropagation();
 
-    // Keep overlay in sync (srcObject can arrive/replace after render)
+    const closeOverlay = () => {
+        if (overlay.isConnected) {
+            overlay.remove();
+        }
+    };
+
     const syncSrc = () => {
         if (!overlay.isConnected) return;
         bigVideo.srcObject = video.srcObject || null;
+        const currentStream = bigVideo.srcObject;
+        if (!currentStream) {
+            closeOverlay();
+            return;
+        }
+        const tracks = currentStream.getVideoTracks();
+        if (!tracks.length || tracks.every(track => track.readyState === "ended")) {
+            closeOverlay();
+            return;
+        }
+        tracks.forEach(track => {
+            if (track._overlayEndBound) return;
+            track._overlayEndBound = true;
+            track.addEventListener("ended", closeOverlay);
+        });
     };
+
     syncSrc();
     const interval = setInterval(syncSrc, SCORD_T().SCREEN_OVERLAY_SYNC_INTERVAL_MS ?? 750);
-    const onKey = (e) => { if (e.key === "Escape") overlay.remove(); };
+    const onKey = (e) => { if (e.key === "Escape") closeOverlay(); };
     window.addEventListener("keydown", onKey);
 
     const cleanup = () => {
