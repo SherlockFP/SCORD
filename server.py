@@ -22,6 +22,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi import Response
 from starlette.websockets import WebSocketState
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -186,6 +187,32 @@ async def send_to_peer(room: Room, peer_id: str, message: dict):
 @app.get("/api/rooms")
 def list_rooms():
     return [r.to_dict() for r in rooms.values()]
+
+@app.get("/api/config")
+def get_runtime_config():
+    """
+    Runtime config for clients (e.g. ICE servers).
+    Render users can set env:
+      - SCORD_TURN_URLS: comma-separated (e.g. turns:your.turn:443?transport=tcp,turn:your.turn:3478)
+      - SCORD_TURN_USERNAME
+      - SCORD_TURN_CREDENTIAL
+      - SCORD_STUN_URLS (optional): comma-separated
+    """
+    stun_env = os.environ.get("SCORD_STUN_URLS", "").strip()
+    stun_urls = [u.strip() for u in stun_env.split(",") if u.strip()]
+    if not stun_urls:
+        stun_urls = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
+
+    ice = [{"urls": u} for u in stun_urls]
+
+    turn_urls_env = os.environ.get("SCORD_TURN_URLS", "").strip()
+    turn_urls = [u.strip() for u in turn_urls_env.split(",") if u.strip()]
+    turn_user = os.environ.get("SCORD_TURN_USERNAME", "").strip()
+    turn_cred = os.environ.get("SCORD_TURN_CREDENTIAL", "").strip()
+    if turn_urls and turn_user and turn_cred:
+        ice.append({"urls": turn_urls, "username": turn_user, "credential": turn_cred})
+
+    return {"iceServers": ice, "hasTurn": bool(turn_urls and turn_user and turn_cred)}
 
 
 @app.post("/api/rooms")
@@ -439,6 +466,11 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 @app.get("/{full_path:path}")
 def serve_spa(full_path: str):
     return FileResponse(str(STATIC_DIR / "index.html"))
+
+# Render / proxies often use HEAD / for health checks.
+@app.head("/{full_path:path}", include_in_schema=False)
+def serve_spa_head(full_path: str):
+    return Response(status_code=200)
 
 
 @app.on_event("startup")

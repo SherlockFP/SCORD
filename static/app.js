@@ -702,6 +702,8 @@ function startApp() {
     loadUserPrefs();
     applyScordAppearance();
     applyFocusModeButton();
+    // Load runtime config (ICE/TURN) for better P2P reliability.
+    loadRuntimeConfig();
 
     // Apply user info to UI
     const avatar = document.getElementById("user-bar-avatar");
@@ -741,6 +743,26 @@ function startApp() {
     refreshDiscovery();
     initMobileNav();
     setInterval(refreshDiscovery, SCORD_T().DISCOVERY_REFRESH_INTERVAL_MS ?? 15000);
+}
+
+let _runtimeCfgLoaded = false;
+async function loadRuntimeConfig() {
+    if (_runtimeCfgLoaded) return;
+    _runtimeCfgLoaded = true;
+    try {
+        const res = await fetch(`${API_BASE}/config`, { cache: "no-store" });
+        if (!res.ok) return;
+        const cfg = await res.json();
+        if (cfg && Array.isArray(cfg.iceServers) && cfg.iceServers.length) {
+            window.SCORD_ICE_SERVERS = cfg.iceServers;
+        }
+        if (cfg && cfg.hasTurn === false) {
+            // Not fatal, but many NATs will fail without TURN.
+            toast("Uyarı: TURN ayarlı değil; bazı ağlarda sesli/P2P bağlanmayabilir.", "info");
+        }
+    } catch {
+        // Ignore; defaults in p2p.js will apply
+    }
 }
 
 function initMobileNav() {

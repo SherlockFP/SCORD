@@ -12,7 +12,11 @@ function _scordTiming() {
     return typeof window !== "undefined" && window.SCORD_TIMING ? window.SCORD_TIMING : {};
 }
 
-const ICE_SERVERS = [
+function _scordIceServers() {
+    if (typeof window !== "undefined" && Array.isArray(window.SCORD_ICE_SERVERS) && window.SCORD_ICE_SERVERS.length) {
+        return window.SCORD_ICE_SERVERS;
+    }
+    return [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun.relay.metered.ca:80" },
@@ -32,7 +36,8 @@ const ICE_SERVERS = [
         username: "scord",
         credential: "scord2024",
     },
-];
+    ];
+}
 
 class P2PMesh {
     /**
@@ -176,7 +181,7 @@ class P2PMesh {
     async _initiatePeer(peerId, info, makeOffer) {
         if (this.peers[peerId]) return; // already connected
 
-        const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+        const pc = new RTCPeerConnection({ iceServers: _scordIceServers() });
         const peerObj = { pc, dc: null, info };
         this.peers[peerId] = peerObj;
         this._pendingIce[peerId] = [];
