@@ -472,6 +472,7 @@ function mergeRoomPayloadIntoServer(server, payload) {
     if (payload.roles) server.roles = payload.roles;
     if (payload.peer_roles) server.peer_roles = payload.peer_roles;
     if (payload.channel_backgrounds) server.channel_backgrounds = payload.channel_backgrounds;
+    if (payload.voicePermissionMode) server.voicePermissionMode = payload.voicePermissionMode;
     const inv = payload.inviteCode ?? payload.invite_code;
     if (inv != null && inv !== "") server.inviteCode = inv;
     const icon = payload.icon_url ?? payload.iconUrl;
@@ -2609,18 +2610,26 @@ function handleVoiceStream(peerId, stream) {
         video.className = "voice-video";
 
         // Ensure UI updates when video actually starts
-        video.onloadedmetadata = () => {
-            if (state.activeServerId && state.activeChannelId) {
-                renderVoiceParticipants(state.activeServerId, state.activeChannelId);
+        const refreshVoiceUI = () => {
+            if (state.activeServerId && state.voiceChannelId) {
+                renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+                updateMuteStates();
             }
         };
+        video.onloadedmetadata = refreshVoiceUI;
+        video.onplaying = refreshVoiceUI;
 
         state.remoteMedia[peerId] = video;
 
-        setTimeout(() => {
+        if (state.activeServerId && state.voiceChannelId) {
             renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+        }
+        setTimeout(() => {
+            if (state.activeServerId && state.voiceChannelId) {
+                renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+            }
             updateMuteStates();
-        }, SCORD_T().VOICE_STREAM_RENDER_DELAY_MS ?? 500);
+        }, SCORD_T().VOICE_STREAM_RENDER_DELAY_MS ?? 400);
     }
     state.remoteMedia[peerId].srcObject = stream;
     updateMuteStates();
@@ -2788,6 +2797,9 @@ function handleTrackAdded(peerId, track, stream) {
 async function joinVoiceChannel(channelId) {
     if (!state.mesh) return;
 
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+
     if (state.voiceChannelId) {
         if (state.voiceChannelId === channelId) return;
         leaveVoiceChannel();
@@ -2841,6 +2853,15 @@ async function joinVoiceChannel(channelId) {
             stream.getAudioTracks()[0].enabled = !!state._pttActive;
         }
 
+        const currentRole = server.ownerId === state.peerId ? "owner"
+            : server.peer_roles?.[state.peerId] === "admin" ? "admin"
+                : server.peer_roles?.[state.peerId] === "mod" ? "mod" : "member";
+        const isVoiceRestricted = server.voicePermissionMode === "mods_only" && !["owner", "admin", "mod"].includes(currentRole);
+        if (isVoiceRestricted) {
+            stream.getAudioTracks()[0].enabled = false;
+            toast("Bu ses kanalında konuşma izni yalnızca moderatör ve üstlerine ait.", "warning");
+        }
+
         // Start Volume Loop
         state._speakingLoop = setInterval(() => {
             const data = new Uint8Array(analyser.frequencyBinCount);
@@ -2878,7 +2899,6 @@ async function joinVoiceChannel(channelId) {
     const ok = await state.mesh.startVoice(processedStream);
     if (!ok) { toast("Ses yayını başlatılamadı.", "error"); return; }
 
-    const server = state.servers.find(s => s.id === state.activeServerId);
     const canonCh = server ? canonicalVoiceChannelId(server, channelId) : channelId;
     state.voiceChannelId = canonCh;
 
@@ -3064,6 +3084,22 @@ function renderVoiceParticipants(serverId, channelId) {
         } else if (shareIcon) {
             shareIcon.remove();
         }
+
+        const roleLabel = m.peer_id === server.ownerId ? "Kurucu"
+            : server.peer_roles?.[m.peer_id] === "admin" ? "Admin"
+                : server.peer_roles?.[m.peer_id] === "mod" ? "Mod" : "Üye";
+        const isStaff = m.peer_id === server.ownerId || server.peer_roles?.[m.peer_id] === "admin" || server.peer_roles?.[m.peer_id] === "mod";
+        const isListenerOnly = server.voicePermissionMode === "mods_only" && !isStaff;
+        const roleTags = [roleLabel];
+        if (isListenerOnly) roleTags.push("Dinleyici");
+        if (server.voiceSessionHost?.[channelId]?.peerId === m.peer_id) roleTags.push("Host");
+        let roleBadge = nameContainer.querySelector('.vpc-role-badge');
+        if (!roleBadge) {
+            roleBadge = document.createElement("div");
+            roleBadge.className = "vpc-role-badge";
+            nameContainer.appendChild(roleBadge);
+        }
+        roleBadge.textContent = roleTags.join(" · ");
 
         const isSharing = m.isSharingScreen || m.isSharingCamera || (m.peer_id === state.peerId && (getLocalShareStream() || state.cameraStream));
         let liveBadge = nameContainer.querySelector('.live-badge');
@@ -3974,16 +4010,21 @@ function openServerSettingsModal() {
 
     const isOwner = server.ownerId === state.peerId;
     const isAdmin = isOwner || server.peer_roles?.[state.peerId] === "admin";
-    if (!isAdmin) return toast("Bu işlem için yönetici yetkisi gerekli.", "error");
+    const isMember = isOwner || server.members?.some(m => m.peer_id === state.peerId);
+    const canEdit = isAdmin;
+    if (!isMember) return toast("Bu işlem için sunucu üyesi olman gerekir.", "error");
 
     const activeChMeta = server.channels?.find(c => c.id === state.activeChannelId);
     const chLabel = activeChMeta ? `#${activeChMeta.name}` : (state.activeChannelId || "kanal");
     const bgUrl = (server.channel_backgrounds || {})[state.activeChannelId] || "";
     const inv = server.inviteCode || server.invite_code || "";
+    const voicePermissionMode = server.voicePermissionMode || "everyone";
+    const permissionNotice = canEdit ? "" : `<div style="margin-bottom:14px;color:var(--text-muted);font-size:13px;">Bu sunucunun ayarlarını düzenleme yetkin yok. Yine de davet kodunu kopyalayıp paylaşabilirsin.</div>`;
 
     showModal(
         `Sunucu Ayarları: ${escapeHtml(server.name)}`,
-        `<div class="settings-tabs" style="display:flex; gap:16px; margin-bottom:16px; border-bottom:1px solid var(--border); padding-bottom:8px;">
+        `${permissionNotice}
+         <div class="settings-tabs" style="display:flex; gap:16px; margin-bottom:16px; border-bottom:1px solid var(--border); padding-bottom:8px;">
             <div id="stab-general" onclick="window._stabSwitch('general')" style="color:var(--accent-light); cursor:pointer; font-weight:600;">Genel</div>
             <div id="stab-roles" onclick="window._stabSwitch('roles')" style="color:var(--text-muted); cursor:pointer;">Üyeler &amp; Roller</div>
             <div id="stab-advanced" onclick="window._stabSwitch('advanced')" style="color:var(--text-muted); cursor:pointer;">Gelişmiş</div>
@@ -3996,16 +4037,16 @@ function openServerSettingsModal() {
             <div class="form-group" style="margin-bottom: 12px">
                 <label class="modal-label">Sunucu İkonu (URL)</label>
                 <div style="display:flex; gap:8px">
-                    <input class="modal-input" id="sv-icon" value="${escapeHtml(server.icon_url || "")}" placeholder="https://…" style="flex:1" />
-                    <button type="button" class="hero-btn tiny" onclick="updateServerIcon('${server.id}', document.getElementById('sv-icon').value)">Güncelle</button>
+                    <input class="modal-input" id="sv-icon" value="${escapeHtml(server.icon_url || "")}" placeholder="https://…" style="flex:1" ${canEdit ? "" : "disabled"} />
+                    <button type="button" class="hero-btn tiny" onclick="updateServerIcon('${server.id}', document.getElementById('sv-icon').value)" ${canEdit ? "" : "disabled"}>Güncelle</button>
                 </div>
             </div>
             <div class="form-group" style="margin-bottom: 12px">
                 <label class="modal-label">Kanal arka planı (${chLabel})</label>
                 <p class="modal-info" style="margin-top:4px;font-size:11px">Seçili kanal: <code>${escapeHtml(state.activeChannelId || "")}</code> — boş bırakırsan sıfırlanır.</p>
                 <div style="display:flex; gap:8px; margin-top:8px">
-                    <input class="modal-input" id="sv-ch-bg" value="${escapeHtml(bgUrl)}" placeholder="https://… görsel URL" style="flex:1" />
-                    <button type="button" class="hero-btn tiny" onclick="window._applyChannelBg && window._applyChannelBg()">Uygula</button>
+                    <input class="modal-input" id="sv-ch-bg" value="${escapeHtml(bgUrl)}" placeholder="https://… görsel URL" style="flex:1" ${canEdit ? "" : "disabled"} />
+                    <button type="button" class="hero-btn tiny" onclick="window._applyChannelBg && window._applyChannelBg()" ${canEdit ? "" : "disabled"}>Uygula</button>
                 </div>
             </div>
             <div class="form-group" style="margin-bottom: 12px">
@@ -4033,13 +4074,21 @@ function openServerSettingsModal() {
                 <p class="modal-info">Ana sayfadaki «Katıl» kutusu ve ?invite= bağlantısı bu kodla senkron.</p>
                 ${isOwner ? `<button type="button" class="btn-secondary" style="margin-top:10px" onclick="window._rotateInviteCode && window._rotateInviteCode()">Yeni kod üret</button>` : ""}
             </div>
+            <div class="form-group" style="margin-top:24px">
+                <label class="modal-label">Sesli kanal konuşma izni</label>
+                <select id="sv-voice-permission" class="modal-input" ${canEdit ? "" : "disabled"}>
+                    <option value="everyone" ${voicePermissionMode !== "mods_only" ? "selected" : ""}>Herkes konuşabilir</option>
+                    <option value="mods_only" ${voicePermissionMode === "mods_only" ? "selected" : ""}>Sadece moderatör ve üstleri konuşabilir</option>
+                </select>
+                <p class="modal-info">Bu ayar, aynı anda çok sayıda konuşma olduğunda moderatör odaklı bir konuşma düzeni sağlar.</p>
+            </div>
             ${isOwner ? `
             <div class="form-group" style="margin-top:24px">
                 <button type="button" class="btn-primary" style="background:var(--red); border:none;" onclick="deleteServer('${server.id}')">Sunucuyu Kapat/Kaldır</button>
             </div>` : ""}
          </div>`,
         `<button type="button" class="btn-secondary" onclick="hideModal()">Kapat</button>
-         <button type="button" class="btn-primary" style="width:auto;padding:10px 24px" onclick="saveServerSettings()">Kaydet</button>`
+         ${canEdit ? `<button type="button" class="btn-primary" style="width:auto;padding:10px 24px" onclick="saveServerSettings()">Kaydet</button>` : ""}`
     );
 
     window._stabSwitch = (tab) => {
@@ -4133,7 +4182,10 @@ function saveServerSettings() {
 
     const isOwner = server.ownerId === state.peerId;
     const isAdmin = isOwner || server.peer_roles?.[state.peerId] === "admin";
-    if (!isAdmin) return;
+    if (!isAdmin) {
+        toast("Bu işlem için yönetici yetkisi gerekli.", "error");
+        return;
+    }
 
     if (isOwner) {
         const nname = document.getElementById("sv-name")?.value.trim();
@@ -4143,6 +4195,8 @@ function saveServerSettings() {
     if (isOwner && window._tmpPendingPeerRoles) {
         server.peer_roles = { ...window._tmpPendingPeerRoles };
     }
+
+    server.voicePermissionMode = document.getElementById("sv-voice-permission")?.value || "everyone";
 
     document.getElementById("sidebar-server-name").textContent = server.name;
 
@@ -4158,6 +4212,7 @@ function saveServerSettings() {
                 channel_backgrounds: server.channel_backgrounds || {},
                 inviteCode: server.inviteCode,
                 icon_url: server.icon_url,
+                voicePermissionMode: server.voicePermissionMode,
             },
         });
     }
@@ -4468,6 +4523,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initSetup();
     initMembersPanelResize();
     document.getElementById("server-settings-btn").onclick = openServerSettingsModal;
+    document.getElementById("server-invite-btn").onclick = () => showInviteModal(state.activeServerId);
 
     // Modal close
     document.getElementById("modal-close").onclick = hideModal;
