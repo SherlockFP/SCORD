@@ -2540,6 +2540,24 @@ function handleVoiceStream(peerId, stream) {
 function updateConnectionStatus(status) {
     state._lastMeshStatus = status || "";
     console.log("[App] Connection status:", status);
+    const key = String(status || "");
+    const t = Date.now();
+    if (key === "ws_error") {
+        if (t - (state._wsErrToastAt || 0) > 8000) {
+            state._wsErrToastAt = t;
+            toast("Sinyal sunucusuna (WebSocket) bağlanılamadı. Render linkini ve ağını kontrol et.", "error");
+        }
+    } else if (key === "room_not_found") {
+        if (t - (state._roomNFToastAt || 0) > 8000) {
+            state._roomNFToastAt = t;
+            toast("Oda bulunamadı (sunucu yeniden başlamış olabilir). Sunucuyu yeniden oluşturup tekrar davet et.", "error");
+        }
+    } else if (key === "server_error") {
+        if (t - (state._srvErrToastAt || 0) > 8000) {
+            state._srvErrToastAt = t;
+            toast("Sinyal sunucusu hata verdi. Render loglarını kontrol et.", "error");
+        }
+    }
     refreshConnectionBadge();
 }
 

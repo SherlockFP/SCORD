@@ -21,6 +21,17 @@ const ICE_SERVERS = [
         username: "scord",
         credential: "scord2024",
     },
+    // Better compatibility on restrictive networks (TLS/TCP)
+    {
+        urls: "turn:global.relay.metered.ca:443?transport=tcp",
+        username: "scord",
+        credential: "scord2024",
+    },
+    {
+        urls: "turns:global.relay.metered.ca:443?transport=tcp",
+        username: "scord",
+        credential: "scord2024",
+    },
 ];
 
 class P2PMesh {
@@ -64,6 +75,7 @@ class P2PMesh {
         this.avatarImage = avatarImage;
         const url = `${this.signalingUrl}/${this.roomId}/${this.peerId}?username=${encodeURIComponent(username)}&color=${encodeURIComponent(avatarColor)}`;
         this._setStatus("connecting");
+        console.log("[P2P] Signaling URL:", url);
         this.ws = new WebSocket(url);
 
         this.ws.onopen = () => {
@@ -77,9 +89,9 @@ class P2PMesh {
             await this._handleSignal(msg);
         };
 
-        this.ws.onclose = () => {
+        this.ws.onclose = (ev) => {
             if (this._dead) return;
-            console.warn("[P2P] Signaling disconnected — reconnecting in 3s");
+            console.warn("[P2P] Signaling disconnected", { code: ev?.code, reason: ev?.reason, wasClean: ev?.wasClean });
             this._setStatus("disconnected");
             clearTimeout(this._reconnectTimer);
             this._reconnectTimer = setTimeout(
@@ -88,7 +100,10 @@ class P2PMesh {
             );
         };
 
-        this.ws.onerror = (e) => console.error("[P2P] WS error:", e);
+        this.ws.onerror = (e) => {
+            console.error("[P2P] WS error:", e);
+            this._setStatus("ws_error");
+        };
     }
 
     disconnect() {
@@ -148,6 +163,11 @@ class P2PMesh {
 
             case "error":
                 console.error("[P2P] Server error:", msg.message);
+                if (String(msg.message || "").toLowerCase().includes("room not found")) {
+                    this.cb.onStatusChange?.("room_not_found");
+                } else {
+                    this.cb.onStatusChange?.("server_error");
+                }
                 break;
         }
     }
@@ -211,6 +231,14 @@ class P2PMesh {
 
         pc.onconnectionstatechange = () => {
             console.log(`[P2P] ${peerId} → ${pc.connectionState}`);
+        };
+
+        pc.oniceconnectionstatechange = () => {
+            console.log(`[P2P] ${peerId} ice → ${pc.iceConnectionState}`);
+            if (pc.iceConnectionState === "failed") {
+                // Common quick recovery: trigger ICE restart by renegotiation
+                try { pc.restartIce?.(); } catch { }
+            }
         };
 
         if (makeOffer) {

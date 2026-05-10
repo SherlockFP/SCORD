@@ -450,7 +450,8 @@ if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8000))
     print("\n" + "="*55)
-    print("  🚀  SCORD Signaling Server")
-    print(f"  ➜   http://0.0.0.0:{port}")
+    # Avoid UnicodeEncodeError on some Windows consoles (cp1252)
+    print("  SCORD Signaling Server")
+    print(f"  ->  http://0.0.0.0:{port}")
     print("="*55 + "\n")
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
