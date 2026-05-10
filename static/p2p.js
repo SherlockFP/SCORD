@@ -99,8 +99,19 @@ class P2PMesh {
         this._dead = true;
         clearTimeout(this._reconnectTimer);
         this._pingTimer && clearInterval(this._pingTimer);
+        this._reconnectTimer = null;
+
+        // Close all peer connections & data channels
         Object.keys(this.peers).forEach(pid => this._closePeer(pid));
-        this.ws && this.ws.close();
+        this.peers = {};
+        this._pendingIce = {};
+
+        // Close signaling socket
+        if (this.ws) {
+            try { this.ws.onmessage = null; } catch { }
+            try { this.ws.close(); } catch { }
+        }
+        this.ws = null;
     }
 
     /* ── Signaling message dispatcher ────────────────────────── */
@@ -202,18 +213,34 @@ class P2PMesh {
             }
         };
 
+        // Negotiation (glare-safe)
+        // Deterministic “polite” side based on peerId ordering.
+        // This prevents both sides from creating offers at the same time.
+        peerObj._makingOffer = false;
+        peerObj._polite = String(this.peerId) > String(peerId);
         peerObj._negTimer = null;
+
         pc.onnegotiationneeded = () => {
             clearTimeout(peerObj._negTimer);
             peerObj._negTimer = setTimeout(async () => {
                 try {
                     if (pc.connectionState === "closed") return;
-                    if (pc.signalingState !== "stable") return;
+                    if (pc.signalingState !== "stable") {
+                        // Don't create offers when not stable; glare is handled in offer path.
+                        return;
+                    }
+
+                    if (peerObj._makingOffer) return;
+                    peerObj._makingOffer = true;
+
                     const offer = await pc.createOffer();
                     await pc.setLocalDescription(offer);
+
                     this._send({ type: "offer", target: peerId, sdp: pc.localDescription });
                 } catch (err) {
                     console.error("[P2P] Renegotiation error:", err);
+                } finally {
+                    peerObj._makingOffer = false;
                 }
             }, _scordTiming().P2P_NEGOTIATION_DEBOUNCE_MS ?? 150);
         };
@@ -281,8 +308,20 @@ class P2PMesh {
             await this._initiatePeer(fromId, {}, false);
             peerObj = this.peers[fromId];
         }
+
         const { pc } = peerObj;
+
+        // Glare handling (perfect negotiation style)
+        // If we are making an offer and we are NOT polite, ignore this offer.
+        // If we are polite, roll over by setting remote description.
+        const offerCollision = peerObj._makingOffer || pc.signalingState !== "stable";
+        if (offerCollision && !peerObj._polite) {
+            console.warn(`[P2P] Offer glare ignored (from ${fromId})`);
+            return;
+        }
+
         await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+
 
         // Flush pending ICE
         for (const c of (this._pendingIce[fromId] || [])) {
