@@ -17,25 +17,9 @@ function _scordIceServers() {
         return window.SCORD_ICE_SERVERS;
     }
     return [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun.relay.metered.ca:80" },
-    {
-        urls: "turn:global.relay.metered.ca:80",
-        username: "scord",
-        credential: "scord2024",
-    },
-    // Better compatibility on restrictive networks (TLS/TCP)
-    {
-        urls: "turn:global.relay.metered.ca:443?transport=tcp",
-        username: "scord",
-        credential: "scord2024",
-    },
-    {
-        urls: "turns:global.relay.metered.ca:443?transport=tcp",
-        username: "scord",
-        credential: "scord2024",
-    },
+        // Default: STUN only (TURN must be configured server-side via /api/config).
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
     ];
 }
 
@@ -358,6 +342,18 @@ class P2PMesh {
             } catch (e) {
                 console.warn("[P2P] broadcast send error:", e);
             }
+        }
+    }
+
+    /**
+     * Fallback broadcast over signaling WebSocket.
+     * This is NOT for voice/video streams, only small JSON state (chat, presence, etc.).
+     */
+    broadcastSignal(data) {
+        try {
+            this._send({ type: "broadcast", data });
+        } catch (e) {
+            console.warn("[P2P] broadcastSignal failed:", e);
         }
     }
 

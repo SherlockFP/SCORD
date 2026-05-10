@@ -135,8 +135,15 @@ function anyMeshDcOpen(mesh) {
 /** Queue until at least one DataChannel is open so chat is not silently dropped. */
 function meshBroadcastReliable(payload) {
     if (!state.mesh) return;
+    const wsOk = state.mesh.ws && state.mesh.ws.readyState === WebSocket.OPEN;
     if (anyMeshDcOpen(state.mesh)) {
         state.mesh.broadcast(payload);
+        return;
+    }
+    // Fallback: if signaling is up, still deliver small JSON events (chat/presence) via WS.
+    // This prevents the whole app from "going dark" when DC negotiation is flaky.
+    if (wsOk && typeof state.mesh.broadcastSignal === "function") {
+        state.mesh.broadcastSignal(payload);
         return;
     }
     if (!state._p2pOutbox) state._p2pOutbox = [];
@@ -2832,7 +2839,7 @@ async function joinVoiceChannel(channelId) {
 
     meshBroadcastReliable({
         type: "voice_join",
-        channelId,
+        channelId: canonCh,
         username: state.username,
         avatarColor: state.avatarColor,
         avatarImage: state.avatarImage,
