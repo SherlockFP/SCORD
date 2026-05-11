@@ -111,6 +111,109 @@ def load_db():
     except Exception as e:
         log.error(f"Failed to load db: {e}")
 
+
+def _template_channels(kind: str) -> list[dict]:
+    templates = {
+        "creative": [
+            {"id": "rules", "name": "kurallar-ve-baslangic", "type": "text", "category": "GIRIS"},
+            {"id": "announcements", "name": "duyurular", "type": "text", "category": "GIRIS"},
+            {"id": "showcase", "name": "eser-vitrini", "type": "text", "category": "TOPLULUK"},
+            {"id": "collab", "name": "ekip-bul", "type": "text", "category": "TOPLULUK"},
+            {"id": "resources", "name": "kaynaklar", "type": "text", "category": "URETIM"},
+            {"id": "feedback", "name": "geri-bildirim", "type": "text", "category": "URETIM"},
+            {"id": "voice-lounge", "name": "studio-lounge", "type": "voice", "category": "SES"},
+            {"id": "voice-focus", "name": "sessiz-calisma", "type": "voice", "category": "SES"},
+            {"id": "voice-stage", "name": "sunum-sahnesi", "type": "voice", "category": "ETKINLIK"},
+        ],
+        "gaming": [
+            {"id": "rules", "name": "kurallar", "type": "text", "category": "GIRIS"},
+            {"id": "patch", "name": "yama-notlari", "type": "text", "category": "HABER"},
+            {"id": "looking", "name": "takim-ara", "type": "text", "category": "OYUN"},
+            {"id": "clips", "name": "klipler", "type": "text", "category": "OYUN"},
+            {"id": "builds", "name": "rehber-ve-build", "type": "text", "category": "OYUN"},
+            {"id": "voice-ranked", "name": "ranked-1", "type": "voice", "category": "PARTI"},
+            {"id": "voice-casual", "name": "casual-sohbet", "type": "voice", "category": "PARTI"},
+            {"id": "voice-music", "name": "muzik-odasi", "type": "voice", "category": "PARTI"},
+        ],
+        "music": [
+            {"id": "rules", "name": "dinleme-kurallari", "type": "text", "category": "GIRIS"},
+            {"id": "drops", "name": "yeni-cikanlar", "type": "text", "category": "MUZIK"},
+            {"id": "queue", "name": "sarki-onerileri", "type": "text", "category": "MUZIK"},
+            {"id": "playlists", "name": "playlist-paylas", "type": "text", "category": "MUZIK"},
+            {"id": "production", "name": "produksiyon", "type": "text", "category": "STUDYO"},
+            {"id": "voice-listen", "name": "senkron-dinleme", "type": "voice", "category": "CANLI"},
+            {"id": "voice-dj", "name": "dj-kabini", "type": "voice", "category": "CANLI"},
+            {"id": "voice-after", "name": "after-talk", "type": "voice", "category": "CANLI"},
+        ],
+        "dev": [
+            {"id": "rules", "name": "katki-kurallari", "type": "text", "category": "GIRIS"},
+            {"id": "roadmap", "name": "roadmap", "type": "text", "category": "PROJE"},
+            {"id": "bugs", "name": "bug-raporlari", "type": "text", "category": "PROJE"},
+            {"id": "prs", "name": "pull-request", "type": "text", "category": "PROJE"},
+            {"id": "snippets", "name": "kod-parcalari", "type": "text", "category": "BILGI"},
+            {"id": "voice-standup", "name": "daily-standup", "type": "voice", "category": "SES"},
+            {"id": "voice-pair", "name": "pair-programming", "type": "voice", "category": "SES"},
+            {"id": "voice-debug", "name": "debug-odasi", "type": "voice", "category": "SES"},
+        ],
+        "study": [
+            {"id": "rules", "name": "topluluk-notlari", "type": "text", "category": "GIRIS"},
+            {"id": "planner", "name": "haftalik-plan", "type": "text", "category": "CALISMA"},
+            {"id": "notes", "name": "ders-notlari", "type": "text", "category": "CALISMA"},
+            {"id": "questions", "name": "soru-cevap", "type": "text", "category": "CALISMA"},
+            {"id": "wins", "name": "bugunun-kazanimi", "type": "text", "category": "MOTIVASYON"},
+            {"id": "voice-pomodoro", "name": "pomodoro-50-10", "type": "voice", "category": "ODAK"},
+            {"id": "voice-library", "name": "kutuphane-sessiz", "type": "voice", "category": "ODAK"},
+            {"id": "voice-break", "name": "mola-sohbeti", "type": "voice", "category": "ODAK"},
+        ],
+    }
+    return templates[kind]
+
+
+def _rules_message(server_name: str, channel_id: str = "rules") -> dict:
+    return {
+        "id": f"seed-{channel_id}",
+        "type": "chat",
+        "channelId": channel_id,
+        "author": "Shercord Guide",
+        "authorId": "shercord-bot",
+        "avatarColor": "#5865f2",
+        "text": (
+            f"{server_name} kurallari: saygili ol, spam yapma, izin almadan kayit/paylasim yapma, "
+            "ses odalarinda sirayi bozma, muzik botunda baskalarinin dinleme deneyimini ezme. "
+            "Burasi Discord hissi tasir ama Shercord'a ozgu daha sakin ve uretken bir topluluk alanidir."
+        ),
+        "time": "09:00",
+    }
+
+
+def ensure_template_rooms():
+    specs = [
+        ("tpl-creative-hub", "Creator Forge", "creative", "#8b5cf6"),
+        ("tpl-gaming-lounge", "Arcade Lobby", "gaming", "#22c55e"),
+        ("tpl-music-room", "Midnight Sessions", "music", "#f43f5e"),
+        ("tpl-dev-lab", "Open Source Lab", "dev", "#38bdf8"),
+        ("tpl-study-cafe", "Focus Cafe", "study", "#f59e0b"),
+    ]
+    changed = False
+    for rid, name, kind, color in specs:
+        if rid in rooms:
+            continue
+        room = Room(rid, name, "shercord-bot")
+        room.channels = _template_channels(kind)
+        room.roles = {
+            "admin": {"name": "Admin", "color": "#ef4444", "hoist": True, "permissions": _role_defaults("admin")},
+            "mod": {"name": "Moderator", "color": "#22c55e", "hoist": True, "permissions": _role_defaults("mod")},
+            "member": {"name": "Uye", "color": "#94a3b8", "hoist": False, "permissions": _role_defaults("member")},
+            "bot": {"name": "Shercord Bot", "color": color, "hoist": True, "permissions": _role_defaults("mod")},
+        }
+        room.peer_roles = {"shercord-bot": "bot"}
+        room.messages = {"rules": [_rules_message(name)]}
+        room.pinned_messages = [room.messages["rules"][0]]
+        rooms[rid] = room
+        changed = True
+    if changed:
+        schedule_save_db(0.2)
+
 class Room:
     def __init__(self, room_id: str, name: str, owner_id: str):
         self.room_id = room_id
@@ -758,6 +861,7 @@ def serve_spa_head(full_path: str):
 @app.on_event("startup")
 def startup_event():
     load_db()
+    ensure_template_rooms()
 
 if __name__ == "__main__":
     import uvicorn

@@ -497,6 +497,8 @@ function playSound(frequency = 440, duration = 200, type = "sine") {
 
 function showModal(title, bodyHTML, footerHTML) {
     document.getElementById("modal-title").textContent = title;
+    const modal = document.getElementById("modal");
+    modal?.classList.toggle("modal--wide-settings", typeof bodyHTML === "string" && bodyHTML.includes("scord-settings-shell"));
     const mb = document.getElementById("modal-body");
     mb.innerHTML = "";
     if (typeof bodyHTML === "string") mb.innerHTML = bodyHTML;
@@ -3526,7 +3528,12 @@ function renderVoiceParticipants(serverId, channelId) {
     const countEl = document.getElementById("voice-participant-count");
     if (countEl) countEl.textContent = `${members.length} kişi`;
 
+    const layoutCount = Math.min(Math.max(members.length, 1), 9);
+    container.dataset.count = String(members.length);
+    container.className = `voice-participants voice-grid-${layoutCount}${members.length > 9 ? " voice-grid-many" : ""}`;
+
     if (members.length === 0) {
+        container.className = "voice-participants";
         container.innerHTML = `
           <div class="voice-empty-state">
             <span class="voice-empty-state-icon" aria-hidden="true">🎙️</span>
@@ -3677,8 +3684,6 @@ function renderVoiceParticipants(serverId, channelId) {
                 thumbEl.playsInline = true;
                 thumbEl.autoplay = true;
                 thumbEl.tabIndex = -1;
-                // Non-interactive thumbnail styles
-                thumbEl.style.cssText = "width:100%;max-height:120px;object-fit:contain;margin-top:10px;border-radius:8px;pointer-events:none;display:block;background:#000;";
                 card.appendChild(thumbEl);
             }
             if (thumbEl.srcObject !== videoEl.srcObject) {
@@ -5936,11 +5941,14 @@ function updateTheme(themeName) {
 async function deleteServer(serverId) {
     if (!confirm("Bu sunucuyu kalıcı olarak silmek istediğine emin misin? Bu işlem geri alınamaz!")) return;
     try {
-        const res = await fetch(`${API_BASE} /rooms/${serverId}?owner_id = ${state.peerId} `, { method: "DELETE" });
+        const res = await fetch(`${API_BASE}/rooms/${encodeURIComponent(serverId)}?owner_id=${encodeURIComponent(state.peerId)}`, { method: "DELETE" });
         const data = await res.json();
         if (data.success) {
             toast("Sunucu başarıyla silindi.", "success");
             state.servers = state.servers.filter(s => s.id !== serverId);
+            if (state.activeServerId === serverId) state.activeServerId = null;
+            closeServerSettingsPanel?.();
+            hideModal?.();
             showHomeView();
             renderServerRail();
         } else {
@@ -7915,6 +7923,7 @@ openServerSettingsPanel = window.openServerSettingsPanel = function () {
         <button data-page="roles">Roller</button>
         <button data-page="perms">Izinler</button>
         <button data-page="voice">Ses ve Moderasyon</button>
+        ${isOwner ? `<button data-page="danger">Sunucuyu Kapat</button>` : ""}
         <button class="danger" onclick="closeServerSettingsPanel()">Kapat</button>
       </aside>
       <main class="scord-server-settings-main">
@@ -7922,6 +7931,7 @@ openServerSettingsPanel = window.openServerSettingsPanel = function () {
         <section id="srv-roles" class="srv-page hidden"><h2>Roller</h2>${roleRows}</section>
         <section id="srv-perms" class="srv-page hidden"><h2>Varsayilan uye izinleri</h2><div class="permission-grid">${permRows}</div></section>
         <section id="srv-voice" class="srv-page hidden"><h2>Ses ve Moderasyon</h2><button class="btn-secondary" onclick="requestKickMusicBot()">Muzik botunu cikar</button><p class="modal-info">Force disconnect yetkisi olan roller ses kanalindaki kullanicilari ve botu cikarabilir.</p></section>
+        ${isOwner ? `<section id="srv-danger" class="srv-page hidden"><h2>Sunucuyu Kapat</h2><div class="srv-danger-zone"><h3>Kalici silme</h3><p>Bu sunucu herkesten kaldirilir ve geri alinamaz. Sadece sunucu sahibi kapatabilir.</p><button class="btn-primary" style="background:var(--red);border:none;width:max-content" onclick="deleteServer('${server.id}')">Sunucuyu Kapat</button></div></section>` : ""}
         <footer><button class="btn-primary" onclick="saveProfessionalServerSettings()">Kaydet</button></footer>
       </main>`;
     panel.querySelectorAll(".scord-server-settings-nav button[data-page]").forEach(btn => {
@@ -7976,28 +7986,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function ensureProfessionalVoiceBar() {
-    const header = document.querySelector("#voice-view .voice-header");
-    if (!header || document.getElementById("voice-top-control-bar")) return;
-    const bar = document.createElement("div");
-    bar.id = "voice-top-control-bar";
-    bar.className = "voice-top-control-bar";
-    bar.innerHTML = `
-      <button class="voice-icon-btn" id="voice-top-mic" title="Mikrofon">Mic</button>
-      <button class="voice-icon-btn" id="voice-top-deafen" title="Kulaklik sustur">Deafen</button>
-      <button class="voice-icon-btn" id="voice-top-camera" title="Kamera">Cam</button>
-      <button class="voice-icon-btn" id="voice-top-screen" title="Ekran paylas">Share</button>
-      <button class="voice-icon-btn danger" id="voice-top-leave" title="Baglantiyi kes">Leave</button>`;
-    header.appendChild(bar);
-    document.getElementById("voice-top-mic").onclick = () => document.getElementById("mic-toggle-btn")?.click();
-    document.getElementById("voice-top-deafen").onclick = () => {
-        state.deafened = !state.deafened;
-        Object.values(state.remoteMedia || {}).forEach(el => { el.muted = state.deafened || el.muted; });
-        document.getElementById("voice-top-deafen").classList.toggle("active", state.deafened);
-        toast(state.deafened ? "Kulaklik susturuldu." : "Kulaklik acildi.", "info");
-    };
-    document.getElementById("voice-top-camera").onclick = () => document.getElementById("voice-camera-btn")?.click();
-    document.getElementById("voice-top-screen").onclick = () => document.getElementById("voice-screen-btn")?.click();
-    document.getElementById("voice-top-leave").onclick = () => leaveVoiceChannel();
+    document.getElementById("voice-top-control-bar")?.remove();
 }
 
 const _v21ShowVoiceView = window.showVoiceView || showVoiceView;
@@ -8009,3 +7998,204 @@ showVoiceView = window.showVoiceView = function (...args) {
 };
 
 console.log("[Shercord V21] Authoritative voice/music state, permissions, voice gate, and professional settings loaded.");
+
+/* ==========================================================================
+   V22 community templates, channel categories and rich user menus
+   ========================================================================== */
+
+function channelCategoryLabel(ch, fallback) {
+    return (ch.category || fallback || (ch.type === "voice" ? "SES KANALLARI" : "METIN KANALLARI")).toUpperCase();
+}
+
+function groupedChannels(server, type) {
+    const groups = new Map();
+    (server.channels || []).filter(c => c.type === type).forEach(ch => {
+        const label = channelCategoryLabel(ch, type === "voice" ? "SES KANALLARI" : "METIN KANALLARI");
+        if (!groups.has(label)) groups.set(label, []);
+        groups.get(label).push(ch);
+    });
+    return [...groups.entries()];
+}
+
+function renderCategoryHeader(list, label, serverId, type) {
+    const cat = document.createElement("div");
+    cat.className = "channel-category channel-category--grouped";
+    cat.innerHTML = `<span><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg> ${escapeHtml(label)}</span>`;
+    const server = state.servers.find(s => s.id === serverId);
+    const canAdd = server && (server.ownerId === state.peerId || server.peer_roles?.[state.peerId] === "admin");
+    if (canAdd) {
+        const addBtn = document.createElement("span");
+        addBtn.className = "add-ch-btn";
+        addBtn.textContent = "+";
+        addBtn.title = type === "voice" ? "Ses kanali ekle" : "Metin kanali ekle";
+        addBtn.onclick = (e) => { e.stopPropagation(); promptAddChannel(serverId, type); };
+        cat.appendChild(addBtn);
+    }
+    list.appendChild(cat);
+}
+
+function renderVoiceMemberUnderChannel(list, server, ch, m) {
+    const vm = document.createElement("div");
+    vm.className = "voice-member";
+    if (m.isSpeaking || (m.peer_id === state.peerId && state.isSpeaking)) vm.classList.add("voice-member--speaking");
+    const av = document.createElement("div");
+    av.className = "vm-avatar";
+    if (m.isSpeaking || (m.peer_id === state.peerId && state.isSpeaking)) av.classList.add("speaking");
+    applyAvatarToElement(av, m.avatar_color, m.avatar_image, m.username);
+    const nameRow = document.createElement("div");
+    nameRow.className = "voice-member-name-row";
+    const name = document.createElement("span");
+    name.textContent = m.username + (m.peer_id === state.peerId ? " (sen)" : "");
+    nameRow.appendChild(name);
+    if (m.isSharingScreen || (m.peer_id === state.peerId && getLocalShareStream())) {
+        const ico = document.createElement("span");
+        ico.className = "voice-mini-live";
+        ico.textContent = "LIVE";
+        ico.title = "Ekran paylasiyor";
+        nameRow.appendChild(ico);
+    } else if (m.isSharingCamera || (m.peer_id === state.peerId && state.cameraStream)) {
+        const ico = document.createElement("span");
+        ico.className = "voice-mini-live";
+        ico.textContent = "CAM";
+        ico.title = "Kamera acik";
+        nameRow.appendChild(ico);
+    }
+    vm.appendChild(av);
+    vm.appendChild(nameRow);
+    if (m.peer_id !== state.peerId) {
+        vm.onclick = () => openUserProfile(m.peer_id, m.username, m.avatar_image, m.avatar_color);
+        vm.oncontextmenu = (e) => {
+            e.preventDefault();
+            showRichUserMenu(m.peer_id, m.username, e.clientX, e.clientY);
+        };
+    }
+    list.appendChild(vm);
+}
+
+const _v22CreateChannelItem = window.createChannelItem || createChannelItem;
+updateChannelSidebar = window.updateChannelSidebar = function (serverId) {
+    const list = document.getElementById("channel-list");
+    if (!list) return;
+    list.innerHTML = "";
+    if (!serverId) {
+        renderHomeSidebar();
+        return;
+    }
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+
+    groupedChannels(server, "text").forEach(([label, channels]) => {
+        renderCategoryHeader(list, label, serverId, "text");
+        channels.forEach(ch => list.appendChild(_v22CreateChannelItem(ch, serverId)));
+    });
+
+    groupedChannels(server, "voice").forEach(([label, channels]) => {
+        renderCategoryHeader(list, label, serverId, "voice");
+        channels.forEach(ch => {
+            const item = _v22CreateChannelItem(ch, serverId);
+            const members = server.voiceMembers?.[ch.id] || [];
+            if (members.some(m => m.isSharingScreen || m.isSharingCamera)) item.classList.add("channel-live");
+            list.appendChild(item);
+            members.forEach(m => renderVoiceMemberUnderChannel(list, server, ch, m));
+        });
+    });
+};
+
+function profileRoleLine(server, peerId) {
+    if (!server) return "Shercord uyesi";
+    if (server.ownerId === peerId) return "Sunucu kurucusu";
+    const rid = server.peer_roles?.[peerId] || "member";
+    return server.roles?.[rid]?.name || "Uye";
+}
+
+function showRichUserMenu(peerId, username, x, y) {
+    document.querySelector(".rich-user-menu")?.remove();
+    const server = currentServer();
+    const isSelf = peerId === state.peerId;
+    const role = profileRoleLine(server, peerId);
+    const canKick = !isSelf && server && (server.ownerId === state.peerId || roleAllows(server, "force_disconnect", state.voiceChannelId || state.activeChannelId));
+    const menu = document.createElement("div");
+    menu.className = "rich-user-menu";
+    menu.style.left = `${Math.min(x, window.innerWidth - 280)}px`;
+    menu.style.top = `${Math.min(y, window.innerHeight - 330)}px`;
+    menu.innerHTML = `
+      <div class="rich-user-menu-head">
+        <div class="rich-user-menu-avatar">${initials(username)}</div>
+        <div><strong>${escapeHtml(username || "Kullanici")}</strong><span>${escapeHtml(role)}</span></div>
+      </div>
+      <button data-action="profile">Profili ac</button>
+      ${!isSelf ? `<button data-action="dm">Mesaj gonder</button><button data-action="friend">Arkadas ekle</button>` : ""}
+      <button data-action="note">Not duzenle</button>
+      ${canKick ? `<button class="danger" data-action="disconnect">Sesten cikar</button>` : ""}
+    `;
+    document.body.appendChild(menu);
+    menu.onclick = (e) => {
+        const action = e.target?.dataset?.action;
+        if (!action) return;
+        menu.remove();
+        if (action === "profile") {
+            const member = server?.members?.find(m => m.peer_id === peerId) || {};
+            openUserProfile(peerId, username, member.avatar_image, member.avatar_color);
+        } else if (action === "dm") {
+            openDM(peerId, username);
+        } else if (action === "friend") {
+            addFriend(peerId, username);
+        } else if (action === "note") {
+            openUserProfile(peerId, username);
+            setTimeout(() => document.getElementById("profile-note-input")?.focus(), 80);
+        } else if (action === "disconnect") {
+            requestForceDisconnect(peerId);
+        }
+    };
+    setTimeout(() => document.addEventListener("click", () => menu.remove(), { once: true }), 0);
+}
+
+const _v22OpenUserProfile = window.openUserProfile || openUserProfile;
+openUserProfile = window.openUserProfile = function (peerId, username, avatarImage, avatarColor) {
+    const server = currentServer();
+    const isSelf = peerId === state.peerId;
+    const role = profileRoleLine(server, peerId);
+    const note = getUserNote(peerId);
+    const isFriend = state.friends?.some(f => f.peerId === peerId);
+    const serverName = server?.name || "Shercord";
+    const canModerate = !isSelf && server && (server.ownerId === state.peerId || roleAllows(server, "force_disconnect", state.voiceChannelId || state.activeChannelId));
+    const body = `
+      <div class="profile-pro-card">
+        <div class="profile-pro-banner" style="background:linear-gradient(135deg, ${avatarColor || "#5865f2"}, #111827);"></div>
+        <div class="profile-pro-main">
+          <div class="profile-pro-avatar" style="background-color:${avatarColor || "#5865f2"};background-image:url(${avatarImage || ""})">${avatarImage ? "" : initials(username)}</div>
+          <div class="profile-pro-title">
+            <h2>${escapeHtml(username || "Kullanici")}</h2>
+            <span>${escapeHtml(role)} - ${escapeHtml(serverName)}</span>
+          </div>
+          <div class="profile-pro-status">Shercord uzerinde ${isSelf ? "kendi alanin" : "ortak bir topluluk uyesi"}</div>
+        </div>
+        <div class="profile-pro-grid">
+          <section><strong>Hakkinda</strong><p>Bu profil Shercord'a ozgu notlar, arkadaslik ve moderasyon kisayollariyla zenginlestirildi.</p></section>
+          <section><strong>Sunucu rolu</strong><p>${escapeHtml(role)}</p></section>
+          <section><strong>Durum</strong><p>${server?.voiceMembers && Object.values(server.voiceMembers).some(list => list.some(m => m.peer_id === peerId)) ? "Ses kanalinda" : "Metin kanalinda"}</p></section>
+        </div>
+        <label class="profile-pro-note">Kisisel not<textarea id="profile-note-input" placeholder="Bu kisi hakkinda sadece sende kalacak not..." maxlength="600">${escapeHtml(note)}</textarea></label>
+      </div>`;
+    const footer = `
+      ${!isSelf ? `<button class="btn-secondary" onclick="openDM('${peerId}', '${escapeHtml(username || "")}'); hideModal();">Mesaj</button>` : ""}
+      ${!isSelf ? `<button class="btn-secondary" onclick="addFriend('${peerId}', '${escapeHtml(username || "")}')">${isFriend ? "Arkadas" : "Arkadas ekle"}</button>` : ""}
+      ${canModerate ? `<button class="btn-secondary danger-soft" onclick="requestForceDisconnect('${peerId}')">Sesten cikar</button>` : ""}
+      <button class="btn-primary" onclick="saveProfileNote('${peerId}'); hideModal();">Notu kaydet</button>`;
+    showModal("Kullanici Profili", body, footer);
+};
+
+function markTemplateServersForRail() {
+    state.servers.forEach(s => {
+        if (String(s.id || "").startsWith("tpl-")) s.template = true;
+    });
+}
+
+const _v22StartApp = window.startApp;
+window.startApp = function () {
+    if (_v22StartApp) _v22StartApp();
+    markTemplateServersForRail();
+    renderServerRail();
+};
+
+console.log("[Shercord V22] Community template servers, grouped channels and rich user menus loaded.");
