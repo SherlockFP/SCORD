@@ -194,7 +194,6 @@ function meshBroadcastReliable(payload) {
         const t = Date.now();
         if (t - (state._queuedBroadcastToastAt || 0) > CHAT_QUEUE_TOAST_COOLDOWN_MS) {
             state._queuedBroadcastToastAt = t;
-            toast("P2P veri yolu hazır değil; mesaj sıraya alındı.", "info");
         }
     }
 }
@@ -252,6 +251,7 @@ function resetConnectionState() {
 }
 
 function maybeOfferP2PTroubleshoot(wsOk, dcOpen) {
+    return;
     const peerCount = state.mesh ? Object.keys(state.mesh.peers || {}).length : 0;
     if (!wsOk || dcOpen || peerCount === 0) {
         state._p2pWaitSince = null;
@@ -290,6 +290,9 @@ function refreshConnectionBadge() {
     const voiceEl = document.getElementById("voice-connection-badge");
     const apply = (el) => {
         if (!el) return;
+        el.textContent = "";
+        el.className = el.id === "voice-connection-badge" ? "connection-badge connection-badge--voice" : "connection-badge";
+        return;
         const m = state.mesh;
         if (!m) {
             el.textContent = "";
@@ -3571,6 +3574,8 @@ function renderVoiceParticipants(serverId, channelId) {
     container.innerHTML = '';
 
     members.forEach(m => {
+        if (!m || !m.peer_id) return;
+        const displayName = m.username || m.name || (m.peer_id === state.peerId ? state.username : "Kullanici");
         const card = document.createElement("div");
         card.className = "voice-participant-card";
         card.setAttribute('data-peer-id', m.peer_id);
@@ -3583,7 +3588,7 @@ function renderVoiceParticipants(serverId, channelId) {
             av.className = "vpc-avatar";
             card.appendChild(av);
         }
-        applyAvatarToElement(av, m.avatar_color, m.avatar_image, m.username);
+        applyAvatarToElement(av, m.avatar_color, m.avatar_image, displayName);
 
         // Speaking Glow (make it robust: only one source of truth)
         const currentlySpeaking = !!m.isSpeaking || (m.peer_id === state.peerId && !!state.isSpeaking);
@@ -3613,7 +3618,7 @@ function renderVoiceParticipants(serverId, channelId) {
             nameEl.className = "vpc-name";
             nameContainer.appendChild(nameEl);
         }
-        nameEl.textContent = m.username + (m.peer_id === state.peerId ? " (sen)" : "");
+        nameEl.textContent = displayName + (m.peer_id === state.peerId ? " (sen)" : "");
 
         // Add sharing icons
         let shareIcon = nameContainer.querySelector('.share-icon');
@@ -3655,16 +3660,6 @@ function renderVoiceParticipants(serverId, channelId) {
 
         const isSharing = m.isSharingScreen || m.isSharingCamera || (m.peer_id === state.peerId && (getLocalShareStream() || state.cameraStream));
         let liveBadge = nameContainer.querySelector('.live-badge');
-        if (hasVideoTrack) {
-            if (!liveBadge) {
-                liveBadge = document.createElement("span");
-                liveBadge.className = "live-badge";
-                liveBadge.textContent = "CANLI";
-                nameContainer.appendChild(liveBadge);
-            }
-        } else if (liveBadge) {
-            liveBadge.remove();
-        }
 
         // Video / Screen Share (STABLE NODE)
         let videoEl = state.remoteMedia?.[m.peer_id];
@@ -3697,6 +3692,17 @@ function renderVoiceParticipants(serverId, channelId) {
         let thumbEl = card.querySelector('.vpc-thumb');
 
         const hasVideoTrack = !!(videoEl && videoEl.srcObject?.getVideoTracks?.()?.length > 0);
+        if (isSharing || hasVideoTrack) {
+            if (!liveBadge) {
+                liveBadge = document.createElement("span");
+                liveBadge.className = "live-badge";
+                liveBadge.textContent = "CANLI";
+                nameContainer.appendChild(liveBadge);
+            }
+        } else if (liveBadge) {
+            liveBadge.remove();
+        }
+
         if (hasVideoTrack) {
             card.classList.add("has-video");
             // Show a small muted thumbnail — NOT a click-to-fullscreen video
@@ -3723,7 +3729,7 @@ function renderVoiceParticipants(serverId, channelId) {
         // Watch button appears as soon as someone is "sharing" — this is the ONLY
         // way to open the full-screen overlay (no auto preview).
         if (hasVideoTrack) {
-            card.ondblclick = (e) => { e.stopPropagation(); openScreenOverlay(m.peer_id, m.username); };
+            card.ondblclick = (e) => { e.stopPropagation(); openScreenOverlay(m.peer_id, displayName); };
             /* legacy watch button removed
             watchBtn.disabled = !hasVideoTrack;
             watchBtn.textContent = hasVideoTrack ? "İzle 🔍" : "Yükleniyor…";
@@ -3771,7 +3777,7 @@ function renderVoiceParticipants(serverId, channelId) {
         if (m.peer_id !== state.peerId) {
             card.oncontextmenu = (e) => {
                 e.preventDefault();
-                showContextMenu(m.peer_id, m.username, e.clientX, e.clientY);
+                showContextMenu(m.peer_id, displayName, e.clientX, e.clientY);
             };
         }
 

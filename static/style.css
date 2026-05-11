@@ -1246,6 +1246,7 @@ body {
 }
 
 .connection-badge {
+  display: none !important;
   font-size: 11px;
   padding: 3px 8px;
   border-radius: var(--r-full);
@@ -2000,22 +2001,7 @@ html[data-scord-chat="classic"] .msg-row-inner {
 }
 
 #voice-members-panel {
-  position: absolute;
-  right: 24px;
-  top: 100px;
-  width: 200px;
-  min-width: 160px;
-  max-width: 360px;
-  resize: horizontal;
-  overflow-x: hidden;
-  overflow-y: auto;
-  background: rgba(13, 13, 26, 0.9);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: 16px 10px;
-  max-height: 400px;
-  z-index: 10;
+  display: none !important;
 }
 
 #voice-members-panel.collapsed {
@@ -2557,6 +2543,7 @@ html[data-scord-chat="classic"] .msg-row-inner {
 }
 
 .voice-sync-meta {
+  display: none !important;
   margin-left: 8px;
   max-width: min(520px, 42vw);
   font-size: 11px;
