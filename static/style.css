@@ -914,6 +914,18 @@ body {
   text-align: center;
 }
 
+.home-view.home-dm-active {
+  padding: 0;
+  overflow: hidden;
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.home-view.home-dm-active .dm-main-view {
+  flex: 1;
+  width: 100%;
+}
+
 .home-hero h2 {
   font-size: 28px;
   font-weight: 800;
@@ -3113,6 +3125,182 @@ html[data-scord-chat="classic"] .msg-row-inner {
 }
 
 /* ── Direct Messaging Overlay ─────────────────────────────────────── */
+.dm-sidebar-search {
+  padding: 10px 10px 6px;
+}
+
+.dm-sidebar-search input {
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 10px;
+  color: var(--text-primary);
+  background: var(--bg-mid);
+  outline: none;
+  font: inherit;
+}
+
+.dm-sidebar-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.dm-sidebar-empty {
+  padding: 10px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.dm-main-view {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 56px minmax(0, 1fr);
+  background: var(--bg-base);
+}
+
+.dm-main-top {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-deep);
+}
+
+.dm-main-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-mid);
+}
+
+.dm-main-search-icon {
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.dm-main-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text-primary);
+  background: transparent;
+  font: inherit;
+}
+
+.dm-main-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.dm-main-person-chip {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 10px;
+  color: var(--text-secondary);
+  background: var(--bg-highlight);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.dm-main-person-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.dm-main-person-chip span {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-size: 10px;
+}
+
+.dm-main-chat {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 58px minmax(0, 1fr) auto;
+}
+
+.dm-main-chat-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-base);
+}
+
+.dm-main-peer {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dm-main-peer-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dm-main-peer-copy strong,
+.dm-main-peer-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dm-main-peer-copy strong {
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.dm-main-peer-copy span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.dm-main-chat .dm-body {
+  padding: 18px 22px;
+}
+
+.dm-main-chat .dm-input-area {
+  padding: 14px 18px 18px;
+}
+
+.direct-call-sidebar-shortcut {
+  margin-top: 8px;
+  background: rgba(34, 197, 94, 0.14) !important;
+  color: var(--text-primary) !important;
+}
+
+.direct-call-sidebar-shortcut .ch-badge {
+  background: var(--green);
+  color: #052e16;
+}
+
 .dm-overlay {
   position: fixed;
   inset: 0;
@@ -3339,6 +3527,34 @@ html[data-scord-chat="classic"] .msg-row-inner {
   animation: direct-call-in 150ms ease-out;
 }
 
+.direct-call-panel--incoming {
+  border-color: rgba(34, 197, 94, 0.65);
+  animation: direct-call-in 150ms ease-out, direct-call-pulse 1.2s ease-in-out infinite;
+}
+
+.direct-call-panel--ringing .direct-call-avatar,
+.direct-call-panel--incoming .direct-call-avatar {
+  animation: direct-call-avatar-ring 1.1s ease-in-out infinite;
+}
+
+@keyframes direct-call-pulse {
+  0%, 100% {
+    box-shadow: var(--shadow-xl), 0 0 0 0 rgba(34, 197, 94, 0.22);
+  }
+  50% {
+    box-shadow: var(--shadow-xl), 0 0 0 5px rgba(34, 197, 94, 0.1);
+  }
+}
+
+@keyframes direct-call-avatar-ring {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
 @keyframes direct-call-in {
   from {
     opacity: 0;
@@ -3441,6 +3657,32 @@ html[data-scord-chat="classic"] .msg-row-inner {
 }
 
 @media (max-width: 768px) {
+  .dm-main-view {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .dm-main-top {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .dm-main-top-actions {
+    padding-bottom: 2px;
+  }
+
+  .dm-main-chat-header {
+    padding: 0 12px;
+  }
+
+  .dm-main-chat .dm-body {
+    padding: 14px 12px;
+  }
+
+  .dm-main-chat .dm-input-area {
+    padding: 10px 12px calc(var(--mobile-nav-height) + 10px);
+  }
+
   .dm-overlay {
     align-items: stretch;
     justify-content: stretch;

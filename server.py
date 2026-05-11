@@ -832,7 +832,12 @@ async def signaling_ws(websocket: WebSocket, room_id: str, peer_id: str):
         room.last_seen[peer_id] = time.time()
         _remove_peer_from_voice(room, peer_id)
         log.info(f"Peer {peer_id} left room {room_id}")
-        await broadcast_to_room(room, {"type": "peer_left", "peer_id": peer_id})
+        await broadcast_to_room(room, {
+            "type": "peer_left",
+            "peer_id": peer_id,
+            "username": username,
+            "avatar_color": avatar_color,
+        })
         await broadcast_voice_snapshot(room)
         if len(room.peers) == 0:
             asyncio.get_event_loop().call_later(30, lambda: _cleanup_room(room_id))
