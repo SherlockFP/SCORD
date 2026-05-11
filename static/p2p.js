@@ -211,6 +211,18 @@ class P2PMesh {
             this.cameraStream.getTracks().forEach(t => pc.addTrack(t, this.cameraStream));
         }
 
+        // If we are the offerer and currently have no local media, still open
+        // receive lanes. Otherwise a new user who joins a room while someone is
+        // already in voice can create a datachannel-only offer and never receive
+        // the existing user's microphone/camera tracks in the answer.
+        if (makeOffer && !this.localStream) {
+            try { pc.addTransceiver("audio", { direction: "recvonly" }); } catch { }
+        }
+        if (makeOffer && !this.screenStream && !this.cameraStream) {
+            try { pc.addTransceiver("video", { direction: "recvonly" }); } catch { }
+            try { pc.addTransceiver("video", { direction: "recvonly" }); } catch { }
+        }
+
         // Receive remote tracks (Voice + Screen)
         pc.ontrack = (ev) => {
             if (!this.remoteStreams) this.remoteStreams = {};

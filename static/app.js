@@ -1113,7 +1113,7 @@ async function startScreenShare() {
             }
             document.getElementById("voice-screen-btn")?.classList.remove("active");
             if (state.activeServerId && state.voiceChannelId) {
-                updateVoiceSpeakingUi(state.peerId, isSpeaking, state.voiceChannelId);
+                renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
             }
         };
 
@@ -2723,6 +2723,20 @@ function handlePeerJoined(peerId, info, roomId) {
     }
 
     renderServerRail();
+
+    if (state.voiceChannelId && state.mesh) {
+        const voicePayload = {
+            type: "voice_join",
+            channelId: state.voiceChannelId,
+            username: state.username,
+            avatarColor: state.avatarColor,
+            avatarImage: state.avatarImage,
+            isSharingScreen: !!getLocalShareStream(),
+            isSharingCamera: !!state.cameraStream
+        };
+        sendServerEvent(voicePayload);
+        state.mesh.broadcastSignal?.(voicePayload);
+    }
 }
 
 function handlePeerLeft(peerId, roomId) {
