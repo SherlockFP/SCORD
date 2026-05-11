@@ -1587,21 +1587,23 @@ html[data-scord-palette="midnight"] {
 
 /* Mesaj balonları — WhatsApp benzeri kendi / diğer */
 :root {
-  --msg-bubble-self: linear-gradient(145deg, #5b21b6 0%, #4c1d95 55%, #6d28d9 100%);
-  --msg-bubble-other: rgba(30, 30, 55, 0.92);
-  --msg-bubble-other-border: rgba(255, 255, 255, 0.08);
-  --msg-text-on-self: #faf5ff;
-  --msg-text-on-other: #e2e8f0;
-}
-
-html[data-scord-palette="ember"] {
-  --msg-bubble-self: linear-gradient(145deg, #c2410c 0%, #9a3412 100%);
-  --msg-text-on-self: #fff7ed;
-}
-
-html[data-scord-palette="aurora"] {
-  --msg-bubble-self: linear-gradient(145deg, #6d28d9 0%, #2563eb 100%);
-  --msg-bubble-other: rgba(20, 25, 55, 0.95);
+    --bg-deep: #0a0a14;
+    --bg-base: #11111f;
+    --bg-elevated: #1a1a2e;
+    --bg-active: #222240;
+    --bg-hover: #2a2a48;
+    --border: #333355;
+    --text-primary: #f0f0ff;
+    --text-secondary: #b0b0d0;
+    --text-muted: #7c7c9e;
+    --accent: #6366f1;
+    --accent-light: #818cf8;
+    --accent-glow: rgba(99, 102, 241, 0.3);
+    --red: #ef4444;
+    --green: #22c55e;
+    --yellow: #f59e0b;
+    --gradient-primary: linear-gradient(135deg, #6366f1, #8b5cf6, #a78bfa);
+    --gradient-accent: linear-gradient(135deg, #6366f1, #3b82f6);
 }
 
 html[data-scord-palette="paper"] {

@@ -25,9 +25,20 @@ const AVATAR_COLORS = [
     "#ef4444", "#ec4899", "#8b5cf6", "#06b6d4", "#84cc16",
 ];
 
-const EMOJIS = ["😀", "😂", "😍", "🤔", "😎", "🥳", "😭", "🤯", "🔥", "❤️",
-    "👍", "👏", "🎉", "💯", "🚀", "✨", "💀", "🤣", "😊", "😤",
-    "🥺", "😴", "🤗", "😱", "🙏", "💪", "👋", "🎮", "🎧", "💬"];
+const EMOJIS = ["😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "😉", "😊", "😇",
+    "🥰", "😍", "🤩", "😘", "😗", "😚", "😙", "🥲", "😋", "😛", "😜", "🤪", "😝", "🤑",
+    "🤗", "🤭", "🤫", "🤔", "🤐", "🤨", "😐", "😑", "😶", "😏", "😒", "🙄", "😬", "🤥",
+    "😌", "😔", "😪", "🤤", "😴", "😷", "🤒", "🤕", "🤢", "🤮", "🥵", "🥶", "🥴", "😵",
+    "🤯", "🤠", "🥳", "🥸", "😎", "🤓", "🧐", "😕", "😟", "🙁", "😮", "😯", "😲", "😳",
+    "🥺", "😦", "😧", "😨", "😰", "😥", "😢", "😭", "😱", "😖", "😣", "😞", "😓", "😩",
+    "😫", "🥱", "😤", "😡", "😠", "🤬", "🔥", "💯", "❤️", "🧡", "💛", "💚", "💙", "💜",
+    "🖤", "🤍", "🤎", "💔", "❣️", "💕", "💞", "💓", "💗", "💖", "💘", "💝",
+    "👍", "👎", "👊", "✊", "🤛", "🤜", "👏", "🙌", "👐", "🤲", "🤝", "🙏",
+    "✍️", "💪", "🦾", "🖖", "👋", "🤟", "🤘", "🤙", "👈", "👉", "👆", "👇",
+    "☝️", "✌️", "🤞", "🤟", "🤘", "🤙", "💅", "🎉", "🎊", "🎈", "🎁",
+    "🏆", "🥇", "🥈", "🥉", "⚡", "💥", "💫", "💦", "💨", "🔥", "✨", "🌟",
+    "💬", "👁️", "🧠", "💡", "🎮", "🎧", "🎵", "🎶", "🎤", "🎬", "🎭", "🎨",
+    "💀", "💩", "🤡", "👻", "👽", "👾", "🤖", "😺", "😸", "😹", "😻", "😼", "😽", "🙀", "😿", "😾"];
 
 /* ── Local state ──────────────────────────────────────────── */
 let state = {
@@ -37,6 +48,9 @@ let state = {
     avatarImage: null,
     appBackground: null,
     voiceSettings: { micId: "default", volume: 1, filter: "none" },
+    screenShareQuality: "720p",
+    cameraQuality: "720p",
+    roomCreatedAt: {}, // roomId -> timestamp
     servers: [],        // { id, name, ownerId, channels, members, messages }
     activeServerId: null,
     activeChannelId: null,
@@ -1032,7 +1046,18 @@ async function startScreenShare() {
     if (!state.mesh || !state.mesh.voiceActive) return toast("Önce sesli kanala katıl.", "error");
 
     try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: "always" }, audio: true });
+        const quality = state.screenShareQuality || "720p";
+        const qualityConstraints = {
+            "4k": { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } },
+            "1080p": { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+            "720p": { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+            "480p": { width: { ideal: 854 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
+            "360p": { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } },
+        };
+        const stream = await navigator.mediaDevices.getDisplayMedia({ 
+            video: { ...qualityConstraints[quality], cursor: "always" }, 
+            audio: true 
+        });
         state.screenStream = stream;
         state.mesh.screenStream = stream;
 
@@ -1095,7 +1120,18 @@ async function startCameraShare() {
     if (!state.mesh || !state.mesh.voiceActive) return toast("Önce sesli kanala katıl.", "error");
 
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const quality = state.cameraQuality || "720p";
+        const qualityConstraints = {
+            "4k": { width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 30 } },
+            "1080p": { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+            "720p": { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+            "480p": { width: { ideal: 854 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
+            "360p": { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } },
+        };
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { ...qualityConstraints[quality] }, 
+            audio: false 
+        });
         state.cameraStream = stream;
         state.mesh.cameraStream = stream;
 
@@ -3522,6 +3558,26 @@ function openSettingsModal() {
             <label class="modal-label">Kısayol Tuşu (PTT)</label>
             <input type="text" class="modal-input" id="settings-ptt-key" value="${vs.pttKey || 'Control'}" readonly style="cursor:pointer" placeholder="Tuş atamak için tıkla..." />
           </div>
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="modal-label">Ekran Paylaşımı Kalitesi</label>
+            <select class="modal-input" id="settings-screen-quality">
+              <option value="4k" ${state.screenShareQuality === "4k" ? "selected" : ""}>4K (Ultra HD)</option>
+              <option value="1080p" ${state.screenShareQuality === "1080p" ? "selected" : ""}>1080p (Full HD)</option>
+              <option value="720p" ${state.screenShareQuality === "720p" ? "selected" : ""}>720p (HD) - Önerilen</option>
+              <option value="480p" ${state.screenShareQuality === "480p" ? "selected" : ""}>480p (SD)</option>
+              <option value="360p" ${state.screenShareQuality === "360p" ? "selected" : ""}>360p (Düşük)</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin-bottom:12px">
+            <label class="modal-label">Kamera Kalitesi</label>
+            <select class="modal-input" id="settings-camera-quality">
+              <option value="4k" ${state.cameraQuality === "4k" ? "selected" : ""}>4K (Ultra HD)</option>
+              <option value="1080p" ${state.cameraQuality === "1080p" ? "selected" : ""}>1080p (Full HD)</option>
+              <option value="720p" ${state.cameraQuality === "720p" ? "selected" : ""}>720p (HD) - Önerilen</option>
+              <option value="480p" ${state.cameraQuality === "480p" ? "selected" : ""}>480p (SD)</option>
+              <option value="360p" ${state.cameraQuality === "360p" ? "selected" : ""}>360p (Düşük)</option>
+            </select>
+          </div>
           <div class="form-group">
             <label class="modal-label">Kısayollar</label>
             <p class="modal-info" style="margin:2px 0">M — Mikrofon aç/kapat &nbsp;|&nbsp; D — Kulaklık</p>
@@ -3827,7 +3883,15 @@ function showMemberProfile(peerId, username, server) {
 function kickPeer(peerId, username) {
     if (!state.mesh) return;
     state.mesh.broadcast({ type: "force_kick", target: peerId });
-    toast(`${username} sunucudan atıldı.`, "info");
+    
+    // Remove from local state
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (server) {
+        server.members = server.members.filter(m => m.peer_id !== peerId);
+        updateMembersPanel(state.activeServerId);
+    }
+    
+    toast(`${username} sunucudan atıldı. 🚪`, "info");
 }
 
 function voiceDisconnectPeer(peerId, username) {
