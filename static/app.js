@@ -115,6 +115,8 @@ let state = {
     _qsOpen: false,
 };
 
+const ENABLE_SERVER_SYSTEM_CHAT_NOTICES = false;
+
 // ── V16 Helpers ───────────────────────────────────────────────
 const UI = {
     debounce: (fn, delay) => {
@@ -178,8 +180,14 @@ function anyMeshDcOpen(mesh) {
 function meshBroadcastReliable(payload) {
     if (!state.mesh) return;
     const wsOk = state.mesh.ws && state.mesh.ws.readyState === WebSocket.OPEN;
-    if (anyMeshDcOpen(state.mesh)) {
+    const dcOpen = anyMeshDcOpen(state.mesh);
+    if (dcOpen) {
         state.mesh.broadcast(payload);
+        // For chat reliability, also fan out over signaling when available.
+        // saveMessage() deduplicates by message id, so receivers won't double-render.
+        if (payload?.type === "chat" && wsOk && typeof state.mesh.broadcastSignal === "function") {
+            state.mesh.broadcastSignal(payload);
+        }
         return;
     }
     // Fallback: if signaling is up, still deliver small JSON events (chat/presence) via WS.
@@ -666,6 +674,42 @@ function showChannelContextMenu(ev, channel, serverId) {
     }, 10);
 }
 
+function showServerContextMenu(ev, server) {
+    closeContextMenu();
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (!server) return;
+
+    const isOwner = server.ownerId === state.peerId || server.owner_id === state.peerId;
+    const menu = document.createElement("div");
+    menu.className = "ctx-menu ctx-menu--chat";
+    menu.id = "ctx-menu";
+    menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 260)}px`;
+    menu.style.top = `${Math.min(ev.clientY, window.innerHeight - 220)}px`;
+
+    const addItem = (icon, label, action, danger = false) => {
+        const item = document.createElement("div");
+        item.className = "ctx-item" + (danger ? " danger" : "");
+        item.innerHTML = `<span class="ctx-icon">${icon}</span>${label}`;
+        item.onclick = () => { closeContextMenu(); action(); };
+        menu.appendChild(item);
+    };
+
+    const title = document.createElement("div");
+    title.className = "ctx-section";
+    title.textContent = server.name || "Sunucu";
+    menu.appendChild(title);
+
+    if (isOwner) {
+        addItem("🗑️", "Sunucuyu Sil", () => deleteServer(server.id), true);
+    } else {
+        addItem("🚪", "Sunucudan Ayrıl", () => leaveServer(server.id), true);
+    }
+
+    document.body.appendChild(menu);
+    setTimeout(() => document.addEventListener("click", closeContextMenu, { once: true }), 10);
+}
+
 function setReplyTarget(msg) {
     state.replyTo = {
         messageId: msg.id,
@@ -1066,6 +1110,7 @@ function renderServerRail() {
         }
 
         btn.onclick = () => switchToServer(server.id);
+        btn.oncontextmenu = (ev) => showServerContextMenu(ev, server);
         container.appendChild(btn);
     });
 }
@@ -1977,6 +2022,7 @@ function saveMessage(serverId, msg) {
 
     if (!server.messages) server.messages = {};
     if (!server.messages[normalized.channelId]) server.messages[normalized.channelId] = [];
+    if (normalized.id && server.messages[normalized.channelId].some(m => m.id === normalized.id)) return;
     server.messages[normalized.channelId].push(normalized);
 
     const activeCanon = canonicalChannelIdForChat(server, state.activeChannelId);
@@ -2678,14 +2724,32 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         }
     } else if (data.type === "force_kick" && data.target === state.peerId) {
         const server = state.servers.find(s => s.id === roomId);
-        if (server && (server.ownerId === fromPeerId || server.peer_roles?.[fromPeerId] === "admin")) {
+        const canKick = server && (
+            server.ownerId === fromPeerId ||
+            server.peer_roles?.[fromPeerId] === "admin" ||
+            peerAllows(server, fromPeerId, "kick_members", state.activeChannelId || state.voiceChannelId)
+        );
+        if (canKick) {
             if (state.voiceChannelId) leaveVoiceChannel();
             if (state.mesh) { state.mesh.disconnect(); state.mesh = null; }
+            state.servers = state.servers.filter(s => s.id !== roomId);
+            state.activeServerId = null;
+            state.activeChannelId = null;
+            renderServerRail();
+            updateChannelSidebar(null);
+            document.getElementById("home-view")?.classList.remove("hidden");
+            document.getElementById("chat-view")?.classList.add("hidden");
+            document.getElementById("voice-view")?.classList.add("hidden");
             toast("Bir yönetici tarafından sunucudan atıldın. 🚪", "error");
         }
     } else if (data.type === "force_mute" && data.target === state.peerId) {
         const server = state.servers.find(s => s.id === roomId);
-        if (server && (server.ownerId === fromPeerId || server.peer_roles?.[fromPeerId] === "admin" || server.peer_roles?.[fromPeerId] === "mod")) {
+        const canForceDisconnect = server && (
+            server.ownerId === fromPeerId ||
+            server.peer_roles?.[fromPeerId] === "admin" ||
+            peerAllows(server, fromPeerId, "force_disconnect", state.activeChannelId || state.voiceChannelId)
+        );
+        if (canForceDisconnect) {
             if (state.mesh?.localStream) {
                 state.mesh.localStream.getAudioTracks().forEach(t => { t.enabled = false; });
                 state.micMuted = true;
@@ -2695,7 +2759,12 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         }
     } else if (data.type === "force_route" && data.target === state.peerId) {
         const server = state.servers.find(s => s.id === roomId);
-        if (server && (server.ownerId === fromPeerId || server.peer_roles?.[fromPeerId] === "admin" || server.peer_roles?.[fromPeerId] === "mod")) {
+        const canForceDisconnect = server && (
+            server.ownerId === fromPeerId ||
+            server.peer_roles?.[fromPeerId] === "admin" ||
+            peerAllows(server, fromPeerId, "force_disconnect", state.activeChannelId || state.voiceChannelId)
+        );
+        if (canForceDisconnect) {
             toast("Bir yetkili tarafından odan değiştirildi.", "warning");
             if (state.voiceChannelId) leaveVoiceChannel();
             setTimeout(() => joinVoiceChannel(data.targetChannel), SCORD_T().FORCE_ROUTE_VOICE_JOIN_DELAY_MS ?? 200);
@@ -3550,6 +3619,21 @@ function handleMusicCommand(text) {
         toast("Kullanım: /music play <url> | /music stop | /music pause | /music resume", "info");
     }
     return true;
+}
+
+const _voiceRenderTicks = new Map();
+function renderVoiceParticipantsFast(serverId, channelId, reason = "default") {
+    const key = `${serverId}:${channelId}`;
+    const nowMs = performance.now();
+    const prev = _voiceRenderTicks.get(key) || { at: 0, raf: 0 };
+    const minGap = reason === "speaking" ? 90 : 32;
+    if (prev.raf) return;
+    if (nowMs - prev.at < minGap) return;
+    const raf = requestAnimationFrame(() => {
+        _voiceRenderTicks.set(key, { at: performance.now(), raf: 0 });
+        renderVoiceParticipants(serverId, channelId);
+    });
+    _voiceRenderTicks.set(key, { at: prev.at, raf });
 }
 
 function renderVoiceParticipants(serverId, channelId) {
@@ -4441,7 +4525,10 @@ function deleteChatMessage(msg) {
 /* ── Moderation Actions ───────────────────────────────────── */
 function kickPeer(peerId, username) {
     if (!state.mesh) return;
-    state.mesh.broadcast({ type: "force_kick", target: peerId });
+    // Reliable path (DC + WS fallback)
+    meshBroadcastReliable({ type: "force_kick", target: peerId });
+    // Server-routed path for newer moderation flow
+    sendServerEvent({ type: "force_kick", target: peerId });
 
     // Remove from local state
     const server = state.servers.find(s => s.id === state.activeServerId);
@@ -4455,13 +4542,17 @@ function kickPeer(peerId, username) {
 
 function voiceDisconnectPeer(peerId, username) {
     if (!state.mesh) return;
-    state.mesh.broadcast({ type: "voice_force_disconnect", target: peerId });
+    // Legacy event
+    meshBroadcastReliable({ type: "voice_force_disconnect", target: peerId });
+    // Current moderation event
+    sendServerEvent({ type: "force_disconnect", target: peerId, channelId: state.voiceChannelId || state.activeChannelId });
     toast(`${username} ses kanalından çıkarıldı.`, "info");
 }
 
 function forceMutePeer(peerId, username) {
     if (!state.mesh) return;
-    state.mesh.broadcast({ type: "force_mute", target: peerId });
+    meshBroadcastReliable({ type: "force_mute", target: peerId });
+    sendServerEvent({ type: "force_mute", target: peerId, channelId: state.voiceChannelId || state.activeChannelId });
     toast(`${username} sessize alındı.`, "info");
 }
 
@@ -5134,6 +5225,7 @@ function ensureDMMainView() {
           </button>
           <button type="button" class="dm-close-btn" id="dm-main-close-btn" title="Sohbeti kapat">x</button>
         </div>
+        <div id="dm-call-strip" class="dm-call-strip hidden"></div>
         <div class="dm-body" id="dm-main-messages-area"></div>
         <div class="dm-input-area">
           <textarea id="dm-main-input" rows="1" placeholder="Mesaj yaz..." maxlength="2000" autocomplete="off"></textarea>
@@ -5175,6 +5267,7 @@ function showDMMainView(peerId, name, avatarColor, avatarImage) {
     const input = document.getElementById("dm-main-input");
     if (input) input.placeholder = `@${peer.name} mesaj gonder`;
     renderDMMainSearch();
+    renderDMCallStrip();
     renderHomeSidebar();
 }
 
@@ -5186,6 +5279,70 @@ function hideDMMainView(clearActive = false) {
     if (clearActive) state.activeDM = null;
     if (!state.activeServerId) renderHomeSidebar();
 }
+
+function renderDMCallStrip() {
+    const strip = document.getElementById("dm-call-strip");
+    if (!strip) return;
+    const call = state.directCall;
+    const isRelated = !!(call && state.activeDM && (call.peerId === state.activeDM || call.fromId === state.activeDM));
+    if (!isRelated) {
+        strip.classList.add("hidden");
+        strip.innerHTML = "";
+        return;
+    }
+
+    const participants = Array.from(new Set([...(call.participants || []), state.peerId]));
+    const labels = participants.slice(0, 4).map(pid => getPeerDisplay(pid)?.name || (pid === state.peerId ? state.username : "Kullanici"));
+    const more = participants.length > 4 ? ` +${participants.length - 4}` : "";
+    strip.classList.remove("hidden");
+    strip.innerHTML = `
+      <div class="dm-call-strip-copy">
+        <strong>${call.status === "active" ? "Ozel arama aktif" : "Ozel arama"}</strong>
+        <span>${escapeHtml(labels.join(", "))}${more}</span>
+      </div>
+      <div class="dm-call-strip-actions">
+        <button type="button" class="dm-call-strip-btn" id="dm-call-strip-join">${state.voiceChannelId === call.channelId ? "Konusmadasin" : "Katil"}</button>
+        <button type="button" class="dm-call-strip-btn" id="dm-call-strip-add">Kisi Ekle</button>
+        <button type="button" class="dm-call-strip-btn danger" id="dm-call-strip-end">Bitir</button>
+      </div>`;
+
+    strip.querySelector("#dm-call-strip-join")?.addEventListener("click", () => openDirectCallView(call));
+    strip.querySelector("#dm-call-strip-end")?.addEventListener("click", () => endDirectCall());
+    strip.querySelector("#dm-call-strip-add")?.addEventListener("click", () => openDirectCallAddMemberModal());
+}
+
+function invitePeerToDirectCall(peerId) {
+    const call = state.directCall;
+    const server = currentServer();
+    if (!call || !server || !peerId || peerId === state.peerId) return;
+    const participants = Array.from(new Set([...(call.participants || []), state.peerId, peerId]));
+    state.directCall = { ...call, participants };
+    const payload = {
+        ...state.directCall,
+        fromId: state.peerId,
+        fromName: state.username,
+        fromAvatarColor: state.avatarColor,
+        fromAvatarImage: state.avatarImage,
+    };
+    sendServerEvent({ type: "dm_call_offer", target: peerId, call: payload });
+    toast("Aramaya davet gonderildi.", "info");
+    renderDMCallStrip();
+}
+
+function openDirectCallAddMemberModal() {
+    const call = state.directCall;
+    const server = currentServer();
+    if (!call || !server) return;
+    const participants = new Set([...(call.participants || []), state.peerId]);
+    const candidates = (server.members || []).filter(m => m.peer_id && !participants.has(m.peer_id));
+    if (!candidates.length) {
+        toast("Eklenebilecek uye kalmadi.", "info");
+        return;
+    }
+    const rows = candidates.map(m => `<button class="ctx-item" style="width:100%;text-align:left" onclick="invitePeerToDirectCall('${m.peer_id}'); hideModal();"><span class="ctx-icon">+</span>${escapeHtml(m.username || "Kullanici")}</button>`).join("");
+    showModal("Konusmaya Kisi Ekle", `<div style="display:flex;flex-direction:column;gap:8px;max-height:280px;overflow:auto">${rows}</div>`, `<button class="btn-secondary" onclick="hideModal()">Kapat</button>`);
+}
+window.invitePeerToDirectCall = invitePeerToDirectCall;
 
 function renderDMMainSearch() {
     const actions = document.getElementById("dm-main-top-actions");
@@ -7865,6 +8022,19 @@ function roleAllows(server, permission, channelId) {
     return allowed;
 }
 
+function peerAllows(server, peerId, permission, channelId) {
+    if (!server || !peerId) return false;
+    if (server.ownerId === peerId || server.owner_id === peerId) return true;
+    const roleId = server.peer_roles?.[peerId] || "member";
+    const role = server.roles?.[roleId] || server.roles?.member || {};
+    let allowed = !!role.permissions?.[permission];
+    const overrides = server.channel_permissions?.[channelId];
+    const roleOverride = overrides?.[roleId] || overrides?.member;
+    if (roleOverride?.deny?.includes(permission)) allowed = false;
+    if (roleOverride?.allow?.includes(permission)) allowed = true;
+    return allowed;
+}
+
 const _v21JoinVoiceChannel = window.joinVoiceChannel || joinVoiceChannel;
 joinVoiceChannel = window.joinVoiceChannel = async function (channelId) {
     const server = currentServer();
@@ -8642,6 +8812,7 @@ function openDirectCallView(call = state.directCall) {
     state.activeServerId = server.id;
     ensureDirectCallChannel(server, call.channelId, call.peerName || call.fromName);
     showVoiceView(server.id, call.channelId);
+    renderDMCallStrip();
 }
 
 function showDirectCallPanel(mode, call) {
@@ -8711,11 +8882,13 @@ function startDirectCall(peerId) {
         fromAvatarColor: state.avatarColor,
         fromAvatarImage: state.avatarImage,
         status: "ringing",
+        participants: [state.peerId, peerId],
     };
     state.directCall = call;
     sendServerEvent({ type: "dm_call_offer", target: peerId, call });
     startDirectCallTone("ringing");
     showDirectCallPanel("ringing", call);
+    renderDMCallStrip();
     toast(`${peer.name} araniyor...`, "info");
 }
 
@@ -8726,7 +8899,7 @@ async function acceptDirectCall(callId) {
     if (!server) return;
     state.activeServerId = server.id;
     ensureDirectCallChannel(server, call.channelId, call.peerName || call.fromName);
-    state.directCall = { ...call, status: "active", peerId: call.fromId, peerName: call.fromName };
+    state.directCall = { ...call, status: "active", peerId: call.fromId, peerName: call.fromName, participants: Array.from(new Set([...(call.participants || []), state.peerId, call.fromId])) };
     sendServerEvent({ type: "dm_call_answer", target: call.fromId, callId: call.callId, accepted: true, channelId: call.channelId });
     stopDirectCallTone();
     showDirectCallPanel("active", state.directCall);
@@ -8752,11 +8925,17 @@ function endDirectCall(notify = true) {
     stopDirectCallTone();
     removeDirectCallPanel();
     if (wasInCallChannel) leaveVoiceChannel();
+    renderDMCallStrip();
 }
 
 async function handleDirectCallEvent(msg) {
     if (msg.type === "dm_call_offer") {
         const call = msg.call || {};
+        if (state.directCall?.callId === call.callId) {
+            state.directCall = { ...state.directCall, participants: Array.from(new Set([...(state.directCall.participants || []), ...(call.participants || []), msg.from])) };
+            renderDMCallStrip();
+            return;
+        }
         if (state.directCall?.status === "active" || state.directCall?.status === "ringing" || state.directCall?.status === "incoming") {
             sendServerEvent({ type: "dm_call_answer", target: msg.from, callId: call.callId, accepted: false, busy: true });
             return;
@@ -8769,6 +8948,7 @@ async function handleDirectCallEvent(msg) {
             peerId: msg.from,
             peerName: call.fromName || from.name,
             status: "incoming",
+            participants: Array.from(new Set([...(call.participants || []), state.peerId, msg.from])),
         };
         startDirectCallTone("incoming");
         showDirectCallPanel("incoming", state.directCall);
@@ -8792,7 +8972,10 @@ async function handleDirectCallEvent(msg) {
         state.directCall = { ...call, channelId: msg.channelId || call.channelId, status: "active" };
         stopDirectCallTone();
         showDirectCallPanel("active", state.directCall);
-        await joinVoiceChannel(state.directCall.channelId);
+        if (state.voiceChannelId !== state.directCall.channelId) {
+            await joinVoiceChannel(state.directCall.channelId);
+        }
+        renderDMCallStrip();
         return;
     }
     if (msg.type === "dm_call_end") {
@@ -8805,6 +8988,7 @@ async function handleDirectCallEvent(msg) {
         if (wasInCallChannel) leaveVoiceChannel();
         toast("Arama kapatildi.", "info");
     }
+    renderDMCallStrip();
 }
 
 const _v23HandleAuthoritativeServerEvent = window.handleAuthoritativeServerEvent || handleAuthoritativeServerEvent;
@@ -8880,6 +9064,7 @@ function firstTextChannelId(server) {
 }
 
 function addServerSystemMessage(serverId, text, channelId = null) {
+    if (!ENABLE_SERVER_SYSTEM_CHAT_NOTICES) return;
     const server = state.servers.find(s => s.id === serverId);
     const ch = channelId || firstTextChannelId(server);
     if (!server || !ch || !text) return;
