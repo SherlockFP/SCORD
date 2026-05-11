@@ -47,7 +47,7 @@ let state = {
     avatarColor: "#7c3aed",
     avatarImage: null,
     appBackground: null,
-    voiceSettings: { micId: "default", volume: 1, filter: "none", noiseSuppression: true, echoCancellation: true, autoGainControl: false, gateThreshold: 12, gateAttack: 0.012, gateRelease: 0.09 },
+    voiceSettings: { micId: "default", volume: 1, filter: "none", noiseSuppression: true, echoCancellation: false, autoGainControl: false, gateThreshold: 8, gateAttack: 0.008, gateRelease: 0.05 },
     screenShareQuality: "720p",
     cameraQuality: "720p",
     roomCreatedAt: {}, // roomId -> timestamp
@@ -248,7 +248,9 @@ function clearMeshHealthPoll() {
 function startMeshHealthPoll() {
     clearMeshHealthPoll();
     state._meshHealthTimer = setInterval(() => {
-        if (state.mesh) refreshConnectionBadge();
+        requestAnimationFrame(() => {
+            if (state.mesh) refreshConnectionBadge();
+        });
     }, 2000);
 }
 
@@ -298,14 +300,23 @@ function maybeOfferP2PTroubleshoot(wsOk, dcOpen) {
     showModal("Bağlantı Sorunu", body, footer);
 }
 
+let _refreshConnectionBadgeTimeout = null;
 function refreshConnectionBadge() {
+    // Debounce to prevent excessive DOM updates
+    if (_refreshConnectionBadgeTimeout) {
+        clearTimeout(_refreshConnectionBadgeTimeout);
+    }
+    
+    _refreshConnectionBadgeTimeout = setTimeout(() => {
+        _refreshConnectionBadgeImpl();
+    }, 16); // ~60fps
+}
+
+function _refreshConnectionBadgeImpl() {
     const chatEl = document.getElementById("connection-badge");
     const voiceEl = document.getElementById("voice-connection-badge");
     const apply = (el) => {
         if (!el) return;
-        el.textContent = "";
-        el.className = el.id === "voice-connection-badge" ? "connection-badge connection-badge--voice" : "connection-badge";
-        return;
         const m = state.mesh;
         if (!m) {
             el.textContent = "";
@@ -483,7 +494,11 @@ function startRttPingTimer() {
     clearRttPingTimer();
     const ms = SCORD_T().RTT_PING_INTERVAL_MS ?? 4000;
     sendPeerLatencyPings();
-    state._rttPingTimer = setInterval(sendPeerLatencyPings, ms);
+    state._rttPingTimer = setInterval(() => {
+        requestAnimationFrame(() => {
+            sendPeerLatencyPings();
+        });
+    }, ms);
 }
 
 function applyAvatarToElement(el, color, image, name) {
@@ -1093,7 +1108,27 @@ function handleReactionRemove(data) {
     renderMessageReactions(serverId, channelId, messageId);
 }
 
+let _renderMessageReactionsTimeouts = {};
 function renderMessageReactions(serverId, channelId, messageId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    const key = `${channelId}-${messageId}`;
+    const reactions = server.reactions?.[key];
+    if (!reactions) return;
+    
+    // Debounce per message to prevent excessive DOM updates
+    if (_renderMessageReactionsTimeouts[key]) {
+        clearTimeout(_renderMessageReactionsTimeouts[key]);
+    }
+    
+    _renderMessageReactionsTimeouts[key] = setTimeout(() => {
+        _renderMessageReactionsImpl(serverId, channelId, messageId);
+        delete _renderMessageReactionsTimeouts[key];
+    }, 16); // ~60fps
+}
+
+function _renderMessageReactionsImpl(serverId, channelId, messageId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
     
@@ -2220,17 +2255,30 @@ let searchState = {
 };
 
 function showChatView(serverId, channelId) {
+    console.log("[ChatView] Showing chat for server:", serverId, "channel:", channelId);
+    
     closeMobileNav();
     hideDMMainView(false);
+    
     const server = state.servers.find(s => s.id === serverId);
     if (!server) {
-        console.warn("[App] showChatView: Server not found:", serverId);
+        console.error("[ChatView] Server not found:", serverId);
+        toast("Sunucu bulunamadı.", "error");
         return;
     }
+    
     const channel = server.channels.find(c => c.id === channelId);
     if (!channel) {
-        console.warn("[App] showChatView: Channel not found:", channelId);
-        return;
+        console.error("[ChatView] Channel not found:", channelId);
+        // Try to find first text channel as fallback
+        const firstText = server.channels.find(c => c.type === "text");
+        if (firstText) {
+            console.log("[ChatView] Using fallback channel:", firstText.id);
+            channelId = firstText.id;
+        } else {
+            toast("Kanal bulunamadı.", "error");
+            return;
+        }
     }
 
     const wasInVoice = !!state.voiceChannelId;
@@ -2242,9 +2290,20 @@ function showChatView(serverId, channelId) {
     renderMembersPanel(serverId);
     applyChannelBackground(serverId, channelId);
 
-    document.getElementById("home-view").classList.add("hidden");
-    document.getElementById("chat-view").classList.remove("hidden");
-    document.getElementById("voice-view").classList.add("hidden");
+    // Ensure chat view is visible
+    const homeView = document.getElementById("home-view");
+    const chatView = document.getElementById("chat-view");
+    const voiceView = document.getElementById("voice-view");
+    
+    if (homeView) homeView.classList.add("hidden");
+    if (chatView) chatView.classList.remove("hidden");
+    if (voiceView) voiceView.classList.add("hidden");
+
+    // Update channel name in header
+    const channelNameEl = document.getElementById("active-channel-name");
+    const chatChannelNameEl = document.getElementById("chat-channel-name");
+    if (channelNameEl) channelNameEl.textContent = channel.name;
+    if (chatChannelNameEl) chatChannelNameEl.textContent = channel.name;
 
     // Auto-focus chat input
     setTimeout(() => document.getElementById("chat-input")?.focus(), 100);
@@ -2253,6 +2312,8 @@ function showChatView(serverId, channelId) {
     if (wasInVoice && channel.type === "voice") {
         showVoiceView(serverId, channelId);
     }
+    
+    console.log("[ChatView] Chat view displayed successfully");
 }
 
 function showVoiceView(serverId, channelId) {
@@ -2291,8 +2352,21 @@ function showVoiceView(serverId, channelId) {
 }
 
 /* ── Server rail ──────────────────────────────────────────── */
+let _renderServerRailTimeout = null;
 function renderServerRail() {
+    // Debounce to prevent excessive re-renders
+    if (_renderServerRailTimeout) {
+        clearTimeout(_renderServerRailTimeout);
+    }
+    
+    _renderServerRailTimeout = setTimeout(() => {
+        _renderServerRailImpl();
+    }, 16); // ~60fps
+}
+
+function _renderServerRailImpl() {
     const container = document.getElementById("server-icons");
+    if (!container) return;
     container.innerHTML = "";
     state.servers.forEach(server => {
         const btn = document.createElement("button");
@@ -2499,10 +2573,26 @@ function stopCameraShare() {
     }
 }
 
+let _updateChannelSidebarTimeout = null;
 function updateChannelSidebar(serverId) {
     console.log("[Sidebar] Updating for server:", serverId);
+    
+    // Debounce to prevent excessive re-renders
+    if (_updateChannelSidebarTimeout) {
+        clearTimeout(_updateChannelSidebarTimeout);
+    }
+    
+    _updateChannelSidebarTimeout = setTimeout(() => {
+        _updateChannelSidebarImpl(serverId);
+    }, 16); // ~60fps
+}
+
+function _updateChannelSidebarImpl(serverId) {
     const list = document.getElementById("channel-list");
-    if (!list) return console.error("[Sidebar] channel-list not found!");
+    if (!list) {
+        console.error("[Sidebar] channel-list element not found!");
+        return;
+    }
 
     list.innerHTML = "";
     if (!serverId) {
@@ -2510,9 +2600,11 @@ function updateChannelSidebar(serverId) {
         renderHomeSidebar();
         return;
     }
+    
     const server = state.servers.find(s => s.id === serverId);
     if (!server) {
-        console.warn("[Sidebar] Server not found in state:", serverId);
+        console.error("[Sidebar] Server not found in state:", serverId);
+        list.innerHTML = '<div class="channel-category">SUNUCU BULUNAMADI</div>';
         return;
     }
 
@@ -2725,7 +2817,21 @@ function createChannelItem(channel, serverId) {
 }
 
 /* ── Members panel ────────────────────────────────────────── */
+let _updateMembersPanelTimeout = null;
 function updateMembersPanel(serverId) {
+    console.log("[Members] Updating panel for server:", serverId);
+    
+    // Debounce to prevent excessive re-renders
+    if (_updateMembersPanelTimeout) {
+        clearTimeout(_updateMembersPanelTimeout);
+    }
+    
+    _updateMembersPanelTimeout = setTimeout(() => {
+        _updateMembersPanelImpl(serverId);
+    }, 16); // ~60fps
+}
+
+function _updateMembersPanelImpl(serverId) {
     const server = state.servers.find(s => s.id === serverId);
     const lists = [
         document.getElementById("members-list"),
@@ -2735,8 +2841,21 @@ function updateMembersPanel(serverId) {
         document.getElementById("member-count"),
         document.getElementById("voice-member-count")
     ].filter(c => c);
+    
     lists.forEach(l => l.innerHTML = "");
-    if (!server) return;
+    
+    if (!server) {
+        console.error("[Members] Server not found:", serverId);
+        lists.forEach(list => {
+            if (list) {
+                list.innerHTML = '<div class="member-role-cat">Sunucu bulunamadı</div>';
+            }
+        });
+        counts.forEach(count => {
+            if (count) count.textContent = "0";
+        });
+        return;
+    }
 
     const members = server.members || [];
     const roles = server.roles || {};
@@ -2844,10 +2963,40 @@ function updatePeerCountBadge(serverId) {
 }
 
 /* ── Messages ─────────────────────────────────────────────── */
+let _renderMessagesTimeout = null;
 function renderMessages(serverId, channelId) {
+    console.log("[Messages] Rendering for server:", serverId, "channel:", channelId);
+    
+    // Debounce to prevent excessive re-renders
+    if (_renderMessagesTimeout) {
+        clearTimeout(_renderMessagesTimeout);
+    }
+    
+    _renderMessagesTimeout = setTimeout(() => {
+        _renderMessagesImpl(serverId, channelId);
+    }, 16); // ~60fps
+}
+
+function _renderMessagesImpl(serverId, channelId) {
     const server = state.servers.find(s => s.id === serverId);
     const area = document.getElementById("messages-area");
-    const cid = server ? canonicalChannelIdForChat(server, channelId) : channelId;
+    
+    if (!area) {
+        console.error("[Messages] messages-area element not found!");
+        return;
+    }
+    
+    if (!server) {
+        console.error("[Messages] Server not found:", serverId);
+        area.innerHTML = `<div class="messages-welcome">
+            <div class="messages-welcome-icon">❌</div>
+            <h3>Sunucu bulunamadı</h3>
+            <p>Bu sunucu mevcut değil veya erişim izniniz yok.</p>
+        </div>`;
+        return;
+    }
+    
+    const cid = canonicalChannelIdForChat(server, channelId);
     const all = server?.messages?.[cid] || [];
     const loadWrap = document.getElementById("messages-load-more-wrap");
     const loadBtn = document.getElementById("messages-load-more-btn");
@@ -3356,18 +3505,25 @@ function mergeMessageHistoryIntoServer(server, incoming) {
     });
 }
 
-/* ── Server creation ──────────────────────────────────────── */
 async function createServer(name) {
-    // POST to signaling server to register the room
+    console.log("[Create] Creating server:", name);
+    
     const res = await scordFetch(`${API_BASE}/rooms`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, owner_id: state.peerId }),
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+        console.error("[Create] Failed to create server:", res.status);
+        toast("Sunucu oluşturulamadı.", "error");
+        return;
+    }
+    
     const created = await res.json();
     const room_id = created.room_id;
     const inviteCode = created.invite_code || "";
+    
+    console.log("[Create] Server created:", room_id);
 
     const server = {
         id: room_id,
@@ -3397,6 +3553,9 @@ async function createServer(name) {
         voiceSessionHost: {},
         channel_backgrounds: {},
     };
+
+    // Save to storage for persistence
+    saveServerToStorage(server);
 
     state.servers.push(server);
     renderServerRail();
@@ -3455,14 +3614,21 @@ async function submitAddChannel(serverId, type) {
 
 /* ── Join existing server ─────────────────────────────────── */
 async function joinServer(roomId) {
+    console.log("[Join] Joining server:", roomId);
+    
     // Check room exists
     const rooms = await fetch(`${API_BASE}/rooms`).then(r => r.json());
     const room = rooms.find(r => r.room_id === roomId);
-    if (!room) { toast("Sunucu bulunamadı.", "error"); return; }
+    if (!room) { 
+        console.error("[Join] Room not found:", roomId);
+        toast("Sunucu bulunamadı.", "error"); 
+        return; 
+    }
 
     // Check not already joined
     if (state.servers.find(s => s.id === roomId)) {
-        toast("Zaten bu sunucudasın.", "info");
+        console.log("[Join] Already joined, switching to server");
+        switchToServer(roomId);
         return;
     }
 
@@ -3504,11 +3670,18 @@ async function joinServer(roomId) {
         channel_backgrounds: room.channel_backgrounds || {},
     };
 
+    // Save to storage for persistence
+    saveServerToStorage(server);
+
     state.servers.push(server);
     renderServerRail();
     connectToRoom(roomId);
     const firstText = server.channels.find(c => c.type === "text");
-    showChatView(server.id, firstText ? firstText.id : server.channels[0].id);
+    if (firstText) {
+        showChatView(server.id, firstText.id);
+    } else {
+        showChatView(server.id, server.channels[0].id);
+    }
     toast(`"${room.name}" sunucusuna katıldın! 👋`, "success");
 }
 
@@ -4448,40 +4621,42 @@ async function joinVoiceChannel(channelId) {
 
         // Start Volume Loop
         state._speakingLoop = setInterval(() => {
-            const data = new Uint8Array(analyser.frequencyBinCount);
-            analyser.getByteFrequencyData(data);
-            const sum = data.reduce((a, b) => a + b, 0);
-            const avg = sum / data.length;
-            const threshold = Number(state.voiceSettings?.gateThreshold ?? 12);
-            const isSpeakingNow = avg > threshold;
+            requestAnimationFrame(() => {
+                const data = new Uint8Array(analyser.frequencyBinCount);
+                analyser.getByteFrequencyData(data);
+                const sum = data.reduce((a, b) => a + b, 0);
+                const avg = sum / data.length;
+                const threshold = Number(state.voiceSettings?.gateThreshold ?? 12);
+                const isSpeakingNow = avg > threshold;
 
-            // Debounce / Hysteresis
-            if (isSpeakingNow) {
-                state._lastSpeakTime = Date.now();
-            }
-
-            const holdMs = SCORD_T().VOICE_SPEAKING_HOLD_MS ?? 250;
-            const isSpeaking = (Date.now() - (state._lastSpeakTime || 0)) < holdMs;
-            const targetGain = isSpeaking || state.voiceSettings?.inputMode === "ptt" ? 1 : 0;
-            try {
-                const nowAudio = state.audioCtx.currentTime;
-                const release = Number(state.voiceSettings?.gateRelease ?? 0.09);
-                const attack = Number(state.voiceSettings?.gateAttack ?? 0.012);
-                gateNode.gain.cancelScheduledValues(nowAudio);
-                gateNode.gain.setTargetAtTime(targetGain, nowAudio, targetGain ? attack : release);
-            } catch { gateNode.gain.value = targetGain; }
-
-            if (isSpeaking !== state.isSpeaking) {
-                state.isSpeaking = isSpeaking;
-                if (state.mesh) {
-                    state.mesh.broadcast({
-                        type: "voice_status",
-                        speaking: isSpeaking,
-                        channelId: state.voiceChannelId,
-                    });
+                // Debounce / Hysteresis
+                if (isSpeakingNow) {
+                    state._lastSpeakTime = Date.now();
                 }
-                updateVoiceSpeakingUi(state.peerId, isSpeaking, state.voiceChannelId);
-            }
+
+                const holdMs = SCORD_T().VOICE_SPEAKING_HOLD_MS ?? 250;
+                const isSpeaking = (Date.now() - (state._lastSpeakTime || 0)) < holdMs;
+                const targetGain = isSpeaking || state.voiceSettings?.inputMode === "ptt" ? 1 : 0;
+                try {
+                    const nowAudio = state.audioCtx.currentTime;
+                    const release = Number(state.voiceSettings?.gateRelease ?? 0.09);
+                    const attack = Number(state.voiceSettings?.gateAttack ?? 0.012);
+                    gateNode.gain.cancelScheduledValues(nowAudio);
+                    gateNode.gain.setTargetAtTime(targetGain, nowAudio, targetGain ? attack : release);
+                } catch { gateNode.gain.value = targetGain; }
+
+                if (isSpeaking !== state.isSpeaking) {
+                    state.isSpeaking = isSpeaking;
+                    if (state.mesh) {
+                        state.mesh.broadcast({
+                            type: "voice_status",
+                            speaking: isSpeaking,
+                            channelId: state.voiceChannelId,
+                        });
+                    }
+                    updateVoiceSpeakingUi(state.peerId, isSpeaking, state.voiceChannelId);
+                }
+            });
         }, SCORD_T().VOICE_SPEAKING_POLL_MS ?? 100);
     } catch (err) {
         console.error("Audio error", err);
@@ -5168,8 +5343,23 @@ function renderVoiceParticipants(serverId, channelId) {
     updateVoiceSessionMeta();
 }
 
+let _updateVoiceSpeakingUiTimeouts = {};
 function updateVoiceSpeakingUi(peerId, isSpeaking, channelId = state.voiceChannelId || state.activeChannelId) {
     if (!peerId) return;
+    
+    // Debounce per peer to prevent excessive DOM updates
+    const key = `${peerId}_${isSpeaking}`;
+    if (_updateVoiceSpeakingUiTimeouts[key]) {
+        clearTimeout(_updateVoiceSpeakingUiTimeouts[key]);
+    }
+    
+    _updateVoiceSpeakingUiTimeouts[key] = setTimeout(() => {
+        _updateVoiceSpeakingUiImpl(peerId, isSpeaking, channelId);
+        delete _updateVoiceSpeakingUiTimeouts[key];
+    }, 16); // ~60fps
+}
+
+function _updateVoiceSpeakingUiImpl(peerId, isSpeaking, channelId) {
     const card = document.querySelector(`.voice-participant-card[data-peer-id="${CSS.escape(peerId)}"]`);
     const avatar = card?.querySelector(".vpc-avatar");
     card?.classList.toggle("speaking", !!isSpeaking);
@@ -8172,7 +8362,19 @@ function clearUnread(channelId) {
     updateUnreadBadges();
 }
 
+let _updateUnreadBadgesTimeout = null;
 function updateUnreadBadges() {
+    // Debounce to prevent excessive DOM updates
+    if (_updateUnreadBadgesTimeout) {
+        clearTimeout(_updateUnreadBadgesTimeout);
+    }
+    
+    _updateUnreadBadgesTimeout = setTimeout(() => {
+        _updateUnreadBadgesImpl();
+    }, 16); // ~60fps
+}
+
+function _updateUnreadBadgesImpl() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
     server.channels?.forEach(ch => {
@@ -8206,24 +8408,37 @@ function clearTypingIndicator() {
     if (el) el.textContent = "";
 }
 
+let _handleTypingMessageTimeout = null;
 function handleTypingMessage(fromPeerId, username, channelId) {
     if (channelId !== state.activeChannelId) return;
     if (!state.typingPeers) state.typingPeers = {};
     state.typingPeers[fromPeerId] = username;
-    const names = Object.values(state.typingPeers);
-    const el = document.getElementById("typing-indicator");
-    if (el && names.length > 0) {
-        el.textContent = names.join(", ") + (names.length === 1 ? " yazıyor..." : " yazıyorlar...");
+    
+    // Debounce to prevent excessive DOM updates
+    if (_handleTypingMessageTimeout) {
+        clearTimeout(_handleTypingMessageTimeout);
     }
+    
+    _handleTypingMessageTimeout = setTimeout(() => {
+        _handleTypingMessageImpl();
+    }, 16); // ~60fps
+    
     clearTimeout(state._typingTimers?.[fromPeerId]);
     if (!state._typingTimers) state._typingTimers = {};
     state._typingTimers[fromPeerId] = setTimeout(() => {
         delete state.typingPeers[fromPeerId];
-        handleTypingMessage = () => { };  // avoid recursion
-        const remaining = Object.values(state.typingPeers);
-        const el2 = document.getElementById("typing-indicator");
-        if (el2) el2.textContent = remaining.length ? remaining.join(", ") + " yazıyor..." : "";
+        _handleTypingMessageImpl();
     }, SCORD_T().TYPING_INDICATOR_CLEAR_MS ?? 4000);
+}
+
+function _handleTypingMessageImpl() {
+    const names = Object.values(state.typingPeers);
+    const el = document.getElementById("typing-indicator");
+    if (el && names.length > 0) {
+        el.textContent = names.join(", ") + (names.length === 1 ? " yazıyor..." : " yazıyorlar...");
+    } else if (el) {
+        el.textContent = "";
+    }
 }
 
 /*  Message reactions  */
@@ -8328,24 +8543,95 @@ function initStatusSelector() {
     };
 }
 
+/* Server persistence functions */
+function saveServerToStorage(server) {
+    try {
+        const savedServers = loadServersFromStorage();
+        const existingIndex = savedServers.findIndex(s => s.id === server.id);
+        
+        const serverToSave = {
+            id: server.id,
+            name: server.name,
+            ownerId: server.ownerId,
+            inviteCode: server.inviteCode,
+            icon_url: server.icon_url,
+            channels: server.channels,
+            roles: server.roles,
+            peer_roles: server.peer_roles,
+            channel_backgrounds: server.channel_backgrounds,
+            lastJoined: Date.now()
+        };
+        
+        if (existingIndex !== -1) {
+            savedServers[existingIndex] = serverToSave;
+        } else {
+            savedServers.push(serverToSave);
+        }
+        
+        // Keep only last 50 servers
+        if (savedServers.length > 50) {
+            savedServers.splice(0, savedServers.length - 50);
+        }
+        
+        localStorage.setItem('scord_saved_servers', JSON.stringify(savedServers));
+        console.log("[Storage] Server saved:", server.name);
+    } catch (e) {
+        console.error("[Storage] Failed to save server:", e);
+    }
+}
+
+function loadServersFromStorage() {
+    try {
+        const saved = localStorage.getItem('scord_saved_servers');
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        console.error("[Storage] Failed to load servers:", e);
+        return [];
+    }
+}
+
+function removeServerFromStorage(serverId) {
+    try {
+        const savedServers = loadServersFromStorage();
+        const filtered = savedServers.filter(s => s.id !== serverId);
+        localStorage.setItem('scord_saved_servers', JSON.stringify(filtered));
+        console.log("[Storage] Server removed:", serverId);
+    } catch (e) {
+        console.error("[Storage] Failed to remove server:", e);
+    }
+}
+
 /*  Invite code: copy & join  */
 async function joinByInviteCode(code) {
+    console.log("[Invite] Joining by code:", code);
+    
     if (!code || code.trim().length < 4) return toast("Geçersiz davet kodu.", "error");
     code = code.trim().toUpperCase();
+    
     try {
         const res = await scordFetch(`/api/rooms/join/${code}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.error || !data.room_id) {
+        if (!res.ok) {
+            console.error("[Invite] Failed to join:", res.status);
             toast("Geçersiz veya süresi dolmuş davet kodu.", "error");
             return;
         }
+        
+        const data = await res.json();
+        console.log("[Invite] Response data:", data);
+        
+        if (data.error || !data.room_id) {
+            console.error("[Invite] Error in response:", data.error);
+            toast("Geçersiz veya süresi dolmuş davet kodu.", "error");
+            return;
+        }
+        
         const peerList = (data.peers || []).map(p => ({
             peer_id: p.peer_id,
             username: p.username,
             avatar_color: p.avatar_color,
             avatar_image: p.avatar_image ?? null,
         }));
+        
         if (!peerList.some(m => m.peer_id === state.peerId)) {
             peerList.push({
                 peer_id: state.peerId,
@@ -8354,6 +8640,7 @@ async function joinByInviteCode(code) {
                 avatar_image: state.avatarImage,
             });
         }
+        
         const server = {
             id: data.room_id,
             name: data.name,
@@ -8371,8 +8658,13 @@ async function joinByInviteCode(code) {
             unread: {},
             channel_backgrounds: data.channel_backgrounds || {},
         };
+        
+        // Save server to localStorage for persistence
+        saveServerToStorage(server);
+        
         const dupIdx = state.servers.findIndex(s => s.id === server.id);
         if (dupIdx !== -1) {
+            console.log("[Invite] Updating existing server");
             const prev = state.servers[dupIdx];
             state.servers[dupIdx] = {
                 ...prev,
@@ -8381,13 +8673,15 @@ async function joinByInviteCode(code) {
                 voiceSessionHost: prev.voiceSessionHost || {},
             };
         } else {
+            console.log("[Invite] Adding new server");
             state.servers.push(server);
         }
+        
         renderServerRail();
         switchToServer(server.id);
         toast(`"${server.name}" sunucusuna katıldın!`, "success");
     } catch (err) {
-        console.error("Invite join failed", err);
+        console.error("[Invite] Join failed:", err);
         toast("Sunucuya bağlanırken hata oluştu.", "error");
     }
 }
@@ -8460,10 +8754,17 @@ async function joinDiscoveryRoom(roomId, inviteCode) {
 }
 
 function switchToServer(serverId) {
+    console.log("[Switch] Switching to server:", serverId);
+    
     const server = state.servers.find(s => s.id === serverId);
-    if (!server) return;
+    if (!server) {
+        console.error("[Switch] Server not found:", serverId);
+        toast("Sunucu bulunamadı.", "error");
+        return;
+    }
 
     if (serverId === state.activeServerId && state.mesh && state.mesh.roomId === serverId) {
+        console.log("[Switch] Already on this server, showing chat view");
         const firstText = server.channels?.find(c => c.type === "text");
         if (firstText) showChatView(serverId, firstText.id);
         updateChannelSidebar(serverId);
@@ -8480,16 +8781,18 @@ function switchToServer(serverId) {
     const previousVoiceChannelId = state.voiceChannelId;
     const previousServerId = state.activeServerId;
 
-    // Don't leave voice channel when switching servers - allow cross-server voice
-    // if (state.voiceChannelId) {
-    //     try { leaveVoiceChannel(); } catch (e) { /* noop */ }
-    // }
-
+    console.log("[Switch] Connecting to mesh and showing chat");
     state.activeServerId = serverId;
     connectMesh(serverId);
     const firstText = server.channels?.find(c => c.type === "text");
     if (firstText) {
         showChatView(serverId, firstText.id);
+    } else {
+        // Fallback to first channel if no text channel
+        const firstChannel = server.channels?.[0];
+        if (firstChannel) {
+            showChatView(serverId, firstChannel.id);
+        }
     }
     updateChannelSidebar(serverId);
     updateMembersPanel(serverId);
@@ -10323,7 +10626,7 @@ openSettingsModal = window.openSettingsModal = function () {
             <label class="scord-check"><input type="checkbox" id="settings-noise-suppress" ${vs.noiseSuppression !== false ? "checked" : ""}> Gurultu engelleme</label>
             <label class="scord-check"><input type="checkbox" id="settings-echo-cancel" ${vs.echoCancellation !== false ? "checked" : ""}> Yanki engelleme</label>
             <label class="scord-check"><input type="checkbox" id="settings-auto-gain" ${vs.autoGainControl === true ? "checked" : ""}> Otomatik seviye dengeleme</label>
-            <label>Voice gate esigi <span id="gate-label">${vs.gateThreshold ?? 12}</span><input type="range" id="settings-gate-threshold" min="5" max="60" step="1" value="${vs.gateThreshold ?? 12}" oninput="document.getElementById('gate-label').textContent=this.value"></label>
+            <label>Voice gate esigi <span id="gate-label">${vs.gateThreshold ?? 8}</span><input type="range" id="settings-gate-threshold" min="3" max="30" step="1" value="${vs.gateThreshold ?? 8}" oninput="document.getElementById('gate-label').textContent=this.value"></label>
             <label>Giris modu<select class="modal-input" id="settings-input-mode"><option value="voice" ${vs.inputMode !== "ptt" ? "selected" : ""}>Ses aktivitesi</option><option value="ptt" ${vs.inputMode === "ptt" ? "selected" : ""}>Bas-konus</option></select></label>
             <label>PTT tusu<input class="modal-input" id="settings-ptt-key" readonly value="${escapeHtml(vs.pttKey || "Control")}"></label>
             <label>Ekran paylasimi<select class="modal-input" id="settings-screen-quality"><option value="720p">720p</option><option value="1080p">1080p</option><option value="4k">4K</option><option value="480p">480p</option></select></label>
@@ -18181,17 +18484,33 @@ function requestMoveMemberToVoice(peerId, channelId) {
 }
 
 const _v24UpdateChannelSidebar = window.updateChannelSidebar || updateChannelSidebar;
+let _v24ChannelSidebarTimeout = null;
 updateChannelSidebar = window.updateChannelSidebar = function (serverId) {
-    const result = _v24UpdateChannelSidebar.apply(this, arguments);
-    setTimeout(() => wireSidebarDragAndDrop(serverId), 0);
-    return result;
+    // Debounce to prevent excessive re-renders
+    if (_v24ChannelSidebarTimeout) {
+        clearTimeout(_v24ChannelSidebarTimeout);
+    }
+    
+    _v24ChannelSidebarTimeout = setTimeout(() => {
+        const result = _v24UpdateChannelSidebar.apply(this, arguments);
+        setTimeout(() => wireSidebarDragAndDrop(serverId), 0);
+        return result;
+    }, 16); // ~60fps
 };
 
 const _v24UpdateMembersPanel = window.updateMembersPanel || updateMembersPanel;
+let _v24MembersPanelTimeout = null;
 updateMembersPanel = window.updateMembersPanel = function (...args) {
-    const result = _v24UpdateMembersPanel.apply(this, args);
-    setTimeout(() => wireSidebarDragAndDrop(args[0] || state.activeServerId), 0);
-    return result;
+    // Debounce to prevent excessive re-renders
+    if (_v24MembersPanelTimeout) {
+        clearTimeout(_v24MembersPanelTimeout);
+    }
+    
+    _v24MembersPanelTimeout = setTimeout(() => {
+        const result = _v24UpdateMembersPanel.apply(this, args);
+        setTimeout(() => wireSidebarDragAndDrop(args[0] || state.activeServerId), 0);
+        return result;
+    }, 16); // ~60fps
 };
 
 function ensureVoiceEphemeralChatPanel() {
@@ -18545,7 +18864,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setMembersPanelOpen(true);
     applyChatCustomization();
     makeMusicDockDraggable();
-    setInterval(() => renderVoiceEphemeralChat(), 60 * 1000);
+    setInterval(() => renderVoiceEphemeralChat(), 30 * 1000);
 });
 
 applyChatCustomization();
