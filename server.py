@@ -662,6 +662,12 @@ async def signaling_ws(websocket: WebSocket, room_id: str, peer_id: str):
                     msg["from"] = peer_id
                     await send_to_peer(room, target, msg)
 
+            elif msg_type in ("dm_call_offer", "dm_call_answer", "dm_call_end"):
+                target = msg.get("target")
+                if target:
+                    msg["from"] = peer_id
+                    await send_to_peer(room, target, msg)
+
             elif msg_type == "broadcast":
                 # Generic broadcast (e.g. nick changes)
                 msg["from"] = peer_id

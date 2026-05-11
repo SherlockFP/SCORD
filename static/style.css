@@ -170,6 +170,41 @@ body {
   display: none !important;
 }
 
+.music-player-dock {
+  position: fixed;
+  right: 18px;
+  bottom: 96px;
+  z-index: 40;
+  width: 220px;
+  height: 200px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: #000;
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.music-player-dock.active {
+  opacity: 0.72;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.music-player-dock:hover {
+  opacity: 1;
+}
+
+.music-player-dock iframe,
+.music-player-dock #yt-player {
+  width: 220px !important;
+  height: 200px !important;
+  display: block;
+}
+
 .active {
   color: var(--accent-light) !important;
 }
@@ -2498,6 +2533,8 @@ html[data-scord-chat="classic"] .msg-row-inner {
   height: 100%;
   overflow: hidden;
   background: var(--bg-deep);
+  transform: translateZ(0);
+  contain: layout paint style;
 }
 
 .voice-header {
@@ -2549,6 +2586,8 @@ html[data-scord-chat="classic"] .msg-row-inner {
   align-content: stretch;
   justify-content: center;
   background: radial-gradient(circle at 50% 0, rgba(255, 255, 255, 0.04), transparent 36%), var(--bg-deep);
+  transform: translateZ(0);
+  contain: layout paint;
 }
 
 .voice-participants.voice-grid-1 {
@@ -2616,6 +2655,10 @@ html[data-scord-chat="classic"] .msg-row-inner {
   transition: border-color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast);
   animation: fadeIn .3s ease both;
   isolation: isolate;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+  will-change: transform;
+  contain: layout paint style;
 }
 
 .voice-participant-card.has-video {
@@ -2626,15 +2669,14 @@ html[data-scord-chat="classic"] .msg-row-inner {
 .voice-participant-card.speaking {
   border-color: var(--green);
   box-shadow:
-    0 0 0 2px rgba(34, 197, 94, 0.9),
-    0 0 22px rgba(34, 197, 94, 0.55),
-    inset 0 0 12px rgba(34, 197, 94, 0.18);
-  transform: scale(1.02);
+    0 0 0 2px rgba(34, 197, 94, 0.75),
+    0 0 16px rgba(34, 197, 94, 0.35);
+  transform: translateZ(0) scale(1.01);
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .voice-participant-card.speaking {
-    animation: voice-speaking-pulse 1.1s ease-in-out infinite;
+    animation: voice-speaking-pulse 1.4s ease-in-out infinite;
   }
 }
 
@@ -2642,17 +2684,11 @@ html[data-scord-chat="classic"] .msg-row-inner {
 
   0%,
   100% {
-    box-shadow:
-      0 0 0 2px rgba(34, 197, 94, 0.85),
-      0 0 18px rgba(34, 197, 94, 0.45),
-      inset 0 0 10px rgba(34, 197, 94, 0.15);
+    transform: translateZ(0) scale(1.005);
   }
 
   50% {
-    box-shadow:
-      0 0 0 3px rgba(52, 211, 153, 1),
-      0 0 28px rgba(34, 197, 94, 0.7),
-      inset 0 0 14px rgba(34, 197, 94, 0.25);
+    transform: translateZ(0) scale(1.018);
   }
 }
 
@@ -2667,6 +2703,8 @@ html[data-scord-chat="classic"] .msg-row-inner {
   font-weight: 700;
   transition: box-shadow var(--t-fast), transform var(--t-fast);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .voice-video {
@@ -2749,7 +2787,7 @@ html[data-scord-chat="classic"] .msg-row-inner {
   z-index: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   pointer-events: none;
   display: block;
   background: #000;
@@ -2898,8 +2936,13 @@ html[data-scord-chat="classic"] .msg-row-inner {
 }
 
 .modal.modal--wide-settings,
+.modal.modal--profile,
 .modal:has(.scord-settings-shell) {
   width: min(1040px, 95vw);
+}
+
+.modal.modal--profile {
+  width: min(760px, 95vw);
 }
 
 .modal-header {
@@ -2936,8 +2979,9 @@ html[data-scord-chat="classic"] .msg-row-inner {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-height: min(76vh, 760px);
+  max-height: min(78vh, 780px);
   overflow: auto;
+  min-width: 0;
 }
 
 .modal-footer {
@@ -3166,6 +3210,27 @@ html[data-scord-chat="classic"] .msg-row-inner {
   background: rgba(239, 68, 68, 0.12);
 }
 
+.dm-call-btn {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  margin-right: 6px;
+  color: #d1fae5;
+  background: rgba(34, 197, 94, 0.16);
+  cursor: pointer;
+  transition: background 140ms ease, transform 140ms ease, color 140ms ease;
+}
+
+.dm-call-btn:hover {
+  transform: translateY(-1px);
+  color: #fff;
+  background: rgba(34, 197, 94, 0.34);
+}
+
 .dm-body {
   flex: 1;
   overflow-y: auto;
@@ -3266,6 +3331,126 @@ html[data-scord-chat="classic"] .msg-row-inner {
 .dm-send-btn:hover {
   background: var(--accent-light);
   transform: scale(1.03);
+}
+
+.direct-call-panel {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 10020;
+  width: min(420px, calc(100vw - 36px));
+  min-height: 82px;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-elevated) 94%, #000);
+  box-shadow: var(--shadow-xl);
+  animation: direct-call-in 150ms ease-out;
+}
+
+@keyframes direct-call-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.direct-call-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: white;
+  font-weight: 850;
+  background: linear-gradient(135deg, var(--accent), var(--green));
+  box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.12);
+}
+
+.direct-call-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.direct-call-copy strong,
+.direct-call-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.direct-call-copy strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.direct-call-copy span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.direct-call-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.direct-call-action {
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  background: var(--bg-highlight);
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.direct-call-action.accept {
+  background: var(--green);
+  color: #052e16;
+}
+
+.direct-call-action.danger {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+}
+
+.direct-call-action:hover {
+  filter: brightness(1.12);
+}
+
+@media (max-width: 560px) {
+  .direct-call-panel {
+    left: 10px;
+    right: 10px;
+    bottom: calc(var(--mobile-nav-height) + 10px);
+    width: auto;
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .direct-call-avatar {
+    width: 44px;
+    height: 44px;
+  }
+
+  .direct-call-actions {
+    grid-column: 1 / -1;
+  }
+
+  .direct-call-action {
+    flex: 1;
+  }
 }
 
 @media (max-width: 768px) {
@@ -3420,6 +3605,27 @@ html.theme-discord textarea {
   width: 20px;
   text-align: center;
   flex-shrink: 0;
+}
+
+.ctx-volume {
+  padding: 8px 10px 10px;
+  min-width: 220px;
+}
+
+.ctx-volume-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ctx-volume input {
+  width: 100%;
+  accent-color: var(--accent);
 }
 
 .ctx-divider {
@@ -3760,8 +3966,9 @@ html.theme-discord textarea {
 }
 
 .vpc-avatar.speaking {
-  animation: speaking-pulse 1.5s infinite;
+  animation: none;
   border: 2px solid var(--green) !important;
+  transform: translateZ(0) scale(1.03);
 }
 
 .live-badge {
@@ -4993,7 +5200,7 @@ html[data-compact="true"] .msg-time {
   width: 100%;
   height: 100%;
   max-height: none;
-  object-fit: cover;
+  object-fit: contain;
   margin-top: 0;
   border-radius: 0;
   pointer-events: none;
@@ -5269,7 +5476,8 @@ html[data-compact="true"] .msg-time {
 
 .scord-settings-shell {
   width: 100%;
-  min-height: min(620px, 78vh);
+  min-height: min(620px, 72vh);
+  max-height: min(620px, 72vh);
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
   gap: 0;
@@ -5316,6 +5524,7 @@ html[data-compact="true"] .msg-time {
 .scord-settings-content {
   overflow: auto;
   padding: 24px;
+  min-width: 0;
 }
 
 .scord-settings-page {
@@ -5337,6 +5546,19 @@ html[data-compact="true"] .msg-time {
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.scord-settings-page input,
+.scord-settings-page select,
+.scord-settings-page textarea,
+.profile-pro-card input,
+.profile-pro-card select,
+.profile-pro-card textarea {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .scord-check {
@@ -5609,7 +5831,8 @@ html[data-compact="true"] .msg-time {
 }
 
 .profile-pro-card {
-  width: min(680px, 82vw);
+  width: 100%;
+  max-width: 100%;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5660,6 +5883,7 @@ html[data-compact="true"] .msg-time {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .profile-pro-title span,
@@ -5674,7 +5898,7 @@ html[data-compact="true"] .msg-time {
 
 .profile-pro-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
   gap: 10px;
   padding: 0 20px 18px;
 }
@@ -5700,6 +5924,7 @@ html[data-compact="true"] .msg-time {
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .profile-pro-note {
@@ -5732,11 +5957,12 @@ html[data-compact="true"] .msg-time {
 
 @media (max-width: 680px) {
   .profile-pro-card {
-    width: min(92vw, 680px);
+    width: 100%;
   }
 
   .profile-pro-main {
     grid-template-columns: 74px minmax(0, 1fr);
+    padding: 0 14px 16px;
   }
 
   .profile-pro-avatar {
@@ -5747,5 +5973,10 @@ html[data-compact="true"] .msg-time {
 
   .profile-pro-grid {
     grid-template-columns: 1fr;
+    padding: 0 14px 16px;
+  }
+
+  .profile-pro-note {
+    padding: 0 14px 16px;
   }
 }

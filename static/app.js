@@ -47,7 +47,7 @@ let state = {
     avatarColor: "#7c3aed",
     avatarImage: null,
     appBackground: null,
-    voiceSettings: { micId: "default", volume: 1, filter: "none" },
+    voiceSettings: { micId: "default", volume: 1, filter: "none", noiseSuppression: true, echoCancellation: true, autoGainControl: false, gateThreshold: 12, gateAttack: 0.012, gateRelease: 0.09 },
     screenShareQuality: "720p",
     cameraQuality: "720p",
     roomCreatedAt: {}, // roomId -> timestamp
@@ -78,6 +78,7 @@ let state = {
     membersOpen: true,
     dms: {},            // peerId -> [messages]
     activeDM: null,     // peerId
+    directCall: null,   // { callId, channelId, peerId, peerName, status }
     recentDMs: [],      // [{peerId, name, ...}]
     friends: [],        // [{peerId, name, avatarColor, avatarImage}]
     blockedPeers: [],   // array of peerIds
@@ -88,6 +89,7 @@ let state = {
     targetLang: "tr",
     theme: "sapphire",
     recentVoiceToasts: new Set(),
+    userVolumes: JSON.parse(localStorage.getItem("scord_user_volumes") || "{}"),
     /** @type {{ messageId: string, author: string, authorId: string, text: string } | null} */
     replyTo: null,
     _p2pOutbox: [],
@@ -499,6 +501,7 @@ function showModal(title, bodyHTML, footerHTML) {
     document.getElementById("modal-title").textContent = title;
     const modal = document.getElementById("modal");
     modal?.classList.toggle("modal--wide-settings", typeof bodyHTML === "string" && bodyHTML.includes("scord-settings-shell"));
+    modal?.classList.toggle("modal--profile", typeof bodyHTML === "string" && bodyHTML.includes("profile-pro-card"));
     const mb = document.getElementById("modal-body");
     mb.innerHTML = "";
     if (typeof bodyHTML === "string") mb.innerHTML = bodyHTML;
@@ -741,6 +744,8 @@ function initSetup() {
         peerId: localStorage.getItem("scord_peer_id"),
         image: localStorage.getItem("scord_avatar_image"),
         theme: localStorage.getItem("scord_theme"),
+        bg: localStorage.getItem("scord_bg_image"),
+        voice: localStorage.getItem("scord_voice_settings"),
         friends: localStorage.getItem("scord_friends"),
         recentDMs: localStorage.getItem("scord_recent_dms"),
     };
@@ -766,7 +771,7 @@ function initSetup() {
         document.body.style.backgroundPosition = "center";
     }
     if (saved.voice) {
-        try { state.voiceSettings = JSON.parse(saved.voice); } catch (e) { }
+        try { state.voiceSettings = { ...state.voiceSettings, ...JSON.parse(saved.voice) }; } catch (e) { }
     }
     if (saved.image) {
         state.avatarImage = saved.image;
@@ -1108,7 +1113,7 @@ async function startScreenShare() {
             }
             document.getElementById("voice-screen-btn")?.classList.remove("active");
             if (state.activeServerId && state.voiceChannelId) {
-                renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+                updateVoiceSpeakingUi(state.peerId, isSpeaking, state.voiceChannelId);
             }
         };
 
@@ -2578,7 +2583,7 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                 if (member) {
                     member.isSpeaking = !!data.speaking;
                     if (state.activeServerId === roomId && (state.activeChannelId === chId || state.voiceChannelId === chId)) {
-                        renderVoiceParticipants(roomId, chId);
+                        updateVoiceSpeakingUi(fromPeerId, !!data.speaking, chId);
                     }
                     break;
                 }
@@ -2999,12 +3004,16 @@ async function joinVoiceChannel(channelId) {
         const audioConstraints = {
             noiseSuppression: vs.noiseSuppression !== false,
             echoCancellation: vs.echoCancellation !== false,
-            autoGainControl: vs.autoGainControl !== false,
+            autoGainControl: vs.autoGainControl === true,
+            channelCount: 1,
+            sampleRate: 48000,
+            sampleSize: 16,
+            latency: 0.02,
             ...(vs.micId && vs.micId !== "default" ? { deviceId: vs.micId } : {})
         };
         const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
 
-        state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        state.audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive", sampleRate: 48000 });
         const source = state.audioCtx.createMediaStreamSource(stream);
         const gainNode = state.audioCtx.createGain();
         gainNode.gain.value = state.voiceSettings?.volume || 1;
@@ -3060,7 +3069,7 @@ async function joinVoiceChannel(channelId) {
             analyser.getByteFrequencyData(data);
             const sum = data.reduce((a, b) => a + b, 0);
             const avg = sum / data.length;
-            const threshold = Number(state.voiceSettings?.gateThreshold ?? 18);
+            const threshold = Number(state.voiceSettings?.gateThreshold ?? 12);
             const isSpeakingNow = avg > threshold;
 
             // Debounce / Hysteresis
@@ -3073,8 +3082,8 @@ async function joinVoiceChannel(channelId) {
             const targetGain = isSpeaking || state.voiceSettings?.inputMode === "ptt" ? 1 : 0;
             try {
                 const nowAudio = state.audioCtx.currentTime;
-                const release = Number(state.voiceSettings?.gateRelease ?? 0.18);
-                const attack = Number(state.voiceSettings?.gateAttack ?? 0.025);
+                const release = Number(state.voiceSettings?.gateRelease ?? 0.09);
+                const attack = Number(state.voiceSettings?.gateAttack ?? 0.012);
                 gateNode.gain.cancelScheduledValues(nowAudio);
                 gateNode.gain.setTargetAtTime(targetGain, nowAudio, targetGain ? attack : release);
             } catch { gateNode.gain.value = targetGain; }
@@ -3088,7 +3097,7 @@ async function joinVoiceChannel(channelId) {
                         channelId: state.voiceChannelId,
                     });
                 }
-                renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+                updateVoiceSpeakingUi(state.peerId, isSpeaking, state.voiceChannelId);
             }
         }, SCORD_T().VOICE_SPEAKING_POLL_MS ?? 100);
     } catch (err) {
@@ -3632,7 +3641,7 @@ function renderVoiceParticipants(serverId, channelId) {
 
         const isSharing = m.isSharingScreen || m.isSharingCamera || (m.peer_id === state.peerId && (getLocalShareStream() || state.cameraStream));
         let liveBadge = nameContainer.querySelector('.live-badge');
-        if (isSharing) {
+        if (hasVideoTrack) {
             if (!liveBadge) {
                 liveBadge = document.createElement("span");
                 liveBadge.className = "live-badge";
@@ -3667,7 +3676,7 @@ function renderVoiceParticipants(serverId, channelId) {
             }
         }
 
-        let watchBtn = card.querySelector('.watch-btn');
+        card.querySelector('.watch-btn')?.remove();
         // BUG-3 Fix: Manage a small non-interactive thumbnail (not the full video element)
         // so the screen does NOT auto-expand for everyone. The "İzle" button is the
         // only way to open the full overlay.
@@ -3699,19 +3708,15 @@ function renderVoiceParticipants(serverId, channelId) {
 
         // Watch button appears as soon as someone is "sharing" — this is the ONLY
         // way to open the full-screen overlay (no auto preview).
-        if (isSharing) {
-            if (!watchBtn) {
-                watchBtn = document.createElement("button");
-                watchBtn.className = "btn-primary watch-btn";
-                watchBtn.style.marginTop = "8px";
-                watchBtn.style.width = "100%";
-                card.appendChild(watchBtn);
-            }
+        if (hasVideoTrack) {
+            card.ondblclick = (e) => { e.stopPropagation(); openScreenOverlay(m.peer_id, m.username); };
+            /* legacy watch button removed
             watchBtn.disabled = !hasVideoTrack;
             watchBtn.textContent = hasVideoTrack ? "İzle 🔍" : "Yükleniyor…";
             watchBtn.onclick = (e) => { e.stopPropagation(); openScreenOverlay(m.peer_id, m.username); };
-        } else if (watchBtn) {
-            watchBtn.remove();
+            */
+        } else {
+            card.ondblclick = null;
         }
 
         // Drag and Drop Admin
@@ -3759,6 +3764,25 @@ function renderVoiceParticipants(serverId, channelId) {
         if (card.parentNode !== container) container.appendChild(card);
     });
     updateVoiceSessionMeta();
+}
+
+function updateVoiceSpeakingUi(peerId, isSpeaking, channelId = state.voiceChannelId || state.activeChannelId) {
+    if (!peerId) return;
+    const card = document.querySelector(`.voice-participant-card[data-peer-id="${CSS.escape(peerId)}"]`);
+    const avatar = card?.querySelector(".vpc-avatar");
+    card?.classList.toggle("speaking", !!isSpeaking);
+    avatar?.classList.toggle("speaking", !!isSpeaking);
+
+    const server = currentServer?.();
+    if (!server || !channelId) return;
+    const members = server.voiceMembers?.[channelId] || [];
+    const member = members.find(m => m.peer_id === peerId);
+    if (member) member.isSpeaking = !!isSpeaking;
+
+    document.querySelectorAll(`.voice-member[data-peer-id="${CSS.escape(peerId)}"]`).forEach(el => {
+        el.classList.toggle("voice-member--speaking", !!isSpeaking);
+        el.querySelector(".vm-avatar")?.classList.toggle("speaking", !!isSpeaking);
+    });
 }
 
 
@@ -4219,12 +4243,30 @@ function showContextMenu(peerId, username, x, y) {
         d.className = "ctx-divider";
         menu.appendChild(d);
     };
+    const addVolumeControl = () => {
+        const wrap = document.createElement("div");
+        wrap.className = "ctx-volume";
+        const current = Math.round(Number(state.userVolumes?.[peerId] ?? 100));
+        wrap.innerHTML = `
+          <div class="ctx-volume-head"><span>Ses seviyesi</span><strong>${current}%</strong></div>
+          <input type="range" min="0" max="200" value="${current}" step="5">`;
+        const label = wrap.querySelector("strong");
+        const slider = wrap.querySelector("input");
+        slider.oninput = (e) => {
+            const value = Number(e.target.value);
+            label.textContent = `${value}%`;
+            setPeerVolume(peerId, value);
+        };
+        menu.appendChild(wrap);
+    };
 
     addSection(username);
     addItem("💬", "Özel Mesaj (DM)", () => {
         const m = server.members?.find(mem => mem.peer_id === peerId);
         openDM(peerId, username, m?.avatar_color, m?.avatar_image);
     });
+
+    addItem("TEL", "Sesli Ara", () => startDirectCall(peerId));
 
     const isFriend = state.friends?.find(f => f.peerId === peerId);
     if (!isFriend) {
@@ -4238,6 +4280,11 @@ function showContextMenu(peerId, username, x, y) {
 
     const isBlocked = state.blockedPeers?.includes(peerId);
     addItem(isBlocked ? "🔓" : "🚫", isBlocked ? "Engeli Kaldır" : "Engelle", () => toggleBlockStatus(peerId, username), !isBlocked);
+
+    if (state.voiceChannelId && state.remoteMedia?.[peerId]) {
+        addDivider();
+        addVolumeControl();
+    }
 
     const canAssignRoles = (myRole === "owner" || myRole === "admin") && peerId !== state.peerId;
     const canModerate = ["owner", "admin", "mod"].includes(myRole) && peerId !== state.peerId;
@@ -4433,10 +4480,9 @@ function toggleBlockStatus(peerId, username) {
     } else {
         state.blockedPeers.push(peerId);
         toast(`@${username} engellendi. Artık mesajlarını ve sesini duymayacaksın.`, "info");
-        // if they are in voice, mute them
-        updateMuteStates();
     }
     localStorage.setItem("scord_blocked_peers", JSON.stringify(state.blockedPeers));
+    updateMuteStates();
 
     // Refresh current views
     if (state.activeServerId && state.activeChannelId) {
@@ -5669,24 +5715,66 @@ function updateMuteStates() {
         myChannelPeers = server.voiceMembers[myChannel].map(m => m.peer_id);
     }
 
-    // Mute everyone else
+    const blocked = new Set(state.blockedPeers || []);
+
+    // Mute everyone else, and fully re-enable audio after unblock.
     Object.keys(state.remoteMedia).forEach(peerId => {
         const video = state.remoteMedia[peerId];
         if (!video) return;
+        const shouldHear = !!myChannel && myChannelPeers.includes(peerId) && peerId !== state.peerId && !blocked.has(peerId);
 
-        // Unmute only if they are in OUR channel, AND we are in a channel
-        if (myChannel && myChannelPeers.includes(peerId) && peerId !== state.peerId) {
-            video.muted = false;
-        } else {
-            video.muted = true;
-        }
+        video.muted = !shouldHear;
+        (video.srcObject?.getAudioTracks?.() || []).forEach(track => {
+            track.enabled = shouldHear;
+        });
+        video.volume = Math.max(0, Math.min(2, Number(state.userVolumes?.[peerId] ?? 100) / 100));
+        if (shouldHear) video.play?.().catch(() => { });
     });
+}
+
+function setPeerVolume(peerId, value) {
+    if (!peerId) return;
+    if (!state.userVolumes) state.userVolumes = {};
+    const volume = Math.max(0, Math.min(200, Number(value) || 0));
+    state.userVolumes[peerId] = volume;
+    localStorage.setItem("scord_user_volumes", JSON.stringify(state.userVolumes));
+    const video = state.remoteMedia?.[peerId];
+    if (video) video.volume = volume / 100;
 }
 
 /* ── Music Bot (YouTube IFrame API) ───────────────────────── */
 state.musicBot = { active: false, videoId: null, player: null, volume: 30 };
 state._musicBotPending = null;
 let ytReady = false;
+
+function setMusicDockVisible(visible) {
+    const dock = document.getElementById("music-player-dock");
+    if (!dock) return;
+    dock.classList.toggle("active", !!visible);
+    dock.setAttribute("aria-hidden", visible ? "false" : "true");
+}
+
+function unlockMusicAudio() {
+    const mb = state.musicBot;
+    if (!mb?.player) return false;
+    try { mb.player.unMute?.(); } catch { }
+    try { mb.player.setVolume?.(Math.max(1, Number(mb.volume ?? 30))); } catch { }
+    try {
+        const result = mb.player.playVideo?.();
+        mb.audioUnlocked = true;
+        renderMusicBotPanel();
+        return result !== false;
+    } catch {
+        return false;
+    }
+}
+
+function musicOffsetSeconds(startAt) {
+    const raw = Number(startAt || 0);
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    if (raw > 100000000000) return Math.max(0, (Date.now() - raw) / 1000);
+    return Math.max(0, raw);
+}
 
 // Global callback for YouTube script
 window.onYouTubeIframeAPIReady = function () {
@@ -5703,6 +5791,7 @@ function startMusicBot(videoId, startAt) {
 
     state.musicBot.active = true;
     state.musicBot.videoId = videoId;
+    setMusicDockVisible(true);
 
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (server) {
@@ -5723,7 +5812,7 @@ function startMusicBot(videoId, startAt) {
         updateChannelSidebar(state.activeServerId);
     }
 
-    const offset = Math.max(0, (Date.now() - startAt) / 1000);
+    const offset = musicOffsetSeconds(startAt);
 
     if (!state.musicBot.player && !ytReady) {
         state._musicBotPending = { videoId, startAt };
@@ -5733,24 +5822,36 @@ function startMusicBot(videoId, startAt) {
 
     if (!state.musicBot.player && ytReady) {
         state.musicBot.player = new YT.Player("yt-player", {
-            height: "1",
-            width: "1",
+            height: "200",
+            width: "220",
             videoId: videoId,
-            playerVars: { autoplay: 1, controls: 0, showinfo: 0, start: Math.floor(offset) },
+            playerVars: { autoplay: 1, controls: 1, playsinline: 1, start: Math.floor(offset) },
             events: {
                 onReady: (e) => {
                     e.target.setVolume(state.musicBot.volume);
-                    e.target.playVideo();
+                    try { e.target.unMute(); } catch { }
+                    try { e.target.playVideo(); } catch { }
+                    renderMusicBotPanel();
+                },
+                onStateChange: () => {
+                    renderMusicBotPanel();
+                },
+                onAutoplayBlocked: () => {
+                    state.musicBot.audioUnlocked = false;
+                    toast("Tarayici sesi kilitledi. Muzik panelindeki 'Sesi Ac' dugmesine bas.", "warning");
+                    renderMusicBotPanel();
                 }
             }
         });
     } else if (state.musicBot.player) {
         state.musicBot.player.loadVideoById(videoId, Math.floor(offset));
         state.musicBot.player.setVolume(state.musicBot.volume);
+        try { state.musicBot.player.unMute(); } catch { }
         try {
             state.musicBot.player.playVideo();
         } catch (e) { /* noop */ }
     }
+    renderMusicBotPanel();
 }
 
 function stopMusicBot() {
@@ -5761,6 +5862,7 @@ function stopMusicBot() {
     if (state.musicBot.player) {
         state.musicBot.player.stopVideo();
     }
+    setMusicDockVisible(false);
 
     const server = state.servers.find(s => s.id === state.activeServerId);
     const ch = state.voiceChannelId;
@@ -7767,6 +7869,7 @@ renderMusicBotPanel = window.renderMusicBotPanel = function () {
     const inSameVoice = !!session && session.voiceChannelId === state.voiceChannelId;
     const canControl = session && isMusicController(session);
     const joined = !!state.voiceChannelId;
+    const hasLocalPlayer = !!state.musicBot?.player;
     const title = session?.videoId ? `YouTube: ${session.videoId}` : "Senkron dinleme";
     panel.innerHTML = `
       <div class="mbot-compact-left">
@@ -7777,11 +7880,16 @@ renderMusicBotPanel = window.renderMusicBotPanel = function () {
         </div>
       </div>
       <div class="mbot-compact-actions">
-        ${session && joined ? `<button class="mbot-btn mbot-btn--play" id="mbot-join-sync-btn">${inSameVoice ? "Senkronla" : "Play"}</button>` : ""}
+        ${session && joined ? `<button class="mbot-btn mbot-btn--play" id="mbot-join-sync-btn">${inSameVoice && hasLocalPlayer ? "Sesi Ac" : "Play"}</button>` : ""}
         ${session && canControl ? `<button class="mbot-btn" id="mbot-stop-btn" title="Genel yayini durdur">Stop</button>` : ""}
         ${session ? `<input type="range" class="mbot-vol-slider" id="mbot-vol-slider" min="0" max="100" value="${state.musicBot?.volume ?? 30}" title="Kisisel ses">` : ""}
       </div>`;
-    document.getElementById("mbot-join-sync-btn")?.addEventListener("click", () => syncMusicSessionFromServer(session));
+    document.getElementById("mbot-join-sync-btn")?.addEventListener("click", () => {
+        syncMusicSessionFromServer(session);
+        setTimeout(() => {
+            if (!unlockMusicAudio()) toast("Ses acilamadiysa YouTube kutusundaki oynat dugmesine bas.", "warning");
+        }, 80);
+    });
     document.getElementById("mbot-stop-btn")?.addEventListener("click", requestMusicStop);
     const vol = document.getElementById("mbot-vol-slider");
     if (vol) vol.oninput = e => {
@@ -7828,8 +7936,8 @@ openSettingsModal = window.openSettingsModal = function () {
             <label>Giris sesi <span id="vol-label">${Math.round((vs.volume || 1) * 100)}%</span><input type="range" id="settings-volume" min="0" max="3" step="0.1" value="${vs.volume || 1}" oninput="document.getElementById('vol-label').textContent=Math.round(this.value*100)+'%'"></label>
             <label class="scord-check"><input type="checkbox" id="settings-noise-suppress" ${vs.noiseSuppression !== false ? "checked" : ""}> Gurultu engelleme</label>
             <label class="scord-check"><input type="checkbox" id="settings-echo-cancel" ${vs.echoCancellation !== false ? "checked" : ""}> Yanki engelleme</label>
-            <label class="scord-check"><input type="checkbox" id="settings-auto-gain" ${vs.autoGainControl !== false ? "checked" : ""}> Otomatik seviye dengeleme</label>
-            <label>Voice gate esigi <span id="gate-label">${vs.gateThreshold ?? 18}</span><input type="range" id="settings-gate-threshold" min="5" max="60" step="1" value="${vs.gateThreshold ?? 18}" oninput="document.getElementById('gate-label').textContent=this.value"></label>
+            <label class="scord-check"><input type="checkbox" id="settings-auto-gain" ${vs.autoGainControl === true ? "checked" : ""}> Otomatik seviye dengeleme</label>
+            <label>Voice gate esigi <span id="gate-label">${vs.gateThreshold ?? 12}</span><input type="range" id="settings-gate-threshold" min="5" max="60" step="1" value="${vs.gateThreshold ?? 12}" oninput="document.getElementById('gate-label').textContent=this.value"></label>
             <label>Giris modu<select class="modal-input" id="settings-input-mode"><option value="voice" ${vs.inputMode !== "ptt" ? "selected" : ""}>Ses aktivitesi</option><option value="ptt" ${vs.inputMode === "ptt" ? "selected" : ""}>Bas-konus</option></select></label>
             <label>PTT tusu<input class="modal-input" id="settings-ptt-key" readonly value="${escapeHtml(vs.pttKey || "Control")}"></label>
             <label>Ekran paylasimi<select class="modal-input" id="settings-screen-quality"><option value="720p">720p</option><option value="1080p">1080p</option><option value="4k">4K</option><option value="480p">480p</option></select></label>
@@ -7887,9 +7995,9 @@ function hydrateVoiceSettingsControls(vs) {
 const _v21SaveSettings = window.saveSettings || saveSettings;
 saveSettings = window.saveSettings = function () {
     _v21SaveSettings();
-    const autoGainControl = document.getElementById("settings-auto-gain")?.checked ?? true;
-    const gateThreshold = Number(document.getElementById("settings-gate-threshold")?.value || state.voiceSettings?.gateThreshold || 18);
-    state.voiceSettings = { ...(state.voiceSettings || {}), autoGainControl, gateThreshold, gateAttack: 0.025, gateRelease: 0.18 };
+    const autoGainControl = document.getElementById("settings-auto-gain")?.checked ?? false;
+    const gateThreshold = Number(document.getElementById("settings-gate-threshold")?.value || state.voiceSettings?.gateThreshold || 12);
+    state.voiceSettings = { ...(state.voiceSettings || {}), autoGainControl, gateThreshold, gateAttack: 0.012, gateRelease: 0.09 };
     localStorage.setItem("scord_voice_settings", JSON.stringify(state.voiceSettings));
 };
 
@@ -8009,7 +8117,7 @@ function channelCategoryLabel(ch, fallback) {
 
 function groupedChannels(server, type) {
     const groups = new Map();
-    (server.channels || []).filter(c => c.type === type).forEach(ch => {
+    (server.channels || []).filter(c => c.type === type && !c.directCall).forEach(ch => {
         const label = channelCategoryLabel(ch, type === "voice" ? "SES KANALLARI" : "METIN KANALLARI");
         if (!groups.has(label)) groups.set(label, []);
         groups.get(label).push(ch);
@@ -8037,6 +8145,7 @@ function renderCategoryHeader(list, label, serverId, type) {
 function renderVoiceMemberUnderChannel(list, server, ch, m) {
     const vm = document.createElement("div");
     vm.className = "voice-member";
+    vm.dataset.peerId = m.peer_id;
     if (m.isSpeaking || (m.peer_id === state.peerId && state.isSpeaking)) vm.classList.add("voice-member--speaking");
     const av = document.createElement("div");
     av.className = "vm-avatar";
@@ -8124,7 +8233,7 @@ function showRichUserMenu(peerId, username, x, y) {
         <div><strong>${escapeHtml(username || "Kullanici")}</strong><span>${escapeHtml(role)}</span></div>
       </div>
       <button data-action="profile">Profili ac</button>
-      ${!isSelf ? `<button data-action="dm">Mesaj gonder</button><button data-action="friend">Arkadas ekle</button>` : ""}
+      ${!isSelf ? `<button data-action="dm">Mesaj gonder</button><button data-action="call">Sesli ara</button><button data-action="friend">Arkadas ekle</button>` : ""}
       <button data-action="note">Not duzenle</button>
       ${canKick ? `<button class="danger" data-action="disconnect">Sesten cikar</button>` : ""}
     `;
@@ -8138,6 +8247,9 @@ function showRichUserMenu(peerId, username, x, y) {
             openUserProfile(peerId, username, member.avatar_image, member.avatar_color);
         } else if (action === "dm") {
             openDM(peerId, username);
+        } else if (action === "call") {
+            openDM(peerId, username);
+            startDirectCall(peerId);
         } else if (action === "friend") {
             addFriend(peerId, username);
         } else if (action === "note") {
@@ -8179,6 +8291,7 @@ openUserProfile = window.openUserProfile = function (peerId, username, avatarIma
       </div>`;
     const footer = `
       ${!isSelf ? `<button class="btn-secondary" onclick="openDM('${peerId}', '${escapeHtml(username || "")}'); hideModal();">Mesaj</button>` : ""}
+      ${!isSelf ? `<button class="btn-secondary" onclick="startDirectCall('${peerId}'); hideModal();">Sesli ara</button>` : ""}
       ${!isSelf ? `<button class="btn-secondary" onclick="addFriend('${peerId}', '${escapeHtml(username || "")}')">${isFriend ? "Arkadas" : "Arkadas ekle"}</button>` : ""}
       ${canModerate ? `<button class="btn-secondary danger-soft" onclick="requestForceDisconnect('${peerId}')">Sesten cikar</button>` : ""}
       <button class="btn-primary" onclick="saveProfileNote('${peerId}'); hideModal();">Notu kaydet</button>`;
@@ -8197,5 +8310,246 @@ window.startApp = function () {
     markTemplateServersForRail();
     renderServerRail();
 };
+
+/* ==========================================================================
+   V23 direct message voice calls
+   ========================================================================== */
+
+function getPeerDisplay(peerId) {
+    const server = currentServer() || state.servers.find(s => s.id === state.activeServerId) || state.servers[0];
+    const member = server?.members?.find(m => m.peer_id === peerId);
+    const recent = state.recentDMs?.find(d => d.peerId === peerId);
+    const friend = state.friends?.find(f => f.peerId === peerId);
+    return {
+        peerId,
+        name: member?.username || recent?.name || friend?.name || "Kullanici",
+        avatarColor: member?.avatar_color || recent?.avatarColor || friend?.avatarColor || "#5865f2",
+        avatarImage: member?.avatar_image ?? recent?.avatarImage ?? friend?.avatarImage ?? null,
+    };
+}
+
+function ensureDMCallButton() {
+    const header = document.querySelector(".dm-header");
+    if (!header || document.getElementById("dm-call-btn")) return;
+    const closeBtn = document.getElementById("dm-close-btn");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "dm-call-btn";
+    btn.className = "dm-call-btn";
+    btn.title = "Sesli ara";
+    btn.innerHTML = `
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M6.62 10.79c1.44 2.83 3.76 5.15 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1C10.61 21 3 13.39 3 4c0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.24.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/>
+      </svg>`;
+    btn.onclick = () => startDirectCall(state.activeDM);
+    if (closeBtn) header.insertBefore(btn, closeBtn);
+    else header.appendChild(btn);
+}
+
+const _v23OpenDM = window.openDM || openDM;
+openDM = window.openDM = function (...args) {
+    const result = _v23OpenDM.apply(this, args);
+    ensureDMCallButton();
+    const btn = document.getElementById("dm-call-btn");
+    if (btn) btn.onclick = () => startDirectCall(state.activeDM);
+    return result;
+};
+
+function directCallChannelName(peerName) {
+    return `Ozel arama - ${peerName || "Kullanici"}`;
+}
+
+function ensureDirectCallChannel(server, channelId, peerName) {
+    if (!server || !channelId) return null;
+    let channel = server.channels?.find(c => c.id === channelId);
+    if (!channel) {
+        if (!server.channels) server.channels = [];
+        channel = {
+            id: channelId,
+            name: directCallChannelName(peerName),
+            type: "voice",
+            category: "OZEL ARAMALAR",
+            directCall: true,
+        };
+        server.channels.push(channel);
+    }
+    return channel;
+}
+
+function showDirectCallPanel(mode, call) {
+    document.getElementById("direct-call-panel")?.remove();
+    const panel = document.createElement("div");
+    panel.id = "direct-call-panel";
+    panel.className = `direct-call-panel direct-call-panel--${mode}`;
+    const title = mode === "incoming" ? "Gelen sesli arama" : mode === "active" ? "Ozel arama" : "Araniyor";
+    const status = mode === "incoming"
+        ? `${call.fromName || call.peerName || "Kullanici"} seni ariyor`
+        : mode === "active"
+            ? `${call.peerName || call.fromName || "Kullanici"} ile gorusmedesin`
+            : `${call.peerName || "Kullanici"} cevap bekliyor`;
+    panel.innerHTML = `
+      <div class="direct-call-avatar">${initials(call.fromName || call.peerName || "SC")}</div>
+      <div class="direct-call-copy">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(status)}</span>
+      </div>
+      <div class="direct-call-actions">
+        ${mode === "incoming" ? `<button class="direct-call-action accept" data-action="accept">Kabul Et</button><button class="direct-call-action danger" data-action="decline">Reddet</button>` : ""}
+        ${mode !== "incoming" ? `<button class="direct-call-action danger" data-action="end">Kapat</button>` : ""}
+      </div>`;
+    panel.onclick = (e) => {
+        const action = e.target?.dataset?.action;
+        if (action === "accept") acceptDirectCall(call.callId);
+        if (action === "decline") declineDirectCall(call.callId);
+        if (action === "end") endDirectCall();
+    };
+    document.body.appendChild(panel);
+}
+
+function removeDirectCallPanel() {
+    document.getElementById("direct-call-panel")?.remove();
+}
+
+function startDirectCall(peerId) {
+    if (!peerId || peerId === state.peerId) return;
+    const server = currentServer();
+    if (!server || !state.mesh) {
+        toast("Arama icin once ayni sunucuda bagli olman gerekiyor.", "warning");
+        return;
+    }
+    if (!server.members?.some(m => m.peer_id === peerId)) {
+        toast("Bu kisi su an bu sunucuda aktif gorunmuyor.", "warning");
+        return;
+    }
+    if (state.directCall?.status === "active" || state.directCall?.status === "ringing") {
+        toast("Zaten devam eden bir arama var.", "info");
+        return;
+    }
+    const peer = getPeerDisplay(peerId);
+    const callId = genId();
+    const channelId = `dm-call-${callId}`;
+    const call = {
+        callId,
+        channelId,
+        roomId: server.id,
+        peerId,
+        peerName: peer.name,
+        fromId: state.peerId,
+        fromName: state.username,
+        fromAvatarColor: state.avatarColor,
+        fromAvatarImage: state.avatarImage,
+        status: "ringing",
+    };
+    state.directCall = call;
+    sendServerEvent({ type: "dm_call_offer", target: peerId, call });
+    showDirectCallPanel("ringing", call);
+    toast(`${peer.name} araniyor...`, "info");
+}
+
+async function acceptDirectCall(callId) {
+    const call = state.directCall;
+    if (!call || call.callId !== callId || call.status !== "incoming") return;
+    const server = state.servers.find(s => s.id === call.roomId) || currentServer();
+    if (!server) return;
+    state.activeServerId = server.id;
+    ensureDirectCallChannel(server, call.channelId, call.peerName || call.fromName);
+    state.directCall = { ...call, status: "active", peerId: call.fromId, peerName: call.fromName };
+    sendServerEvent({ type: "dm_call_answer", target: call.fromId, callId: call.callId, accepted: true, channelId: call.channelId });
+    showDirectCallPanel("active", state.directCall);
+    await joinVoiceChannel(call.channelId);
+}
+
+function declineDirectCall(callId) {
+    const call = state.directCall;
+    if (!call || call.callId !== callId) return;
+    sendServerEvent({ type: "dm_call_answer", target: call.fromId, callId: call.callId, accepted: false });
+    state.directCall = null;
+    removeDirectCallPanel();
+}
+
+function endDirectCall(notify = true) {
+    const call = state.directCall;
+    if (!call) return;
+    const target = call.peerId || call.fromId;
+    if (notify && target) sendServerEvent({ type: "dm_call_end", target, callId: call.callId, channelId: call.channelId });
+    const wasInCallChannel = state.voiceChannelId === call.channelId;
+    state.directCall = null;
+    removeDirectCallPanel();
+    if (wasInCallChannel) leaveVoiceChannel();
+}
+
+async function handleDirectCallEvent(msg) {
+    if (msg.type === "dm_call_offer") {
+        const call = msg.call || {};
+        if (state.directCall?.status === "active" || state.directCall?.status === "ringing" || state.directCall?.status === "incoming") {
+            sendServerEvent({ type: "dm_call_answer", target: msg.from, callId: call.callId, accepted: false, busy: true });
+            return;
+        }
+        const from = getPeerDisplay(msg.from);
+        state.directCall = {
+            ...call,
+            fromId: msg.from,
+            fromName: call.fromName || from.name,
+            peerId: msg.from,
+            peerName: call.fromName || from.name,
+            status: "incoming",
+        };
+        showDirectCallPanel("incoming", state.directCall);
+        toast(`${state.directCall.fromName} seni ariyor.`, "info");
+        return;
+    }
+    if (msg.type === "dm_call_answer") {
+        const call = state.directCall;
+        if (!call || call.callId !== msg.callId) return;
+        if (!msg.accepted) {
+            toast(msg.busy ? "Kisi su an baska aramada." : "Arama reddedildi.", "info");
+            state.directCall = null;
+            removeDirectCallPanel();
+            return;
+        }
+        const server = state.servers.find(s => s.id === call.roomId) || currentServer();
+        if (!server) return;
+        state.activeServerId = server.id;
+        ensureDirectCallChannel(server, msg.channelId || call.channelId, call.peerName);
+        state.directCall = { ...call, channelId: msg.channelId || call.channelId, status: "active" };
+        showDirectCallPanel("active", state.directCall);
+        await joinVoiceChannel(state.directCall.channelId);
+        return;
+    }
+    if (msg.type === "dm_call_end") {
+        const call = state.directCall;
+        if (!call || call.callId !== msg.callId) return;
+        const wasInCallChannel = state.voiceChannelId === call.channelId;
+        state.directCall = null;
+        removeDirectCallPanel();
+        if (wasInCallChannel) leaveVoiceChannel();
+        toast("Arama kapatildi.", "info");
+    }
+}
+
+const _v23HandleAuthoritativeServerEvent = window.handleAuthoritativeServerEvent || handleAuthoritativeServerEvent;
+handleAuthoritativeServerEvent = window.handleAuthoritativeServerEvent = function (msg, roomId) {
+    if (msg?.type === "dm_call_offer" || msg?.type === "dm_call_answer" || msg?.type === "dm_call_end") {
+        handleDirectCallEvent(msg);
+        return;
+    }
+    return _v23HandleAuthoritativeServerEvent(msg, roomId);
+};
+
+const _v23LeaveVoiceChannel = window.leaveVoiceChannel || leaveVoiceChannel;
+leaveVoiceChannel = window.leaveVoiceChannel = function (...args) {
+    const call = state.directCall;
+    if (call?.status === "active" && state.voiceChannelId === call.channelId) {
+        const target = call.peerId || call.fromId;
+        if (target) sendServerEvent({ type: "dm_call_end", target, callId: call.callId, channelId: call.channelId });
+        state.directCall = null;
+        removeDirectCallPanel();
+    }
+    return _v23LeaveVoiceChannel.apply(this, args);
+};
+
+document.addEventListener("DOMContentLoaded", () => {
+    ensureDMCallButton();
+});
 
 console.log("[Shercord V22] Community template servers, grouped channels and rich user menus loaded.");

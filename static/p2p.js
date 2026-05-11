@@ -170,6 +170,9 @@ class P2PMesh {
             case "permission_update":
             case "role_update":
             case "force_disconnect":
+            case "dm_call_offer":
+            case "dm_call_answer":
+            case "dm_call_end":
                 this.cb.onServerEvent?.(msg);
                 break;
 
