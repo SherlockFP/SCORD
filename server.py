@@ -16,7 +16,7 @@ import threading
 import urllib.request
 import urllib.parse
 import re
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, Any
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -34,6 +34,28 @@ app = FastAPI(title="SCORD Signaling Server")
 
 rooms: Dict[str, "Room"] = {}
 DATABASE_FILE = "rooms.json"
+
+DEFAULT_ROLE_PERMISSIONS = {
+    "owner": {
+        "manage_server", "manage_roles", "manage_channels", "kick_members",
+        "move_members", "force_disconnect", "join_voice", "speak",
+        "screen_share", "camera", "music_control", "send_messages",
+    },
+    "admin": {
+        "manage_server", "manage_roles", "manage_channels", "kick_members",
+        "move_members", "force_disconnect", "join_voice", "speak",
+        "screen_share", "camera", "music_control", "send_messages",
+    },
+    "mod": {
+        "kick_members", "move_members", "force_disconnect", "join_voice",
+        "speak", "screen_share", "camera", "music_control", "send_messages",
+    },
+    "member": {"join_voice", "speak", "screen_share", "camera", "send_messages"},
+}
+
+
+def _role_defaults(role_id: str) -> dict:
+    return {p: True for p in DEFAULT_ROLE_PERMISSIONS.get(role_id, DEFAULT_ROLE_PERMISSIONS["member"])}
 
 def save_db():
     try:
@@ -76,12 +98,14 @@ def load_db():
             room = Room(rid, rdata["name"], rdata.get("owner_id", "unknown"))
             room.channels = rdata.get("channels", room.channels)
             room.roles = rdata.get("roles", room.roles)
+            room.channel_permissions = rdata.get("channel_permissions", room.channel_permissions)
             room.peer_roles = rdata.get("peer_roles", room.peer_roles)
             room.pinned_messages = rdata.get("pinned_messages", [])
             room.messages = rdata.get("messages", {})
             room.channel_backgrounds = rdata.get("channel_backgrounds", {})
             room.icon_url = rdata.get("icon_url", None)
             room.invite_code = rdata.get("invite_code", str(uuid.uuid4())[:6].upper())
+            room.normalize_permissions()
             rooms[rid] = room
         log.info(f"Database loaded from {DATABASE_FILE} ({len(rooms)} rooms)")
     except Exception as e:
@@ -93,6 +117,9 @@ class Room:
         self.name = name
         self.owner_id = owner_id
         self.created_at = time.time()
+        self.last_seen: Dict[str, float] = {}
+        self.voice_members: Dict[str, Dict[str, dict]] = {}
+        self.music_session: Optional[dict] = None
         self.peers: Dict[str, WebSocket] = {}        # peer_id → ws
         self.peer_info: Dict[str, dict] = {}         # peer_id → {username, avatar_color}
         
@@ -104,9 +131,11 @@ class Room:
             {"id": "ch-muzik", "name": "müzik", "type": "voice"},
         ]
         self.roles = {
-            "admin": {"name": "Admin", "color": "#ef4444", "hoist": True},
+            "admin": {"name": "Admin", "color": "#ef4444", "hoist": True, "permissions": _role_defaults("admin")},
+            "mod": {"name": "Moderator", "color": "#22c55e", "hoist": True, "permissions": _role_defaults("mod")},
             "member": {"name": "Üye", "color": "#94a3b8", "hoist": False}
         }
+        self.channel_permissions = {}
         self.peer_roles = {owner_id: "admin"}
         self.pinned_messages = []
         self.messages = {}  # channel_id -> list[dict]
@@ -116,12 +145,14 @@ class Room:
 
     def to_persist_dict(self):
         """Data to be saved to disk (metadata only)."""
+        self.normalize_permissions()
         return {
             "room_id": self.room_id,
             "name": self.name,
             "owner_id": self.owner_id,
             "channels": self.channels,
             "roles": self.roles,
+            "channel_permissions": self.channel_permissions,
             "peer_roles": self.peer_roles,
             "pinned_messages": self.pinned_messages,
             "messages": self.messages,
@@ -132,6 +163,7 @@ class Room:
 
     def to_dict(self):
         """Data to be sent to frontend (includes transient state)."""
+        self.normalize_permissions()
         return {
             "room_id": self.room_id,
             "name": self.name,
@@ -139,6 +171,7 @@ class Room:
             "peer_count": max(1, len(self.peers)),
             "channels": self.channels,
             "roles": self.roles,
+            "channel_permissions": self.channel_permissions,
             "peer_roles": self.peer_roles,
             "pinned_messages": self.pinned_messages,
             "channel_backgrounds": self.channel_backgrounds,
@@ -153,7 +186,47 @@ class Room:
                 }
                 for pid, info in self.peer_info.items()
             ],
+            "voice_members": {
+                ch: list(members.values())
+                for ch, members in self.voice_members.items()
+            },
+            "music_session": self.music_session,
         }
+
+    def normalize_permissions(self):
+        for role_id, role in self.roles.items():
+            perms = role.setdefault("permissions", {})
+            for perm, enabled in _role_defaults(role_id).items():
+                perms.setdefault(perm, enabled)
+        if "member" not in self.roles:
+            self.roles["member"] = {
+                "name": "Uye",
+                "color": "#94a3b8",
+                "hoist": False,
+                "permissions": _role_defaults("member"),
+            }
+
+    def role_for(self, peer_id: str) -> str:
+        if peer_id == self.owner_id:
+            return "owner"
+        return self.peer_roles.get(peer_id, "member")
+
+    def has_permission(self, peer_id: str, permission: str, channel_id: str | None = None) -> bool:
+        if peer_id == self.owner_id:
+            return True
+        self.normalize_permissions()
+        role_id = self.role_for(peer_id)
+        role = self.roles.get(role_id, self.roles.get("member", {}))
+        allowed = bool(role.get("permissions", {}).get(permission, False))
+        if channel_id:
+            overrides = self.channel_permissions.get(channel_id, {})
+            role_override = overrides.get(role_id) or overrides.get("member")
+            if isinstance(role_override, dict):
+                if permission in role_override.get("deny", []):
+                    allowed = False
+                if permission in role_override.get("allow", []):
+                    allowed = True
+        return allowed
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -181,6 +254,61 @@ async def send_to_peer(room: Room, peer_id: str, message: dict):
     ws = room.peers.get(peer_id)
     if ws and ws.client_state == WebSocketState.CONNECTED:
         await ws.send_text(json.dumps(message))
+
+
+def _voice_snapshot(room: Room, channel_id: str | None = None) -> dict:
+    members = {
+        ch: list(ch_members.values())
+        for ch, ch_members in room.voice_members.items()
+    }
+    return {
+        "type": "voice_state_snapshot",
+        "room_id": room.room_id,
+        "channelId": channel_id,
+        "voiceMembers": members,
+        "musicSession": room.music_session,
+    }
+
+
+async def broadcast_voice_snapshot(room: Room, channel_id: str | None = None):
+    await broadcast_to_room(room, _voice_snapshot(room, channel_id))
+
+
+def _remove_peer_from_voice(room: Room, peer_id: str):
+    for members in room.voice_members.values():
+        members.pop(peer_id, None)
+    empty = [ch for ch, members in room.voice_members.items() if not members]
+    for ch in empty:
+        room.voice_members.pop(ch, None)
+
+
+def _member_payload(room: Room, peer_id: str, username: str, avatar_color: str, data: dict) -> dict:
+    existing = {}
+    for members in room.voice_members.values():
+        if peer_id in members:
+            existing = members[peer_id]
+            break
+    return {
+        "peer_id": peer_id,
+        "username": data.get("username") or existing.get("username") or username,
+        "avatar_color": data.get("avatarColor") or data.get("avatar_color") or existing.get("avatar_color") or avatar_color,
+        "avatar_image": data.get("avatarImage") if "avatarImage" in data else existing.get("avatar_image"),
+        "isSharingScreen": bool(data.get("isSharingScreen", existing.get("isSharingScreen", False))),
+        "isSharingCamera": bool(data.get("isSharingCamera", existing.get("isSharingCamera", False))),
+        "isSpeaking": bool(data.get("isSpeaking", existing.get("isSpeaking", False))),
+    }
+
+
+def _music_public_state(room: Room) -> dict:
+    return {"type": "music_state", "room_id": room.room_id, "session": room.music_session}
+
+
+def _can_control_music(room: Room, peer_id: str) -> bool:
+    session = room.music_session or {}
+    return (
+        peer_id == session.get("controllerId")
+        or room.has_permission(peer_id, "music_control", session.get("voiceChannelId"))
+    )
 
 # ── REST endpoints ─────────────────────────────────────────────────────────────
 
@@ -397,6 +525,7 @@ async def signaling_ws(websocket: WebSocket, room_id: str, peer_id: str):
     # Register peer
     room.peers[peer_id] = websocket
     room.peer_info[peer_id] = {"username": username, "avatar_color": avatar_color}
+    room.last_seen[peer_id] = time.time()
     log.info(f"Peer {peer_id} ({username}) joined room {room_id}")
 
     # Tell the new peer who else is here
@@ -405,6 +534,8 @@ async def signaling_ws(websocket: WebSocket, room_id: str, peer_id: str):
         "room": room.to_dict(),
         "your_id": peer_id,
     }))
+    await websocket.send_text(json.dumps(_voice_snapshot(room)))
+    await websocket.send_text(json.dumps(_music_public_state(room)))
 
     # Tell everyone else the new peer arrived
     await broadcast_to_room(room, {
@@ -433,7 +564,153 @@ async def signaling_ws(websocket: WebSocket, room_id: str, peer_id: str):
                 msg["from"] = peer_id
                 await broadcast_to_room(room, msg, exclude=peer_id)
 
+            elif msg_type == "voice_join":
+                ch = msg.get("channelId")
+                if not ch:
+                    await websocket.send_text(json.dumps({"type": "error", "message": "channelId required"}))
+                    continue
+                if not room.has_permission(peer_id, "join_voice", ch):
+                    await websocket.send_text(json.dumps({"type": "permission_denied", "permission": "join_voice"}))
+                    continue
+                _remove_peer_from_voice(room, peer_id)
+                room.voice_members.setdefault(ch, {})[peer_id] = _member_payload(room, peer_id, username, avatar_color, msg)
+                await broadcast_voice_snapshot(room, ch)
+
+            elif msg_type == "voice_leave":
+                ch = msg.get("channelId")
+                if ch and ch in room.voice_members:
+                    room.voice_members[ch].pop(peer_id, None)
+                    if not room.voice_members[ch]:
+                        room.voice_members.pop(ch, None)
+                else:
+                    _remove_peer_from_voice(room, peer_id)
+                await broadcast_voice_snapshot(room, ch)
+
+            elif msg_type == "voice_status":
+                ch = msg.get("channelId")
+                member = room.voice_members.get(ch or "", {}).get(peer_id)
+                if member:
+                    member["isSpeaking"] = bool(msg.get("speaking"))
+                    await broadcast_to_room(room, {
+                        "type": "voice_state",
+                        "channelId": ch,
+                        "member": member,
+                    })
+
+            elif msg_type == "media_status":
+                ch = msg.get("channelId")
+                member = room.voice_members.get(ch or "", {}).get(peer_id)
+                if not member:
+                    continue
+                kind = msg.get("kind")
+                sharing = bool(msg.get("sharing"))
+                if kind == "screen":
+                    if sharing and not room.has_permission(peer_id, "screen_share", ch):
+                        await websocket.send_text(json.dumps({"type": "permission_denied", "permission": "screen_share"}))
+                        continue
+                    member["isSharingScreen"] = sharing
+                elif kind == "camera":
+                    if sharing and not room.has_permission(peer_id, "camera", ch):
+                        await websocket.send_text(json.dumps({"type": "permission_denied", "permission": "camera"}))
+                        continue
+                    member["isSharingCamera"] = sharing
+                await broadcast_to_room(room, {
+                    "type": "media_status",
+                    "channelId": ch,
+                    "peer_id": peer_id,
+                    "kind": kind,
+                    "sharing": sharing,
+                    "member": member,
+                })
+
+            elif msg_type == "music_command":
+                cmd = (msg.get("command") or "").lower()
+                ch = msg.get("voiceChannelId")
+                if not ch:
+                    await websocket.send_text(json.dumps({"type": "error", "message": "voiceChannelId required"}))
+                    continue
+                if cmd == "play":
+                    if not room.has_permission(peer_id, "join_voice", ch):
+                        await websocket.send_text(json.dumps({"type": "permission_denied", "permission": "join_voice"}))
+                        continue
+                    video_id = msg.get("videoId")
+                    if not video_id:
+                        await websocket.send_text(json.dumps({"type": "error", "message": "videoId required"}))
+                        continue
+                    now_ms = int(time.time() * 1000)
+                    room.music_session = {
+                        "active": True,
+                        "state": "playing",
+                        "videoId": video_id,
+                        "voiceChannelId": ch,
+                        "controllerId": peer_id,
+                        "controllerName": username,
+                        "startedAt": msg.get("startedAt") or now_ms,
+                        "position": float(msg.get("position", 0)),
+                        "updatedAt": now_ms,
+                    }
+                elif cmd in ("stop", "pause", "resume", "seek", "skip"):
+                    if not _can_control_music(room, peer_id):
+                        await websocket.send_text(json.dumps({"type": "permission_denied", "permission": "music_control"}))
+                        continue
+                    if cmd == "stop":
+                        room.music_session = None
+                    elif room.music_session:
+                        now_ms = int(time.time() * 1000)
+                        if cmd == "pause":
+                            room.music_session["state"] = "paused"
+                            room.music_session["position"] = float(msg.get("position", room.music_session.get("position", 0)))
+                        elif cmd == "resume":
+                            room.music_session["state"] = "playing"
+                            room.music_session["startedAt"] = now_ms - int(float(msg.get("position", room.music_session.get("position", 0))) * 1000)
+                        elif cmd == "seek":
+                            room.music_session["position"] = float(msg.get("position", 0))
+                            room.music_session["startedAt"] = now_ms - int(room.music_session["position"] * 1000)
+                        elif cmd == "skip" and msg.get("videoId"):
+                            room.music_session.update({
+                                "state": "playing",
+                                "videoId": msg["videoId"],
+                                "startedAt": now_ms,
+                                "position": 0,
+                            })
+                        room.music_session["updatedAt"] = now_ms
+                await broadcast_to_room(room, _music_public_state(room))
+
+            elif msg_type == "force_disconnect":
+                target = msg.get("target")
+                ch = msg.get("channelId")
+                if not room.has_permission(peer_id, "force_disconnect", ch):
+                    await websocket.send_text(json.dumps({"type": "permission_denied", "permission": "force_disconnect"}))
+                    continue
+                if target == "bot_music":
+                    room.music_session = None
+                    await broadcast_to_room(room, _music_public_state(room))
+                elif target:
+                    _remove_peer_from_voice(room, target)
+                    await send_to_peer(room, target, {"type": "force_disconnect", "target": target, "channelId": ch})
+                    await broadcast_voice_snapshot(room, ch)
+
+            elif msg_type == "role_update":
+                if not room.has_permission(peer_id, "manage_roles"):
+                    await websocket.send_text(json.dumps({"type": "permission_denied", "permission": "manage_roles"}))
+                    continue
+                room.roles = msg.get("roles", room.roles)
+                room.peer_roles = msg.get("peer_roles", room.peer_roles)
+                room.normalize_permissions()
+                schedule_save_db()
+                await broadcast_to_room(room, {"type": "role_update", "roles": room.roles, "peer_roles": room.peer_roles})
+
+            elif msg_type == "permission_update":
+                if not room.has_permission(peer_id, "manage_roles"):
+                    await websocket.send_text(json.dumps({"type": "permission_denied", "permission": "manage_roles"}))
+                    continue
+                room.channel_permissions = msg.get("channel_permissions", room.channel_permissions)
+                room.normalize_permissions()
+                schedule_save_db()
+                await broadcast_to_room(room, {"type": "permission_update", "channel_permissions": room.channel_permissions, "roles": room.roles})
+
             elif msg_type == "ping":
+                room.last_seen[peer_id] = time.time()
                 await websocket.send_text(json.dumps({"type": "pong"}))
 
     except WebSocketDisconnect:
@@ -443,9 +720,11 @@ async def signaling_ws(websocket: WebSocket, room_id: str, peer_id: str):
     finally:
         room.peers.pop(peer_id, None)
         room.peer_info.pop(peer_id, None)
+        room.last_seen[peer_id] = time.time()
+        _remove_peer_from_voice(room, peer_id)
         log.info(f"Peer {peer_id} left room {room_id}")
         await broadcast_to_room(room, {"type": "peer_left", "peer_id": peer_id})
-        # Clean up empty rooms after a delay
+        await broadcast_voice_snapshot(room)
         if len(room.peers) == 0:
             asyncio.get_event_loop().call_later(30, lambda: _cleanup_room(room_id))
 
@@ -453,8 +732,11 @@ async def signaling_ws(websocket: WebSocket, room_id: str, peer_id: str):
 def _cleanup_room(room_id: str):
     room = rooms.get(room_id)
     if room and len(room.peers) == 0:
-        log.info(f"Removing empty room {room_id}")
-        del rooms[room_id]
+        log.info(f"Cleaning transient state for empty room {room_id}")
+        room.voice_members.clear()
+        room.music_session = None
+        stale_before = time.time() - 3600
+        room.last_seen = {pid: ts for pid, ts in room.last_seen.items() if ts > stale_before}
 
 
 # ── Static files / SPA ────────────────────────────────────────────────────────

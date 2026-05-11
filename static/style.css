@@ -5028,3 +5028,282 @@ html[data-compact="true"] .msg-time {
 .mbot-btn--play:hover {
   background: var(--primary-hover);
 }
+
+/* ==========================================================================
+   V21 professional voice, music and settings surfaces
+   ========================================================================== */
+.voice-header {
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.voice-top-control-bar {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  border-radius: 8px;
+}
+
+.voice-icon-btn {
+  min-width: 42px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--bg-highlight);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease, border-color 140ms ease;
+}
+
+.voice-icon-btn:hover {
+  transform: translateY(-1px);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.voice-icon-btn.active {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fecaca;
+}
+
+.voice-icon-btn.danger {
+  background: rgba(239, 68, 68, 0.16);
+  color: #fecaca;
+}
+
+.music-bot-panel--compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 20px 16px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  border: 1px solid var(--border);
+}
+
+.mbot-compact-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mbot-compact-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mbot-compact-copy strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.mbot-compact-copy span {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: min(560px, 52vw);
+}
+
+.mbot-compact-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.music-bot-panel--compact .mbot-btn {
+  width: auto;
+  min-width: 46px;
+  border-radius: 8px;
+  padding: 0 12px;
+}
+
+.scord-settings-shell {
+  width: min(920px, 86vw);
+  min-height: min(620px, 78vh);
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 0;
+  margin: -8px;
+}
+
+.scord-settings-nav,
+.scord-server-settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px;
+  background: var(--bg-mid);
+  border-right: 1px solid var(--border);
+}
+
+.scord-settings-nav button,
+.scord-server-settings-nav button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 12px;
+  text-align: left;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.scord-settings-nav button:hover,
+.scord-server-settings-nav button:hover,
+.scord-settings-nav button.active,
+.scord-server-settings-nav button.active {
+  background: var(--bg-highlight);
+  color: var(--text-primary);
+}
+
+.scord-settings-nav button.danger,
+.scord-server-settings-nav button.danger {
+  color: #fecaca;
+  margin-top: auto;
+}
+
+.scord-settings-content {
+  overflow: auto;
+  padding: 24px;
+}
+
+.scord-settings-page {
+  display: grid;
+  gap: 16px;
+}
+
+.scord-settings-page h3,
+.scord-server-settings-main h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  color: var(--text-primary);
+}
+
+.scord-settings-page label,
+.scord-server-settings-main label {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.scord-check {
+  display: flex !important;
+  grid-template-columns: none;
+  flex-direction: row;
+  align-items: center;
+}
+
+.scord-server-settings {
+  position: fixed;
+  inset: 18px;
+  z-index: 120;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-xl);
+}
+
+.scord-server-settings-nav strong {
+  margin-bottom: 10px;
+  color: var(--text-primary);
+  font-size: 16px;
+}
+
+.scord-server-settings-main {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: auto;
+  padding: 26px;
+}
+
+.srv-page {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.scord-role-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 46px 90px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-mid);
+}
+
+.scord-server-settings footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 760px) {
+  .voice-top-control-bar {
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
+  }
+
+  .voice-icon-btn {
+    flex: 1;
+    min-width: 0;
+    padding: 0 6px;
+  }
+
+  .music-bot-panel--compact {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mbot-compact-copy span {
+    max-width: 100%;
+  }
+
+  .mbot-compact-actions {
+    justify-content: space-between;
+  }
+
+  .scord-settings-shell,
+  .scord-server-settings {
+    grid-template-columns: 1fr;
+  }
+
+  .scord-settings-nav,
+  .scord-server-settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .scord-server-settings {
+    inset: 8px;
+  }
+
+  .scord-role-row {
+    grid-template-columns: 1fr;
+  }
+}

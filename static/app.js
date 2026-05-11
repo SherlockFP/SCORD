@@ -2261,6 +2261,7 @@ function connectToRoom(roomId) {
         onTrackAdded: (peerId, track, stream) => handleTrackAdded(peerId, track, stream),
         onPeerConnected: (peerId) => handlePeerConnected(peerId, roomId),
         onStatusChange: (status) => updateConnectionStatus(status),
+        onServerEvent: (msg) => handleAuthoritativeServerEvent(msg, roomId),
     });
 
     attachMeshBroadcastSync(state.mesh, roomId);
@@ -2996,6 +2997,7 @@ async function joinVoiceChannel(channelId) {
         const audioConstraints = {
             noiseSuppression: vs.noiseSuppression !== false,
             echoCancellation: vs.echoCancellation !== false,
+            autoGainControl: vs.autoGainControl !== false,
             ...(vs.micId && vs.micId !== "default" ? { deviceId: vs.micId } : {})
         };
         const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
@@ -3004,6 +3006,9 @@ async function joinVoiceChannel(channelId) {
         const source = state.audioCtx.createMediaStreamSource(stream);
         const gainNode = state.audioCtx.createGain();
         gainNode.gain.value = state.voiceSettings?.volume || 1;
+        const gateNode = state.audioCtx.createGain();
+        gateNode.gain.value = 0;
+        state.voiceGateNode = gateNode;
 
         const filterNode = state.audioCtx.createBiquadFilter();
         const filterType = state.voiceSettings?.filter || "none";
@@ -3026,8 +3031,9 @@ async function joinVoiceChannel(channelId) {
         const dest = state.audioCtx.createMediaStreamDestination();
         source.connect(filterNode);
         filterNode.connect(analyser); // Monitor before gain
-        gainNode.connect(dest);
         filterNode.connect(gainNode);
+        gainNode.connect(gateNode);
+        gateNode.connect(dest);
 
         processedStream = dest.stream;
         state.originalMicStream = stream; // save original to kill hardware light later
@@ -3052,7 +3058,8 @@ async function joinVoiceChannel(channelId) {
             analyser.getByteFrequencyData(data);
             const sum = data.reduce((a, b) => a + b, 0);
             const avg = sum / data.length;
-            const isSpeakingNow = avg > 25; // Slightly higher threshold
+            const threshold = Number(state.voiceSettings?.gateThreshold ?? 18);
+            const isSpeakingNow = avg > threshold;
 
             // Debounce / Hysteresis
             if (isSpeakingNow) {
@@ -3061,6 +3068,14 @@ async function joinVoiceChannel(channelId) {
 
             const holdMs = SCORD_T().VOICE_SPEAKING_HOLD_MS ?? 250;
             const isSpeaking = (Date.now() - (state._lastSpeakTime || 0)) < holdMs;
+            const targetGain = isSpeaking || state.voiceSettings?.inputMode === "ptt" ? 1 : 0;
+            try {
+                const nowAudio = state.audioCtx.currentTime;
+                const release = Number(state.voiceSettings?.gateRelease ?? 0.18);
+                const attack = Number(state.voiceSettings?.gateAttack ?? 0.025);
+                gateNode.gain.cancelScheduledValues(nowAudio);
+                gateNode.gain.setTargetAtTime(targetGain, nowAudio, targetGain ? attack : release);
+            } catch { gateNode.gain.value = targetGain; }
 
             if (isSpeaking !== state.isSpeaking) {
                 state.isSpeaking = isSpeaking;
@@ -7399,3 +7414,598 @@ window.startApp = function () {
 };
 
 console.log("[Shercord V20] Server persistence, role management, and embedded settings panel loaded!");
+
+/* ==========================================================================
+   V21 authoritative server state, stable voice/music, permissions, UI polish
+   ========================================================================== */
+
+const SCORD_V21_PERMISSIONS = [
+    "manage_server", "manage_roles", "manage_channels", "kick_members",
+    "move_members", "force_disconnect", "join_voice", "speak",
+    "screen_share", "camera", "music_control", "send_messages"
+];
+
+function sendServerEvent(payload) {
+    if (!state.mesh || !payload) return false;
+    if (typeof state.mesh.sendSignal === "function") state.mesh.sendSignal(payload);
+    else if (typeof state.mesh._send === "function") state.mesh._send(payload);
+    return true;
+}
+
+function currentServer() {
+    return state.servers.find(s => s.id === state.activeServerId);
+}
+
+function normalizeServerLivePayload(server, room) {
+    if (!server || !room) return;
+    if (room.voice_members) server.voiceMembers = room.voice_members;
+    if (room.music_session !== undefined) server.musicSession = room.music_session;
+    if (room.roles) server.roles = room.roles;
+    if (room.peer_roles) server.peer_roles = room.peer_roles;
+    if (room.channel_permissions) server.channel_permissions = room.channel_permissions;
+    if (room.peers) {
+        server.members = room.peers.map(p => ({
+            peer_id: p.peer_id,
+            username: p.username,
+            avatar_color: p.avatar_color,
+            avatar_image: p.avatar_image || null,
+        }));
+        server.peer_count = room.peers.length;
+    }
+}
+
+function refreshVoiceUiFor(serverId, channelId) {
+    if (!serverId) return;
+    updateChannelSidebar(serverId);
+    updateMembersPanel(serverId);
+    updatePeerCountBadge(serverId);
+    const ch = channelId || state.voiceChannelId || state.activeChannelId;
+    if (ch) renderVoiceParticipants(serverId, ch);
+    updateMuteStates();
+    updateVoiceSessionMeta();
+    renderMusicBotPanel();
+}
+
+function handleAuthoritativeServerEvent(msg, roomId) {
+    if (!msg || typeof msg !== "object") return;
+    const server = state.servers.find(s => s.id === (msg.room_id || roomId));
+    if (msg.type === "room_state" && server) {
+        normalizeServerLivePayload(server, msg.room);
+        refreshVoiceUiFor(server.id, state.voiceChannelId || state.activeChannelId);
+        if (msg.room?.music_session !== undefined) syncMusicSessionFromServer(msg.room.music_session);
+        return;
+    }
+    if (!server) return;
+
+    if (msg.type === "voice_state_snapshot") {
+        server.voiceMembers = msg.voiceMembers || {};
+        server.musicSession = msg.musicSession || null;
+        refreshVoiceUiFor(server.id, msg.channelId);
+        syncMusicSessionFromServer(server.musicSession);
+    } else if (msg.type === "voice_state" && msg.member) {
+        const ch = msg.channelId;
+        if (!server.voiceMembers) server.voiceMembers = {};
+        if (!server.voiceMembers[ch]) server.voiceMembers[ch] = [];
+        const idx = server.voiceMembers[ch].findIndex(m => m.peer_id === msg.member.peer_id);
+        if (idx >= 0) server.voiceMembers[ch][idx] = msg.member;
+        else server.voiceMembers[ch].push(msg.member);
+        refreshVoiceUiFor(server.id, ch);
+    } else if (msg.type === "media_status" && msg.member) {
+        const ch = msg.channelId;
+        if (!server.voiceMembers) server.voiceMembers = {};
+        if (!server.voiceMembers[ch]) server.voiceMembers[ch] = [];
+        const idx = server.voiceMembers[ch].findIndex(m => m.peer_id === msg.peer_id);
+        if (idx >= 0) Object.assign(server.voiceMembers[ch][idx], msg.member);
+        else server.voiceMembers[ch].push(msg.member);
+        refreshVoiceUiFor(server.id, ch);
+    } else if (msg.type === "music_state") {
+        server.musicSession = msg.session || null;
+        syncMusicSessionFromServer(server.musicSession);
+        refreshVoiceUiFor(server.id, server.musicSession?.voiceChannelId || state.voiceChannelId);
+    } else if (msg.type === "permission_denied") {
+        toast(`Bu islem icin izin yok: ${msg.permission || "yetki"}`, "warning");
+    } else if (msg.type === "permission_update") {
+        server.channel_permissions = msg.channel_permissions || {};
+        if (msg.roles) server.roles = msg.roles;
+        refreshVoiceUiFor(server.id, state.voiceChannelId || state.activeChannelId);
+    } else if (msg.type === "role_update") {
+        server.roles = msg.roles || server.roles || {};
+        server.peer_roles = msg.peer_roles || server.peer_roles || {};
+        updateMembersPanel(server.id);
+        renderServerSettingsPanelIfOpen();
+    } else if (msg.type === "force_disconnect" && msg.target === state.peerId) {
+        if (state.voiceChannelId) leaveVoiceChannel();
+        toast("Bir yonetici seni ses kanalindan cikardi.", "warning");
+    }
+}
+
+function myRoleId(server) {
+    if (!server) return "member";
+    if (server.ownerId === state.peerId || server.owner_id === state.peerId) return "owner";
+    return server.peer_roles?.[state.peerId] || "member";
+}
+
+function roleAllows(server, permission, channelId) {
+    if (!server) return false;
+    if (myRoleId(server) === "owner") return true;
+    const roleId = myRoleId(server);
+    const role = server.roles?.[roleId] || server.roles?.member || {};
+    let allowed = !!role.permissions?.[permission];
+    const overrides = server.channel_permissions?.[channelId];
+    const roleOverride = overrides?.[roleId] || overrides?.member;
+    if (roleOverride?.deny?.includes(permission)) allowed = false;
+    if (roleOverride?.allow?.includes(permission)) allowed = true;
+    return allowed;
+}
+
+const _v21JoinVoiceChannel = window.joinVoiceChannel || joinVoiceChannel;
+joinVoiceChannel = window.joinVoiceChannel = async function (channelId) {
+    const server = currentServer();
+    if (server && !roleAllows(server, "join_voice", channelId)) {
+        toast("Bu ses kanalina katilma iznin yok.", "warning");
+        return;
+    }
+    await _v21JoinVoiceChannel(channelId);
+    if (state.voiceChannelId) {
+        sendServerEvent({
+            type: "voice_join",
+            channelId: state.voiceChannelId,
+            username: state.username,
+            avatarColor: state.avatarColor,
+            avatarImage: state.avatarImage,
+            isSharingScreen: !!getLocalShareStream(),
+            isSharingCamera: !!state.cameraStream
+        });
+    }
+};
+
+const _v21LeaveVoiceChannel = window.leaveVoiceChannel || leaveVoiceChannel;
+leaveVoiceChannel = window.leaveVoiceChannel = function () {
+    const ch = state.voiceChannelId;
+    if (ch) sendServerEvent({ type: "voice_leave", channelId: ch });
+    _v21LeaveVoiceChannel();
+};
+
+function sendMediaStatus(kind, sharing) {
+    sendServerEvent({
+        type: "media_status",
+        kind,
+        sharing: !!sharing,
+        channelId: state.voiceChannelId || state.activeChannelId
+    });
+}
+
+if (window.P2PMesh && !window.P2PMesh.prototype._scordV21Patched) {
+    window.P2PMesh.prototype._scordV21Patched = true;
+    const oldStartScreen = window.P2PMesh.prototype.startScreenShare;
+    window.P2PMesh.prototype.startScreenShare = async function (...args) {
+        const ok = await oldStartScreen.apply(this, args);
+        if (ok) sendMediaStatus("screen", true);
+        return ok;
+    };
+    const oldStopScreen = window.P2PMesh.prototype.stopScreenShare;
+    window.P2PMesh.prototype.stopScreenShare = function (...args) {
+        const result = oldStopScreen.apply(this, args);
+        sendMediaStatus("screen", false);
+        return result;
+    };
+}
+
+const _v21StartCameraShare = window.startCameraShare || startCameraShare;
+startCameraShare = window.startCameraShare = async function () {
+    const server = currentServer();
+    if (server && state.voiceChannelId && !roleAllows(server, "camera", state.voiceChannelId)) {
+        toast("Kamera acma iznin yok.", "warning");
+        return;
+    }
+    const result = await _v21StartCameraShare();
+    if (state.cameraStream) sendMediaStatus("camera", true);
+    return result;
+};
+
+const _v21StopCameraShare = window.stopCameraShare || stopCameraShare;
+stopCameraShare = window.stopCameraShare = function () {
+    const result = _v21StopCameraShare();
+    sendMediaStatus("camera", false);
+    return result;
+};
+
+const _v21LocalScreenEnded = window.onLocalScreenShareEnded;
+window.onLocalScreenShareEnded = function () {
+    if (_v21LocalScreenEnded) _v21LocalScreenEnded();
+    sendMediaStatus("screen", false);
+};
+
+function computeMusicStartedAt(position = 0) {
+    return Date.now() - Math.max(0, Number(position) || 0) * 1000;
+}
+
+function isMusicController(session) {
+    const server = currentServer();
+    if (!session) return false;
+    return session.controllerId === state.peerId || roleAllows(server, "music_control", session.voiceChannelId);
+}
+
+function syncMusicSessionFromServer(session) {
+    const server = currentServer();
+    if (server) server.musicSession = session || null;
+    initMusicBotState();
+    state.musicBot.controllerId = session?.controllerId || null;
+    state.musicBot.controllerName = session?.controllerName || "";
+    state.musicBot.serverSession = session || null;
+
+    if (!session || !session.active) {
+        if (state.musicBot.active || state.musicBot.videoId) stopMusicBot();
+        return;
+    }
+    if (!state.voiceChannelId || session.voiceChannelId !== state.voiceChannelId) return;
+
+    const startedAt = session.startedAt || computeMusicStartedAt(session.position || 0);
+    startMusicBot(session.videoId, startedAt);
+    const player = state.musicBot.player;
+    if (player && typeof player.seekTo === "function") {
+        const expected = session.state === "playing"
+            ? Math.max(0, (Date.now() - startedAt) / 1000)
+            : Number(session.position || 0);
+        try {
+            const current = typeof player.getCurrentTime === "function" ? player.getCurrentTime() : expected;
+            if (Math.abs(current - expected) > 2.5) player.seekTo(expected, true);
+            if (session.state === "paused") player.pauseVideo?.();
+            else player.playVideo?.();
+        } catch { }
+    }
+}
+
+async function resolveMusicVideoId(query) {
+    const direct = extractYouTubeVideoId(query);
+    if (direct) return direct;
+    const res = await fetch(`${API_BASE}/ytsearch?q=${encodeURIComponent(query)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.id || null;
+}
+
+async function requestMusicPlay(query) {
+    if (!state.voiceChannelId) {
+        toast("Once bir ses kanalina katil.", "warning");
+        return;
+    }
+    toast("Sarki araniyor...", "info");
+    const videoId = await resolveMusicVideoId(query);
+    if (!videoId) {
+        toast("Sarki bulunamadi.", "error");
+        return;
+    }
+    sendServerEvent({
+        type: "music_command",
+        command: "play",
+        videoId,
+        voiceChannelId: state.voiceChannelId,
+        startedAt: Date.now(),
+        position: 0
+    });
+}
+
+function requestMusicStop() {
+    const session = currentServer()?.musicSession || state.musicBot?.serverSession;
+    if (!session) return stopMusicBot();
+    if (!isMusicController(session)) {
+        if (state.musicBot.player) state.musicBot.player.pauseVideo?.();
+        toast("Bu durdurma sadece sende uygulandi; genel yayini kontrol eden kisi degilsin.", "info");
+        return;
+    }
+    sendServerEvent({ type: "music_command", command: "stop", voiceChannelId: session.voiceChannelId });
+}
+
+async function requestMusicSkip(query) {
+    const session = currentServer()?.musicSession || state.musicBot?.serverSession;
+    if (!session || !isMusicController(session)) {
+        toast("Sarkiyi sadece baslatan kisi veya yetkili degistirebilir.", "warning");
+        return;
+    }
+    if (!query) return requestMusicStop();
+    const videoId = await resolveMusicVideoId(query);
+    if (!videoId) return toast("Yeni sarki bulunamadi.", "error");
+    sendServerEvent({ type: "music_command", command: "skip", videoId, voiceChannelId: session.voiceChannelId });
+}
+
+handleMusicCommand = window.handleMusicCommand = function (text) {
+    const raw = String(text || "").trim();
+    const mentionPrefix = /^@?(music|muzik|müzik)\s+/i;
+    let cmd = raw;
+    if (mentionPrefix.test(cmd)) cmd = cmd.replace(mentionPrefix, "!");
+    if (cmd.startsWith("!p ") || cmd.startsWith("!play ")) {
+        const query = cmd.startsWith("!p ") ? cmd.slice(3).trim() : cmd.slice(6).trim();
+        if (!query) toast("Kullanim: !p <sarki veya YouTube linki>", "info");
+        else requestMusicPlay(query);
+        return true;
+    }
+    if (cmd === "!stop" || cmd === "!stopmusic") {
+        requestMusicStop();
+        return true;
+    }
+    if (cmd.startsWith("!skip")) {
+        requestMusicSkip(cmd.slice(5).trim());
+        return true;
+    }
+    if (cmd.startsWith("/music")) {
+        const parts = cmd.split(/\s+/);
+        const sub = (parts[1] || "").toLowerCase();
+        const rest = parts.slice(2).join(" ");
+        if (sub === "play") requestMusicPlay(rest);
+        else if (sub === "stop") requestMusicStop();
+        else if (sub === "skip") requestMusicSkip(rest);
+        else toast("Kullanim: !p <sarki>, !skip [sarki], !stop", "info");
+        return true;
+    }
+    return false;
+};
+
+renderMusicBotPanel = window.renderMusicBotPanel = function () {
+    const voiceView = document.getElementById("voice-view");
+    if (!voiceView || voiceView.classList.contains("hidden")) return;
+    let panel = document.getElementById("music-bot-panel");
+    if (!panel) {
+        panel = document.createElement("div");
+        panel.id = "music-bot-panel";
+        panel.className = "music-bot-panel music-bot-panel--compact";
+        const controls = voiceView.querySelector(".voice-controls");
+        if (controls) controls.insertAdjacentElement("beforebegin", panel);
+        else voiceView.appendChild(panel);
+    }
+    panel.className = "music-bot-panel music-bot-panel--compact";
+    const server = currentServer();
+    const session = server?.musicSession || state.musicBot?.serverSession || null;
+    const inSameVoice = !!session && session.voiceChannelId === state.voiceChannelId;
+    const canControl = session && isMusicController(session);
+    const joined = !!state.voiceChannelId;
+    const title = session?.videoId ? `YouTube: ${session.videoId}` : "Senkron dinleme";
+    panel.innerHTML = `
+      <div class="mbot-compact-left">
+        <span class="mbot-icon">♪</span>
+        <div class="mbot-compact-copy">
+          <strong>${session ? "Muzik yayini aktif" : "Muzik Botu"}</strong>
+          <span>${session ? `${title} - kontrol: ${escapeHtml(session.controllerName || "host")}` : "Komut: !p <sarki>, !skip, !stop"}</span>
+        </div>
+      </div>
+      <div class="mbot-compact-actions">
+        ${session && joined ? `<button class="mbot-btn mbot-btn--play" id="mbot-join-sync-btn">${inSameVoice ? "Senkronla" : "Play"}</button>` : ""}
+        ${session && canControl ? `<button class="mbot-btn" id="mbot-stop-btn" title="Genel yayini durdur">Stop</button>` : ""}
+        ${session ? `<input type="range" class="mbot-vol-slider" id="mbot-vol-slider" min="0" max="100" value="${state.musicBot?.volume ?? 30}" title="Kisisel ses">` : ""}
+      </div>`;
+    document.getElementById("mbot-join-sync-btn")?.addEventListener("click", () => syncMusicSessionFromServer(session));
+    document.getElementById("mbot-stop-btn")?.addEventListener("click", requestMusicStop);
+    const vol = document.getElementById("mbot-vol-slider");
+    if (vol) vol.oninput = e => {
+        initMusicBotState();
+        state.musicBot.volume = parseInt(e.target.value, 10);
+        state.musicBot.player?.setVolume?.(state.musicBot.volume);
+    };
+};
+
+function requestForceDisconnect(peerId, channelId = state.voiceChannelId || state.activeChannelId) {
+    sendServerEvent({ type: "force_disconnect", target: peerId, channelId });
+}
+
+function requestKickMusicBot() {
+    requestForceDisconnect("bot_music", state.voiceChannelId || state.activeChannelId);
+}
+
+function renderServerSettingsPanelIfOpen() {
+    const panel = document.getElementById("server-settings-panel");
+    if (panel && !panel.classList.contains("hidden")) openServerSettingsPanel();
+}
+
+openSettingsModal = window.openSettingsModal = function () {
+    const vs = state.voiceSettings || {};
+    const body = `
+      <div class="scord-settings-shell">
+        <nav class="scord-settings-nav">
+          <button class="active" data-tab="profile">Profil</button>
+          <button data-tab="voice">Ses ve Video</button>
+          <button data-tab="appearance">Gorunum</button>
+          <button data-tab="notifications">Bildirim</button>
+        </nav>
+        <section class="scord-settings-content">
+          <div class="scord-settings-page" id="set-profile">
+            <h3>Profil</h3>
+            <label>Kullanici adi<input class="modal-input" id="settings-username" value="${escapeHtml(state.username)}" maxlength="32"></label>
+            <label>Avatar URL<input class="modal-input" id="settings-avatar-url" value="${/^https?:/i.test(state.avatarImage || "") ? escapeHtml(state.avatarImage) : ""}" placeholder="https://..."></label>
+            <label>Avatar dosyasi<input type="file" id="settings-avatar-upload" accept="image/*" class="modal-input"></label>
+          </div>
+          <div class="scord-settings-page hidden" id="set-voice">
+            <h3>Ses ve Video</h3>
+            <label>Mikrofon<select class="modal-input" id="settings-mic-select"><option value="default">Varsayilan</option></select></label>
+            <label>Ses filtresi<select class="modal-input" id="settings-filter"><option value="none">Normal</option><option value="bass">Bass Boost</option><option value="radio">Lo-Fi Radio</option></select></label>
+            <label>Giris sesi <span id="vol-label">${Math.round((vs.volume || 1) * 100)}%</span><input type="range" id="settings-volume" min="0" max="3" step="0.1" value="${vs.volume || 1}" oninput="document.getElementById('vol-label').textContent=Math.round(this.value*100)+'%'"></label>
+            <label class="scord-check"><input type="checkbox" id="settings-noise-suppress" ${vs.noiseSuppression !== false ? "checked" : ""}> Gurultu engelleme</label>
+            <label class="scord-check"><input type="checkbox" id="settings-echo-cancel" ${vs.echoCancellation !== false ? "checked" : ""}> Yanki engelleme</label>
+            <label class="scord-check"><input type="checkbox" id="settings-auto-gain" ${vs.autoGainControl !== false ? "checked" : ""}> Otomatik seviye dengeleme</label>
+            <label>Voice gate esigi <span id="gate-label">${vs.gateThreshold ?? 18}</span><input type="range" id="settings-gate-threshold" min="5" max="60" step="1" value="${vs.gateThreshold ?? 18}" oninput="document.getElementById('gate-label').textContent=this.value"></label>
+            <label>Giris modu<select class="modal-input" id="settings-input-mode"><option value="voice" ${vs.inputMode !== "ptt" ? "selected" : ""}>Ses aktivitesi</option><option value="ptt" ${vs.inputMode === "ptt" ? "selected" : ""}>Bas-konus</option></select></label>
+            <label>PTT tusu<input class="modal-input" id="settings-ptt-key" readonly value="${escapeHtml(vs.pttKey || "Control")}"></label>
+            <label>Ekran paylasimi<select class="modal-input" id="settings-screen-quality"><option value="720p">720p</option><option value="1080p">1080p</option><option value="4k">4K</option><option value="480p">480p</option></select></label>
+            <label>Kamera<select class="modal-input" id="settings-camera-quality"><option value="720p">720p</option><option value="1080p">1080p</option><option value="4k">4K</option><option value="480p">480p</option></select></label>
+          </div>
+          <div class="scord-settings-page hidden" id="set-appearance">
+            <h3>Gorunum</h3>
+            <label>Tema<select class="modal-input" id="settings-theme"><option value="">SCORD Glass</option><option value="theme-discord">Kompakt panel</option><option value="theme-neon">Neon grid</option></select></label>
+            <label class="scord-check"><input type="checkbox" id="settings-compact" ${state.compactMode ? "checked" : ""}> Kompakt gorunum</label>
+            <label class="scord-check"><input type="checkbox" id="settings-high-contrast" ${localStorage.getItem("scord_high_contrast") === "1" ? "checked" : ""}> Yuksek kontrast</label>
+            <label>Mesaj yogunlugu<select class="modal-input" id="settings-msg-density"><option value="comfortable">Rahat</option><option value="cozy">Normal</option><option value="compact">Siki</option></select></label>
+          </div>
+          <div class="scord-settings-page hidden" id="set-notifications">
+            <h3>Bildirimler</h3>
+            <label>Sohbet bildirimleri<select class="modal-input" id="notif-chat-level"><option value="all">Tum mesajlar</option><option value="mentions">Sadece bahsetmeler</option><option value="none">Kapali</option></select></label>
+            <label class="scord-check"><input type="checkbox" id="notif-dm" ${state.notifSettings?.dm !== false ? "checked" : ""}> DM bildirimi</label>
+            <label class="scord-check"><input type="checkbox" id="notif-join" ${state.notifSettings?.join !== false ? "checked" : ""}> Ses katilma bildirimi</label>
+          </div>
+        </section>
+      </div>`;
+    showModal("Kullanici Ayarlari", body, `<button class="btn-secondary" onclick="hideModal()">Iptal</button><button class="btn-primary" onclick="saveSettings()">Kaydet</button>`);
+    document.querySelectorAll(".scord-settings-nav button").forEach(btn => {
+        btn.onclick = () => {
+            document.querySelectorAll(".scord-settings-nav button").forEach(b => b.classList.remove("active"));
+            document.querySelectorAll(".scord-settings-page").forEach(p => p.classList.add("hidden"));
+            btn.classList.add("active");
+            document.getElementById(`set-${btn.dataset.tab}`)?.classList.remove("hidden");
+            if (btn.dataset.tab === "voice") hydrateVoiceSettingsControls(vs);
+        };
+    });
+    hydrateVoiceSettingsControls(vs);
+};
+
+function hydrateVoiceSettingsControls(vs) {
+    navigator.mediaDevices?.enumerateDevices?.().then(devices => {
+        const sel = document.getElementById("settings-mic-select");
+        if (!sel) return;
+        sel.innerHTML = '<option value="default">Varsayilan</option>';
+        devices.filter(d => d.kind === "audioinput").forEach((d, i) => {
+            const o = document.createElement("option");
+            o.value = d.deviceId;
+            o.textContent = d.label || `Mikrofon ${i + 1}`;
+            if (d.deviceId === vs.micId) o.selected = true;
+            sel.appendChild(o);
+        });
+    }).catch(() => { });
+    const filter = document.getElementById("settings-filter");
+    if (filter) filter.value = vs.filter || "none";
+    const screen = document.getElementById("settings-screen-quality");
+    if (screen) screen.value = state.screenShareQuality || "720p";
+    const camera = document.getElementById("settings-camera-quality");
+    if (camera) camera.value = state.cameraQuality || "720p";
+}
+
+const _v21SaveSettings = window.saveSettings || saveSettings;
+saveSettings = window.saveSettings = function () {
+    _v21SaveSettings();
+    const autoGainControl = document.getElementById("settings-auto-gain")?.checked ?? true;
+    const gateThreshold = Number(document.getElementById("settings-gate-threshold")?.value || state.voiceSettings?.gateThreshold || 18);
+    state.voiceSettings = { ...(state.voiceSettings || {}), autoGainControl, gateThreshold, gateAttack: 0.025, gateRelease: 0.18 };
+    localStorage.setItem("scord_voice_settings", JSON.stringify(state.voiceSettings));
+};
+
+openServerSettingsPanel = window.openServerSettingsPanel = function () {
+    if (!state.activeServerId) return toast("Once bir sunucu sec.", "info");
+    const server = currentServer();
+    if (!server) return;
+    const isOwner = server.ownerId === state.peerId;
+    const canManage = isOwner || roleAllows(server, "manage_server") || roleAllows(server, "manage_roles");
+    if (!canManage) return toast("Sunucu ayarlari icin yetkin yok.", "warning");
+    let panel = document.getElementById("server-settings-panel");
+    if (!panel) {
+        panel = document.createElement("div");
+        panel.id = "server-settings-panel";
+        document.querySelector(".app")?.appendChild(panel) || document.body.appendChild(panel);
+    }
+    const roles = server.roles || {};
+    const roleRows = Object.entries(roles).map(([id, role]) => `
+      <div class="scord-role-row">
+        <input class="modal-input" value="${escapeHtml(role.name || id)}" onchange="state.servers.find(s=>s.id==='${server.id}').roles['${id}'].name=this.value">
+        <input type="color" value="${role.color || "#94a3b8"}" onchange="state.servers.find(s=>s.id==='${server.id}').roles['${id}'].color=this.value">
+        <span>${id}</span>
+      </div>`).join("");
+    const permRows = SCORD_V21_PERMISSIONS.map(p => `
+      <label class="permission-item"><input type="checkbox" id="perm-member-${p}" ${roles.member?.permissions?.[p] !== false ? "checked" : ""}> ${p.replaceAll("_", " ")}</label>`).join("");
+    panel.className = "scord-server-settings";
+    panel.innerHTML = `
+      <aside class="scord-server-settings-nav">
+        <strong>Sunucu Ayarlari</strong>
+        <button class="active" data-page="overview">Genel</button>
+        <button data-page="roles">Roller</button>
+        <button data-page="perms">Izinler</button>
+        <button data-page="voice">Ses ve Moderasyon</button>
+        <button class="danger" onclick="closeServerSettingsPanel()">Kapat</button>
+      </aside>
+      <main class="scord-server-settings-main">
+        <section id="srv-overview" class="srv-page"><h2>Genel</h2><label>Sunucu adi<input class="modal-input" id="settings-sv-name" value="${escapeHtml(server.name)}"></label><label>Ikon URL<input class="modal-input" id="settings-sv-icon" value="${escapeHtml(server.icon_url || "")}"></label></section>
+        <section id="srv-roles" class="srv-page hidden"><h2>Roller</h2>${roleRows}</section>
+        <section id="srv-perms" class="srv-page hidden"><h2>Varsayilan uye izinleri</h2><div class="permission-grid">${permRows}</div></section>
+        <section id="srv-voice" class="srv-page hidden"><h2>Ses ve Moderasyon</h2><button class="btn-secondary" onclick="requestKickMusicBot()">Muzik botunu cikar</button><p class="modal-info">Force disconnect yetkisi olan roller ses kanalindaki kullanicilari ve botu cikarabilir.</p></section>
+        <footer><button class="btn-primary" onclick="saveProfessionalServerSettings()">Kaydet</button></footer>
+      </main>`;
+    panel.querySelectorAll(".scord-server-settings-nav button[data-page]").forEach(btn => {
+        btn.onclick = () => {
+            panel.querySelectorAll(".scord-server-settings-nav button").forEach(b => b.classList.remove("active"));
+            panel.querySelectorAll(".srv-page").forEach(p => p.classList.add("hidden"));
+            btn.classList.add("active");
+            panel.querySelector(`#srv-${btn.dataset.page}`)?.classList.remove("hidden");
+        };
+    });
+};
+
+closeServerSettingsPanel = window.closeServerSettingsPanel = function () {
+    document.getElementById("server-settings-panel")?.remove();
+};
+
+saveProfessionalServerSettings = window.saveProfessionalServerSettings = function () {
+    const server = currentServer();
+    if (!server) return;
+    const name = document.getElementById("settings-sv-name")?.value?.trim();
+    const icon = document.getElementById("settings-sv-icon")?.value?.trim();
+    if (name) server.name = name;
+    server.icon_url = icon || null;
+    if (!server.roles) server.roles = {};
+    if (!server.roles.member) server.roles.member = { name: "Uye", color: "#94a3b8", permissions: {} };
+    if (!server.roles.member.permissions) server.roles.member.permissions = {};
+    SCORD_V21_PERMISSIONS.forEach(p => {
+        const el = document.getElementById(`perm-member-${p}`);
+        if (el) server.roles.member.permissions[p] = el.checked;
+    });
+    sendServerEvent({ type: "role_update", roles: server.roles, peer_roles: server.peer_roles || {} });
+    meshBroadcastReliable({ type: "server_update", payload: { id: server.id, name: server.name, icon_url: server.icon_url, roles: server.roles, peer_roles: server.peer_roles } });
+    renderServerRail();
+    updateChannelSidebar(server.id);
+    toast("Sunucu ayarlari kaydedildi.", "success");
+};
+
+const _v21UpdateConnectionStatus = window.updateConnectionStatus || updateConnectionStatus;
+updateConnectionStatus = window.updateConnectionStatus = function (status) {
+    if (String(status || "") === "room_not_found") {
+        toast("Oda bulunamadi. Kalici oda kaydi yoksa davet koduyla tekrar katil; restart sonrasi kayitlar artik korunur.", "error");
+        return;
+    }
+    _v21UpdateConnectionStatus(status);
+};
+
+document.addEventListener("DOMContentLoaded", () => {
+    setTimeout(() => {
+        const btn = document.getElementById("server-settings-btn");
+        if (btn) btn.onclick = openServerSettingsPanel;
+    }, 0);
+});
+
+function ensureProfessionalVoiceBar() {
+    const header = document.querySelector("#voice-view .voice-header");
+    if (!header || document.getElementById("voice-top-control-bar")) return;
+    const bar = document.createElement("div");
+    bar.id = "voice-top-control-bar";
+    bar.className = "voice-top-control-bar";
+    bar.innerHTML = `
+      <button class="voice-icon-btn" id="voice-top-mic" title="Mikrofon">Mic</button>
+      <button class="voice-icon-btn" id="voice-top-deafen" title="Kulaklik sustur">Deafen</button>
+      <button class="voice-icon-btn" id="voice-top-camera" title="Kamera">Cam</button>
+      <button class="voice-icon-btn" id="voice-top-screen" title="Ekran paylas">Share</button>
+      <button class="voice-icon-btn danger" id="voice-top-leave" title="Baglantiyi kes">Leave</button>`;
+    header.appendChild(bar);
+    document.getElementById("voice-top-mic").onclick = () => document.getElementById("mic-toggle-btn")?.click();
+    document.getElementById("voice-top-deafen").onclick = () => {
+        state.deafened = !state.deafened;
+        Object.values(state.remoteMedia || {}).forEach(el => { el.muted = state.deafened || el.muted; });
+        document.getElementById("voice-top-deafen").classList.toggle("active", state.deafened);
+        toast(state.deafened ? "Kulaklik susturuldu." : "Kulaklik acildi.", "info");
+    };
+    document.getElementById("voice-top-camera").onclick = () => document.getElementById("voice-camera-btn")?.click();
+    document.getElementById("voice-top-screen").onclick = () => document.getElementById("voice-screen-btn")?.click();
+    document.getElementById("voice-top-leave").onclick = () => leaveVoiceChannel();
+}
+
+const _v21ShowVoiceView = window.showVoiceView || showVoiceView;
+showVoiceView = window.showVoiceView = function (...args) {
+    const result = _v21ShowVoiceView.apply(this, args);
+    ensureProfessionalVoiceBar();
+    renderMusicBotPanel();
+    return result;
+};
+
+console.log("[Shercord V21] Authoritative voice/music state, permissions, voice gate, and professional settings loaded.");

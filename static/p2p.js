@@ -118,6 +118,7 @@ class P2PMesh {
     async _handleSignal(msg) {
         switch (msg.type) {
             case "room_state":
+                this.cb.onServerEvent?.(msg);
                 // We got here — now initiate connections to existing peers
                 for (const peer of msg.room.peers) {
                     if (peer.peer_id !== this.peerId) {
@@ -159,6 +160,17 @@ class P2PMesh {
 
             case "broadcast":
                 this.cb.onMessage?.(msg.from, msg.data);
+                break;
+
+            case "voice_state_snapshot":
+            case "voice_state":
+            case "media_status":
+            case "music_state":
+            case "permission_denied":
+            case "permission_update":
+            case "role_update":
+            case "force_disconnect":
+                this.cb.onServerEvent?.(msg);
                 break;
 
             case "error":
@@ -499,6 +511,10 @@ class P2PMesh {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(msg));
         }
+    }
+
+    sendSignal(data) {
+        this._send(data);
     }
 
     _setStatus(status) {
