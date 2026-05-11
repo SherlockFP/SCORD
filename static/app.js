@@ -6615,10 +6615,10 @@ function updatePermission(permId, enabled) {
 }
 
 // Load saved servers on startup
-const _origStartApp = window.startApp;
+const _origStartApp_servers = window.startApp;
 window.startApp = function() {
     loadSavedServers();
-    if (_origStartApp) _origStartApp();
+    if (_origStartApp_servers) _origStartApp_servers();
 };
 
 console.log("[Shercord V20] Server persistence, role management, and embedded settings panel loaded!");
