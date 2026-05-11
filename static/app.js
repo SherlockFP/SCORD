@@ -93,6 +93,16 @@ let state = {
     peerLatencyMs: {},
     peerIngressMs: {},
     _rttPingTimer: null,
+    // Typing indicators
+    typingIndicators: {}, // serverId-channelId -> {peerId -> timestamp}
+    _typingTimeout: null,
+    // User profiles and notes
+    userProfiles: {}, // peerId -> {notes: string, friends: Set}
+    userNotes: {}, // peerId -> {notes: string}
+    // Message search
+    searchOpen: false,
+    searchQuery: "",
+    searchResults: [],
     _meshHealthTimer: null,
     _lastMeshStatus: "",
     _queuedBroadcastToastAt: 0,
@@ -1997,6 +2007,89 @@ function saveMessage(serverId, msg) {
     }
 }
 
+/* ── Typing Indicators ────────────────────────────────────── */
+function broadcastTypingIndicator() {
+    if (!state.mesh || !state.activeServerId || !state.activeChannelId) return;
+    
+    meshBroadcastReliable({
+        type: "typing_start",
+        serverId: state.activeServerId,
+        channelId: state.activeChannelId,
+        username: state.username,
+        peerId: state.peerId
+    });
+    
+    // Clear any previous timeout
+    if (state._typingTimeout) clearTimeout(state._typingTimeout);
+    
+    // Stop typing after 3 seconds of inactivity
+    state._typingTimeout = setTimeout(() => {
+        meshBroadcastReliable({
+            type: "typing_stop",
+            serverId: state.activeServerId,
+            channelId: state.activeChannelId,
+            peerId: state.peerId
+        });
+    }, 3000);
+}
+
+function updateTypingIndicator(serverId, channelId, peerId, username, isTyping) {
+    const key = `${serverId}-${channelId}`;
+    if (!state.typingIndicators[key]) {
+        state.typingIndicators[key] = {};
+    }
+    
+    if (isTyping) {
+        state.typingIndicators[key][peerId] = { username, timestamp: Date.now() };
+    } else {
+        delete state.typingIndicators[key][peerId];
+    }
+    
+    // Update typing display
+    if (serverId === state.activeServerId && channelId === state.activeChannelId) {
+        updateTypingDisplay();
+    }
+}
+
+function updateTypingDisplay() {
+    const key = `${state.activeServerId}-${state.activeChannelId}`;
+    const typing = Object.values(state.typingIndicators[key] || {});
+    const typingEl = document.getElementById("typing-indicator");
+    
+    if (!typingEl) return;
+    
+    if (typing.length === 0) {
+        typingEl.classList.add("hidden");
+        return;
+    }
+    
+    const names = typing.map(t => t.username).join(", ");
+    const count = typing.length;
+    typingEl.classList.remove("hidden");
+    
+    if (count === 1) {
+        typingEl.textContent = `${names} yazıyor...`;
+    } else if (count === 2) {
+        typingEl.textContent = `${names} yazıyor...`;
+    } else {
+        typingEl.textContent = `${count} kişi yazıyor...`;
+    }
+}
+
+/* ── User Notes & Profiles ────────────────────────────────── */
+function saveUserNote(peerId, note) {
+    state.userNotes[peerId] = note;
+    localStorage.setItem(`scord_note_${peerId}`, note);
+}
+
+function getUserNote(peerId) {
+    if (!state.userNotes[peerId]) {
+        const saved = localStorage.getItem(`scord_note_${peerId}`);
+        if (saved) state.userNotes[peerId] = saved;
+    }
+    return state.userNotes[peerId] || "";
+}
+
 function mergeMessageHistoryIntoServer(server, incoming) {
     if (!server || !incoming || typeof incoming !== "object") return;
     if (!server.messages) server.messages = {};
@@ -2354,6 +2447,20 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
             }
         }
 
+    } else if (data.type === "voice_state_request") {
+        // New user is requesting voice state. Respond with all participants in this channel.
+        const server = state.servers.find(s => s.id === roomId);
+        if (server?.voiceMembers && state.voiceChannelId) {
+            const ch = canonicalVoiceChannelId(server, data.channelId);
+            const members = server.voiceMembers[ch] || [];
+            // Respond to the requester with all members in this channel
+            state.mesh?.sendTo(fromPeerId, {
+                type: "voice_state_list",
+                channelId: ch,
+                members: members
+            });
+        }
+
     } else if (data.type === "voice_state_sync") {
         // State synchronization: update membership flags only.
         // No toasts/sounds here.
@@ -2469,6 +2576,12 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         if (state.voiceChannelId && state.musicBot.player && typeof state.musicBot.player.playVideo === "function") {
             state.musicBot.player.playVideo();
         }
+    } else if (data.type === "typing_start") {
+        // Handle typing indicator start
+        updateTypingIndicator(data.serverId, data.channelId, fromPeerId, data.username, true);
+    } else if (data.type === "typing_stop") {
+        // Handle typing indicator stop
+        updateTypingIndicator(data.serverId, data.channelId, fromPeerId, data.username, false);
     } else if (data.type === "voice_status") {
         const server = state.servers.find(s => s.id === roomId);
         if (server?.voiceMembers) {
@@ -2489,6 +2602,29 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                 }
             }
         }
+    } else if (data.type === "voice_state_list") {
+        // Receiving list of voice members from a peer. Update all members.
+        const server = state.servers.find(s => s.id === roomId);
+        if (server?.voiceMembers && data.members && Array.isArray(data.members)) {
+            const ch = canonicalVoiceChannelId(server, data.channelId);
+            if (!server.voiceMembers[ch]) server.voiceMembers[ch] = [];
+            
+            // Merge received members with existing list (don't duplicate)
+            data.members.forEach(m => {
+                if (!server.voiceMembers[ch].find(existing => existing.peer_id === m.peer_id)) {
+                    server.voiceMembers[ch].push(m);
+                } else {
+                    // Update existing member's info
+                    const existing = server.voiceMembers[ch].find(x => x.peer_id === m.peer_id);
+                    Object.assign(existing, m);
+                }
+            });
+            
+            if (state.activeServerId === roomId && (state.activeChannelId === ch || state.voiceChannelId === ch)) {
+                renderVoiceParticipants(roomId, ch);
+            }
+        }
+
     } else if (data.type === "screen_status" || data.type === "video_status") {
         const server = state.servers.find(s => s.id === roomId);
         const chId = data.channelId || state.voiceChannelId || state.activeChannelId;
@@ -2962,6 +3098,14 @@ async function joinVoiceChannel(channelId) {
         isSharingScreen: !!getLocalShareStream(),
         isSharingCamera: !!state.cameraStream
     });
+
+    // Request voice state from existing participants
+    setTimeout(() => {
+        meshBroadcastReliable({
+            type: "voice_state_request",
+            channelId: canonCh
+        });
+    }, 100);
 
     renderVoiceParticipants(state.activeServerId, canonCh);
     showVoiceStatusBar(state.activeServerId, canonCh);
@@ -4547,6 +4691,93 @@ function fillLastOwnChatLine() {
     }
 }
 
+/* ── Mention Autocomplete ─────────────────────────────────── */
+let _mentionSuggestions = [];
+let _mentionActiveIndex = 0;
+
+function showMentionSuggestions(input) {
+    const value = input.value;
+    const cursorPos = input.selectionStart;
+    const textBeforeCursor = value.substring(0, cursorPos);
+    const lastAtIndex = textBeforeCursor.lastIndexOf("@");
+    
+    if (lastAtIndex === -1 || (lastAtIndex > 0 && /\w/.test(textBeforeCursor[lastAtIndex - 1]))) {
+        hideMentionSuggestions();
+        return;
+    }
+    
+    const mentionText = textBeforeCursor.substring(lastAtIndex + 1);
+    if (mentionText.length < 1) {
+        hideMentionSuggestions();
+        return;
+    }
+    
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) {
+        hideMentionSuggestions();
+        return;
+    }
+    
+    const members = server.members || [];
+    _mentionSuggestions = members.filter(m => 
+        m.username.toLowerCase().includes(mentionText.toLowerCase())
+    ).slice(0, 5);
+    
+    if (_mentionSuggestions.length === 0) {
+        hideMentionSuggestions();
+        return;
+    }
+    
+    _mentionActiveIndex = 0;
+    renderMentionSuggestions(input, lastAtIndex, mentionText);
+}
+
+function renderMentionSuggestions(input, atIndex, mentionText) {
+    let popup = document.getElementById("mention-popup");
+    if (!popup) {
+        popup = document.createElement("div");
+        popup.id = "mention-popup";
+        popup.className = "mention-popup";
+        input.parentElement.insertBefore(popup, input.nextSibling);
+    }
+    
+    popup.innerHTML = _mentionSuggestions.map((member, idx) => `
+        <div class="mention-item ${idx === _mentionActiveIndex ? "active" : ""}" 
+             data-member-id="${escapeHtml(member.peer_id)}"
+             data-username="${escapeHtml(member.username)}">
+            <div class="mention-avatar" style="background-color: ${escapeHtml(member.avatar_color)}">
+                ${initials(member.username)}
+            </div>
+            <span class="mention-name">${escapeHtml(member.username)}</span>
+        </div>
+    `).join("");
+    
+    popup.classList.remove("hidden");
+    popup.querySelectorAll(".mention-item").forEach((item, idx) => {
+        item.onclick = () => insertMention(input, atIndex, member.username);
+    });
+}
+
+function hideMentionSuggestions() {
+    const popup = document.getElementById("mention-popup");
+    if (popup) {
+        popup.classList.add("hidden");
+    }
+}
+
+function insertMention(input, atIndex, username) {
+    const value = input.value;
+    const cursorPos = input.selectionStart;
+    const textBeforeCursor = value.substring(0, atIndex);
+    const textAfterCursor = value.substring(cursorPos);
+    
+    input.value = textBeforeCursor + "@" + username + " " + textAfterCursor;
+    input.selectionStart = input.selectionEnd = atIndex + username.length + 2;
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 200) + "px";
+    hideMentionSuggestions();
+}
+
 const debouncedPersistDraft = UI.debounce(() => {
     if (state.activeServerId && state.activeChannelId) persistChatDraftFor(state.activeServerId, state.activeChannelId);
 }, 400);
@@ -4598,6 +4829,35 @@ document.addEventListener("DOMContentLoaded", () => {
     // Chat input
     const chatInput = document.getElementById("chat-input");
     chatInput.addEventListener("keydown", (e) => {
+        // Handle mention popup navigation
+        const mentionPopup = document.getElementById("mention-popup");
+        if (mentionPopup && !mentionPopup.classList.contains("hidden") && _mentionSuggestions.length > 0) {
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                _mentionActiveIndex = (_mentionActiveIndex + 1) % _mentionSuggestions.length;
+                renderMentionSuggestions(chatInput, chatInput.value.lastIndexOf("@"), "");
+                return;
+            }
+            if (e.key === "ArrowUp") {
+                e.preventDefault();
+                _mentionActiveIndex = (_mentionActiveIndex - 1 + _mentionSuggestions.length) % _mentionSuggestions.length;
+                renderMentionSuggestions(chatInput, chatInput.value.lastIndexOf("@"), "");
+                return;
+            }
+            if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                const member = _mentionSuggestions[_mentionActiveIndex];
+                if (member) {
+                    insertMention(chatInput, chatInput.value.lastIndexOf("@"), member.username);
+                }
+                return;
+            }
+            if (e.key === "Escape") {
+                hideMentionSuggestions();
+                return;
+            }
+        }
+        
         if (e.key === "ArrowUp" && chatInput.selectionStart === 0 && !e.shiftKey && !chatInput.value.trim()) {
             e.preventDefault();
             fillLastOwnChatLine();
@@ -4612,6 +4872,14 @@ document.addEventListener("DOMContentLoaded", () => {
         chatInput.style.height = "auto";
         chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + "px";
         debouncedPersistDraft();
+        
+        // Send typing indicator
+        if (state.activeServerId && state.activeChannelId && chatInput.value.trim()) {
+            broadcastTypingIndicator();
+        }
+        
+        // Show mention suggestions
+        showMentionSuggestions(chatInput);
     });
 
     document.getElementById("send-btn").onclick = sendMessage;
@@ -5061,6 +5329,8 @@ function stopMusicBot() {
 /* ── User Profile & Screen Share Bindings ────────────────── */
 function openUserProfile(peerId, username, avatarImage, avatarColor) {
     const isSelf = peerId === state.peerId;
+    const userNote = getUserNote(peerId);
+    const isFriend = state.friends.some(f => f.peerId === peerId);
 
     // Create Profile HTML
     const body = `
@@ -5072,11 +5342,81 @@ function openUserProfile(peerId, username, avatarImage, avatarColor) {
             <h2 style="margin:0 0 4px 0">${username}</h2>
             <p style="margin:0; font-family:monospace; color:var(--text-muted); font-size:12px;">ID: ${peerId}</p>
         </div>
+        <div style="padding:0 16px 12px 16px; border-top: 1px solid var(--border); margin-top: 12px; gap: 8px; display: flex; gap: 8px;">
+            ${!isSelf ? `
+                <label style="display: flex; align-items: center; gap: 6px; flex: 1;">
+                    <input type="checkbox" id="friend-checkbox-${peerId}" ${isFriend ? 'checked' : ''} style="cursor: pointer; width: 16px; height: 16px;">
+                    <span style="font-size: 12px;">Arkadaş Ekle</span>
+                </label>
+            ` : ''}
+        </div>
+        ${!isSelf ? `
+            <div style="padding:0 16px 12px 16px;">
+                <label style="display: block; margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--text-secondary);">Notlar</label>
+                <textarea id="profile-note-input" placeholder="Bu kullanıcı hakkında notlar..." style="width: 100%; height: 60px; padding: 8px; border-radius: var(--r-sm); border: 1px solid var(--border-strong); background: var(--bg-highlight); color: var(--text-primary); resize: vertical; font-family: inherit; font-size: 12px;">${escapeHtml(userNote)}</textarea>
+            </div>
+        ` : ''}
     `;
 
-    const footer = !isSelf ? `<button class="btn-primary" onclick="openDM('${peerId}', '${username}', '${avatarColor || ''}', '${avatarImage || ''}'); hideModal();">Mesaj Gönder</button>` : `<button class="btn-secondary" onclick="hideModal()">Kapat</button>`;
+    const footer = !isSelf ? `
+        <button class="btn-secondary" onclick="saveProfileNote('${peerId}')">Notu Kaydet</button>
+        <button class="btn-primary" onclick="openDM('${peerId}', '${username}', '${avatarColor || ''}', '${avatarImage || ''}'); hideModal();">Mesaj Gönder</button>
+    ` : `<button class="btn-secondary" onclick="hideModal()">Kapat</button>`;
 
     showModal("Kullanıcı Profili", body, footer);
+    
+    // Add event listener for friend checkbox
+    if (!isSelf) {
+        setTimeout(() => {
+            const checkbox = document.getElementById(`friend-checkbox-${peerId}`);
+            if (checkbox) {
+                checkbox.addEventListener("change", () => {
+                    toggleFriendStatus(peerId, username, avatarColor, avatarImage);
+                });
+            }
+        }, 100);
+    }
+}
+
+function saveProfileNote(peerId) {
+    const textarea = document.getElementById("profile-note-input");
+    if (textarea) {
+        const note = textarea.value;
+        saveUserNote(peerId, note);
+        toast("Not kaydedildi!", "success");
+    }
+}
+
+function toggleFriendStatus(peerId, username, avatarColor, avatarImage) {
+    const index = state.friends.findIndex(f => f.peerId === peerId);
+    if (index >= 0) {
+        state.friends.splice(index, 1);
+    } else {
+        state.friends.push({ peerId, username, avatarColor, avatarImage });
+    }
+    saveFriendsToStorage();
+    toast(`${username} ${index >= 0 ? 'arkadaş listesinden çıkarıldı' : 'arkadaş listesine eklendi'}!`, "success");
+}
+
+function saveFriendsToStorage() {
+    const friendsData = state.friends.map(f => ({
+        peerId: f.peerId,
+        username: f.username,
+        avatarColor: f.avatarColor,
+        avatarImage: f.avatarImage
+    }));
+    localStorage.setItem("scord_friends", JSON.stringify(friendsData));
+}
+
+function loadFriendsFromStorage() {
+    try {
+        const data = localStorage.getItem("scord_friends");
+        if (data) {
+            state.friends = JSON.parse(data);
+        }
+    } catch (e) {
+        console.warn("Failed to load friends", e);
+    }
 }
 
 // P2P Callback for when native browser screen sharing stops

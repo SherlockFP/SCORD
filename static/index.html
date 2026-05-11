@@ -240,6 +240,14 @@
           </aside>
         </div>
 
+        <!-- Typing Indicator -->
+        <div id="typing-indicator" class="typing-indicator hidden">
+          <span class="typing-dots">
+            <span></span><span></span><span></span>
+          </span>
+          <span id="typing-text">Birisi yazıyor...</span>
+        </div>
+
         <div class="chat-input-area">
           <div id="reply-preview-bar" class="reply-preview-bar hidden" aria-live="polite">
             <div class="reply-preview-inner">
@@ -254,6 +262,8 @@
               <input type="text" id="gif-input" placeholder="GIF Ara...">
               <div id="gif-results" class="gif-results"></div>
             </div>
+            <!-- Mention Popup -->
+            <div id="mention-popup" class="mention-popup hidden"></div>
             <button class="input-action-btn" id="gif-btn" title="GIF Gönder">GIF</button>
             <button class="input-action-btn" id="emoji-btn">😀</button>
             <textarea id="chat-input" placeholder="#genel kanalına mesaj gönder" rows="1"></textarea>
