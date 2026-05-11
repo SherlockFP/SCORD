@@ -80,6 +80,7 @@ let state = {
     activeDM: null,     // peerId
     recentDMs: [],      // [{peerId, name, ...}]
     friends: [],        // [{peerId, name, avatarColor, avatarImage}]
+    blockedPeers: [],   // array of peerIds
     peerRoles: {},
     pinnedMessages: [],
     history: {}, // Loaded from server
@@ -747,6 +748,10 @@ function initSetup() {
     if (saved.recentDMs) {
         try { state.recentDMs = JSON.parse(saved.recentDMs); } catch (e) { }
     }
+    const savedBlocks = localStorage.getItem("scord_blocked_peers");
+    if (savedBlocks) {
+        try { state.blockedPeers = JSON.parse(savedBlocks); } catch (e) { }
+    }
     if (saved.theme) {
         state.theme = saved.theme;
         document.documentElement.className = saved.theme;
@@ -1016,6 +1021,7 @@ function showVoiceView(serverId, channelId) {
     document.getElementById("sidebar-server-name").textContent = server.name;
     updateChannelSidebar(serverId);
     renderVoiceParticipants(serverId, channelId);
+    renderMusicBotPanel();
     updateMembersPanel(serverId);
     // Show share buttons even if not joined
     document.getElementById("voice-screen-btn")?.classList.remove("hidden");
@@ -1064,9 +1070,9 @@ async function startScreenShare() {
             "480p": { width: { ideal: 854 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
             "360p": { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } },
         };
-        const stream = await navigator.mediaDevices.getDisplayMedia({ 
-            video: { ...qualityConstraints[quality], cursor: "always" }, 
-            audio: true 
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { ...qualityConstraints[quality], cursor: "always" },
+            audio: true
         });
         state.screenStream = stream;
         state.mesh.screenStream = stream;
@@ -1138,9 +1144,9 @@ async function startCameraShare() {
             "480p": { width: { ideal: 854 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
             "360p": { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } },
         };
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { ...qualityConstraints[quality] }, 
-            audio: false 
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { ...qualityConstraints[quality] },
+            audio: false
         });
         state.cameraStream = stream;
         state.mesh.cameraStream = stream;
@@ -1307,18 +1313,56 @@ function updateChannelSidebar(serverId) {
         voiceChannels.forEach(ch => {
             const item = createChannelItem(ch, server.id);
             list.appendChild(item);
-            // Show voice members under voice channels
+            // Show voice members under voice channels (Discord-like)
             const voiceMembers = (server.voiceMembers?.[ch.id]) || [];
+            // FEAT-2: Show screen-share indicator next to channel name if anyone is sharing
+            const sharingMember = voiceMembers.find(m => m.isSharingScreen || m.isSharingCamera);
+            if (sharingMember) {
+                const chIcon = item.querySelector('.ch-icon');
+                if (chIcon) {
+                    const shareTag = document.createElement('span');
+                    shareTag.className = 'ch-share-tag';
+                    shareTag.textContent = sharingMember.isSharingScreen ? '🖥️' : '📹';
+                    shareTag.title = sharingMember.isSharingScreen ? 'Ekran paylaşılıyor' : 'Kamera açık';
+                    shareTag.style.cssText = 'font-size:11px;margin-left:4px;vertical-align:middle;';
+                    item.appendChild(shareTag);
+                }
+            }
             voiceMembers.forEach(m => {
                 const vm = document.createElement("div");
                 vm.className = "voice-member";
+                // FEAT-1: Speaking animation class
+                if (m.isSpeaking || (m.peer_id === state.peerId && state.isSpeaking)) {
+                    vm.classList.add("voice-member--speaking");
+                }
                 const av = document.createElement("div");
                 av.className = "vm-avatar";
+                if (m.isSpeaking || (m.peer_id === state.peerId && state.isSpeaking)) {
+                    av.classList.add("speaking");
+                }
                 applyAvatarToElement(av, m.avatar_color, m.avatar_image, m.username);
                 vm.appendChild(av);
+                const nameRow = document.createElement("div");
+                nameRow.style.cssText = "display:flex;align-items:center;gap:4px;flex:1;min-width:0;";
                 const name = document.createElement("span");
                 name.textContent = m.username + (m.peer_id === state.peerId ? " (sen)" : "");
-                vm.appendChild(name);
+                name.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;";
+                nameRow.appendChild(name);
+                // FEAT-1/BUG-4: Share icons
+                if (m.isSharingScreen || (m.peer_id === state.peerId && getLocalShareStream())) {
+                    const ico = document.createElement("span");
+                    ico.textContent = "🖥️";
+                    ico.title = "Ekran paylaşıyor";
+                    ico.style.fontSize = "11px";
+                    nameRow.appendChild(ico);
+                } else if (m.isSharingCamera || (m.peer_id === state.peerId && state.cameraStream)) {
+                    const ico = document.createElement("span");
+                    ico.textContent = "📹";
+                    ico.title = "Kamera açık";
+                    ico.style.fontSize = "11px";
+                    nameRow.appendChild(ico);
+                }
+                vm.appendChild(nameRow);
 
                 if (m.peer_id !== state.peerId) {
                     vm.style.cursor = "pointer";
@@ -1621,6 +1665,9 @@ function hydrateMessageReactions(bubbleEl, msg) {
 }
 
 function appendMessageDOM(msg, grouped = false, serverId = null, opts = {}) {
+    // Check if author is blocked
+    if (state.blockedPeers?.includes(msg.authorId)) return;
+
     const forceBottom = opts.scrollToBottom === true;
     const area = document.getElementById("messages-area");
     const sid = serverId || state.activeServerId;
@@ -1758,80 +1805,8 @@ async function sendMessage() {
     const input = document.getElementById("chat-input");
     const text = input.value.trim();
     if (!text || !state.activeServerId || !state.activeChannelId) return;
-
-    // Music Bot — yalnızca sesli kanaldaysan; P2P’de voiceChannelId ile aynı odayı eşle
-    if (text.startsWith("!play ")) {
-        if (!state.voiceChannelId) {
-            toast("Müzik için önce bir sesli kanala katıl.", "warning");
-            return;
-        }
-        const query = text.slice(6).trim();
-        if (!query) {
-            toast("Kullanım: !play şarkı adı veya YouTube linki", "info");
-            return;
-        }
-        input.value = "";
-        input.style.height = "auto";
-
-        const vch = state.voiceChannelId;
-        const firePlay = (videoId) => {
-            const startAt = Date.now();
-            meshBroadcastReliable({
-                type: "music_play",
-                videoId,
-                startAt,
-                voiceChannelId: vch,
-            });
-            startMusicBot(videoId, startAt);
-        };
-
-        const directId = extractYouTubeVideoId(query);
-        if (directId) {
-            addSystemMessage("🎵 YouTube videosu başlatılıyor…");
-            firePlay(directId);
-            return;
-        }
-
-        addSystemMessage(`🎵 Aranıyor: "${query}"…`);
-        fetch(`${API_BASE}/ytsearch?q=${encodeURIComponent(query)}`)
-            .then(res => res.json())
-            .then(data => {
-                if (data.id) firePlay(data.id);
-                else addSystemMessage("❌ Müzik bulunamadı.");
-            })
-            .catch(() => addSystemMessage("❌ Sunucu araması başarısız."));
-        return;
-    } else if (text === "!stop" || text === "!skip") {
-        if (!state.voiceChannelId) {
-            toast("Sesli kanalda değilsin.", "warning");
-            return;
-        }
-        meshBroadcastReliable({ type: "music_stop", voiceChannelId: state.voiceChannelId });
-        stopMusicBot();
-        input.value = "";
-        input.style.height = "auto";
-        return;
-    } else if (text === "!pause") {
-        if (!state.voiceChannelId) {
-            toast("Sesli kanalda değilsin.", "warning");
-            return;
-        }
-        meshBroadcastReliable({ type: "music_pause", voiceChannelId: state.voiceChannelId });
-        if (state.musicBot && state.musicBot.player && typeof state.musicBot.player.pauseVideo === "function") {
-            state.musicBot.player.pauseVideo();
-        }
-        input.value = "";
-        input.style.height = "auto";
-        return;
-    } else if (text === "!resume") {
-        if (!state.voiceChannelId) {
-            toast("Sesli kanalda değilsin.", "warning");
-            return;
-        }
-        meshBroadcastReliable({ type: "music_resume", voiceChannelId: state.voiceChannelId });
-        if (state.musicBot && state.musicBot.player && typeof state.musicBot.player.playVideo === "function") {
-            state.musicBot.player.playVideo();
-        }
+    // Check if it's a music bot command (/music)
+    if (handleMusicCommand(text)) {
         input.value = "";
         input.style.height = "auto";
         return;
@@ -2010,7 +1985,7 @@ function saveMessage(serverId, msg) {
 /* ── Typing Indicators ────────────────────────────────────── */
 function broadcastTypingIndicator() {
     if (!state.mesh || !state.activeServerId || !state.activeChannelId) return;
-    
+
     meshBroadcastReliable({
         type: "typing_start",
         serverId: state.activeServerId,
@@ -2018,10 +1993,10 @@ function broadcastTypingIndicator() {
         username: state.username,
         peerId: state.peerId
     });
-    
+
     // Clear any previous timeout
     if (state._typingTimeout) clearTimeout(state._typingTimeout);
-    
+
     // Stop typing after 3 seconds of inactivity
     state._typingTimeout = setTimeout(() => {
         meshBroadcastReliable({
@@ -2038,13 +2013,13 @@ function updateTypingIndicator(serverId, channelId, peerId, username, isTyping) 
     if (!state.typingIndicators[key]) {
         state.typingIndicators[key] = {};
     }
-    
+
     if (isTyping) {
         state.typingIndicators[key][peerId] = { username, timestamp: Date.now() };
     } else {
         delete state.typingIndicators[key][peerId];
     }
-    
+
     // Update typing display
     if (serverId === state.activeServerId && channelId === state.activeChannelId) {
         updateTypingDisplay();
@@ -2055,18 +2030,18 @@ function updateTypingDisplay() {
     const key = `${state.activeServerId}-${state.activeChannelId}`;
     const typing = Object.values(state.typingIndicators[key] || {});
     const typingEl = document.getElementById("typing-indicator");
-    
+
     if (!typingEl) return;
-    
+
     if (typing.length === 0) {
         typingEl.classList.add("hidden");
         return;
     }
-    
+
     const names = typing.map(t => t.username).join(", ");
     const count = typing.length;
     typingEl.classList.remove("hidden");
-    
+
     if (count === 1) {
         typingEl.textContent = `${names} yazıyor...`;
     } else if (count === 2) {
@@ -2309,6 +2284,10 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         return;
     }
     if (!data || typeof data !== "object") return;
+
+    if (isPeerBanned(roomId, fromPeerId)) {
+        return; // Ignore all messages from banned peers
+    }
 
     if (data.type === "latency_ping") {
         state.mesh?.sendTo(fromPeerId, { type: "latency_pong", pingId: data.pingId, t0: data.t0 });
@@ -2608,7 +2587,7 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         if (server?.voiceMembers && data.members && Array.isArray(data.members)) {
             const ch = canonicalVoiceChannelId(server, data.channelId);
             if (!server.voiceMembers[ch]) server.voiceMembers[ch] = [];
-            
+
             // Merge received members with existing list (don't duplicate)
             data.members.forEach(m => {
                 if (!server.voiceMembers[ch].find(existing => existing.peer_id === m.peer_id)) {
@@ -2619,7 +2598,7 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                     Object.assign(existing, m);
                 }
             });
-            
+
             if (state.activeServerId === roomId && (state.activeChannelId === ch || state.voiceChannelId === ch)) {
                 renderVoiceParticipants(roomId, ch);
             }
@@ -2638,6 +2617,10 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                 }
                 if (state.activeServerId === roomId && (state.activeChannelId === chId || state.voiceChannelId === chId)) {
                     renderVoiceParticipants(roomId, chId);
+                }
+                // FEAT-2: Update sidebar so screen-share icon appears/disappears
+                if (state.activeServerId === roomId) {
+                    updateChannelSidebar(roomId);
                 }
             }
         }
@@ -2898,6 +2881,11 @@ function hideNewMsgsChip() {
 function showNewMsgsChip() {
     document.getElementById("new-msgs-chip")?.classList.remove("hidden");
 }
+function isPeerBanned(serverId, peerId) {
+    const srv = state.servers.find(s => s.id === serverId);
+    if (!srv) return false;
+    return srv.bannedUsers?.some(b => b.peerId === peerId) || false;
+}
 
 function isChatScrolledUp() {
     const area = document.getElementById("messages-area");
@@ -2920,6 +2908,12 @@ function handlePeerConnected(peerId, roomId) {
     const server = state.servers.find(s => s.id === roomId);
     if (!server || !state.mesh) return;
 
+    if (isPeerBanned(roomId, peerId)) {
+        // Automatically disconnect banned users if possible, or just ignore them
+        console.warn(`Banned peer ${peerId} connected, skipping state sync.`);
+        return;
+    }
+
     if (server.messages && Object.keys(server.messages).length > 0) {
         state.mesh.sendTo(peerId, {
             type: "history_sync",
@@ -2929,8 +2923,10 @@ function handlePeerConnected(peerId, roomId) {
     }
 
     if (state.voiceChannelId) {
+        // BUG-1/2 Fix: Send a full voice_join (not just voice_state_sync) so the
+        // newcomer sees us in the voice channel member list and gets a toast notification.
         state.mesh.sendTo(peerId, {
-            type: "voice_state_sync",
+            type: "voice_join",
             channelId: state.voiceChannelId,
             username: state.username,
             avatarColor: state.avatarColor,
@@ -2938,6 +2934,22 @@ function handlePeerConnected(peerId, roomId) {
             isSharingScreen: !!getLocalShareStream(),
             isSharingCamera: !!state.cameraStream
         });
+    }
+
+    // BUG-1 Fix: Also push all other known voice members in our channel to the newcomer
+    // so they see everyone who joined before them (not just us).
+    const _voiceSyncServer = state.servers.find(s => s.id === roomId);
+    if (_voiceSyncServer?.voiceMembers && state.voiceChannelId) {
+        const _ch = state.voiceChannelId;
+        const _allVoiceMembers = (_voiceSyncServer.voiceMembers[_ch] || [])
+            .filter(m => m.peer_id !== state.peerId); // exclude self (already sent above)
+        if (_allVoiceMembers.length > 0) {
+            state.mesh.sendTo(peerId, {
+                type: "voice_state_list",
+                channelId: _ch,
+                members: _allVoiceMembers
+            });
+        }
     }
 
     flushP2pOutbox();
@@ -3176,7 +3188,322 @@ function leaveVoiceChannel() {
     toast("Sesli kanaldan ayrıldın.", "info");
 }
 
+/* ══════════════════════════════════════════════════════════════
+   MÜZİK BOTU — YouTube IFrame API
+══════════════════════════════════════════════════════════════ */
+
+// Initialize music bot state if not already (called once on app load)
+function initMusicBotState() {
+    if (!state.musicBot) {
+        state.musicBot = {
+            player: null,        // YT.Player instance
+            videoId: null,       // current video id
+            volume: 80,          // local volume 0-100
+            isPlaying: false,
+            isReady: false,      // YT API ready
+        };
+    }
+}
+
+// Called once by YouTube IFrame API when API is loaded
+window.onYouTubeIframeAPIReady = function () {
+    initMusicBotState();
+    state.musicBot.isReady = true;
+    console.log("[MusicBot] YouTube IFrame API ready");
+};
+
+/**
+ * Extract a YouTube video ID from a URL or direct ID string.
+ */
+function extractYouTubeVideoId(input) {
+    if (!input) return null;
+    input = input.trim();
+    // Direct ID (11 chars, alphanumeric + - _)
+    if (/^[a-zA-Z0-9_\-]{11}$/.test(input)) return input;
+    try {
+        const url = new URL(input);
+        // youtu.be/<id>
+        if (url.hostname === "youtu.be") return url.pathname.slice(1).split("?")[0];
+        // youtube.com/watch?v=<id>
+        const v = url.searchParams.get("v");
+        if (v) return v;
+        // youtube.com/embed/<id>  or  /shorts/<id>
+        const parts = url.pathname.split("/").filter(Boolean);
+        if (parts[0] === "embed" || parts[0] === "shorts") return parts[1];
+    } catch (_) { /* not a URL */ }
+    return null;
+}
+
+/**
+ * Start (or seek) the music bot to play a video.
+ * @param {string} videoId  YouTube video ID
+ * @param {number} [startAt=0]  seconds offset for sync
+ */
+function startMusicBot(videoId, startAt = 0) {
+    initMusicBotState();
+    state.musicBot.videoId = videoId;
+    state.musicBot.isPlaying = true;
+
+    const createOrLoad = () => {
+        if (!state.musicBot.player) {
+            // Create the YT player in the hidden container
+            state.musicBot.player = new YT.Player("yt-player", {
+                height: "1",
+                width: "1",
+                videoId: videoId,
+                playerVars: {
+                    autoplay: 1,
+                    start: Math.max(0, Math.floor(startAt)),
+                    controls: 0,
+                    disablekb: 1,
+                    fs: 0,
+                    modestbranding: 1,
+                    rel: 0,
+                },
+                events: {
+                    onReady: (e) => {
+                        e.target.setVolume(state.musicBot.volume);
+                        e.target.playVideo();
+                        renderMusicBotPanel();
+                    },
+                    onStateChange: (e) => {
+                        state.musicBot.isPlaying = e.data === YT.PlayerState.PLAYING;
+                        renderMusicBotPanel();
+                    },
+                    onError: (e) => {
+                        toast("Müzik botu: Video oynatılamadı (kısıtlı veya geçersiz video). 🎵", "error");
+                        console.warn("[MusicBot] YT error:", e.data);
+                    }
+                }
+            });
+        } else {
+            // Player already exists — load new video
+            state.musicBot.player.loadVideoById({ videoId, startSeconds: Math.max(0, Math.floor(startAt)) });
+            state.musicBot.player.setVolume(state.musicBot.volume);
+        }
+        renderMusicBotPanel();
+    };
+
+    // YT API may not be ready yet — wait for it
+    if (typeof YT !== "undefined" && YT.Player) {
+        createOrLoad();
+    } else {
+        // Fallback: poll until ready
+        const waitYT = setInterval(() => {
+            if (typeof YT !== "undefined" && YT.Player) {
+                clearInterval(waitYT);
+                createOrLoad();
+            }
+        }, 200);
+        // Give up after 10 s
+        setTimeout(() => clearInterval(waitYT), 10000);
+    }
+}
+
+/**
+ * Stop the music bot and clean up.
+ */
+function stopMusicBot() {
+    initMusicBotState();
+    if (state.musicBot.player) {
+        try { state.musicBot.player.stopVideo(); } catch (_) { }
+        try { state.musicBot.player.destroy(); } catch (_) { }
+        state.musicBot.player = null;
+    }
+    state.musicBot.videoId = null;
+    state.musicBot.isPlaying = false;
+    // Reset yt-player div so a new player can be created next time
+    const ytDiv = document.getElementById("yt-player");
+    if (ytDiv) ytDiv.innerHTML = "";
+    renderMusicBotPanel();
+}
+
+/**
+ * Render or update the music bot control panel inside the voice view.
+ * It creates a persistent #music-bot-panel element if missing.
+ */
+function renderMusicBotPanel() {
+    // Only show panel when in a voice channel
+    const voiceView = document.getElementById("voice-view");
+    if (!voiceView || voiceView.classList.contains("hidden")) return;
+
+    let panel = document.getElementById("music-bot-panel");
+    if (!panel) {
+        panel = document.createElement("div");
+        panel.id = "music-bot-panel";
+        panel.className = "music-bot-panel";
+        // Insert above voice-controls
+        const controls = voiceView.querySelector(".voice-controls");
+        if (controls) controls.insertAdjacentElement("beforebegin", panel);
+        else voiceView.appendChild(panel);
+    }
+
+    initMusicBotState();
+    const mb = state.musicBot;
+    const isHost = isVoiceSessionHost();
+
+    const vidId = mb.videoId;
+    const playing = mb.isPlaying;
+
+    panel.innerHTML = `
+    <div class="mbot-header">
+      <span class="mbot-icon">🎵</span>
+      <span class="mbot-title">Müzik Botu</span>
+      ${vidId ? `<a class="mbot-yt-link" href="https://youtu.be/${vidId}" target="_blank" rel="noopener">YouTube'da Aç ↗</a>` : ""}
+    </div>
+    ${vidId ? `
+    <div class="mbot-now-playing">
+      <img class="mbot-thumb" src="https://img.youtube.com/vi/${vidId}/mqdefault.jpg" alt="thumbnail" loading="lazy"/>
+      <div class="mbot-now-info">
+        <div class="mbot-now-label">Şimdi Çalıyor</div>
+        <div class="mbot-now-id">${vidId}</div>
+      </div>
+    </div>
+    <div class="mbot-controls">
+      ${isHost ? `
+        <button class="mbot-btn" id="mbot-pause-btn" title="${playing ? "Duraklat" : "Devam Et"}">${playing ? "⏸️" : "▶️"}</button>
+        <button class="mbot-btn mbot-btn--danger" id="mbot-stop-btn" title="Durdur">⏹️</button>
+      ` : ""}
+      <div class="mbot-vol-wrap">
+        <span style="font-size:12px;">🔊</span>
+        <input type="range" class="mbot-vol-slider" id="mbot-vol-slider" min="0" max="100" value="${mb.volume}" title="Ses Seviyesi (Kişisel)">
+      </div>
+    </div>
+    ` : `
+    <div class="mbot-idle">
+      ${isHost ? `
+      <div class="mbot-search-row">
+        <input class="mbot-search-input" id="mbot-url-input" placeholder="YouTube URL veya /music play <url>" autocomplete="off"/>
+        <button class="mbot-btn mbot-btn--play" id="mbot-play-btn">▶ Çal</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:4px;">
+        Sohbette <kbd>/music play &lt;url&gt;</kbd> da yazabilirsin
+      </div>
+      ` : `<div style="font-size:12px;color:var(--text-muted);text-align:center;">Müzik çalmıyor. Kanal sahibi başlatabilir.</div>`}
+    </div>
+    `}
+    `;
+
+    // Volume slider (always present when playing)
+    const volSlider = document.getElementById("mbot-vol-slider");
+    if (volSlider) {
+        volSlider.oninput = (e) => {
+            mb.volume = parseInt(e.target.value);
+            if (mb.player && typeof mb.player.setVolume === "function") {
+                mb.player.setVolume(mb.volume);
+            }
+        };
+    }
+
+    if (isHost) {
+        const pauseBtn = document.getElementById("mbot-pause-btn");
+        if (pauseBtn) {
+            pauseBtn.onclick = () => {
+                if (playing) {
+                    if (mb.player) mb.player.pauseVideo();
+                    meshBroadcastReliable({ type: "music_pause", voiceChannelId: state.voiceChannelId });
+                } else {
+                    if (mb.player) mb.player.playVideo();
+                    meshBroadcastReliable({ type: "music_resume", voiceChannelId: state.voiceChannelId });
+                }
+            };
+        }
+
+        const stopBtn = document.getElementById("mbot-stop-btn");
+        if (stopBtn) {
+            stopBtn.onclick = () => {
+                stopMusicBot();
+                meshBroadcastReliable({ type: "music_stop", voiceChannelId: state.voiceChannelId });
+                toast("Müzik durduruldu.", "info");
+            };
+        }
+
+        const playBtn = document.getElementById("mbot-play-btn");
+        if (playBtn) {
+            playBtn.onclick = () => {
+                const input = document.getElementById("mbot-url-input");
+                const raw = input?.value?.trim();
+                if (!raw) return toast("Bir YouTube URL'si gir.", "warning");
+                playMusicBotByUrl(raw);
+                if (input) input.value = "";
+            };
+        }
+
+        const urlInput = document.getElementById("mbot-url-input");
+        if (urlInput) {
+            urlInput.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    const raw = urlInput.value.trim();
+                    if (raw) { playMusicBotByUrl(raw); urlInput.value = ""; }
+                }
+            });
+        }
+    }
+}
+
+/**
+ * Parse URL/ID, start bot locally and broadcast to channel.
+ */
+function playMusicBotByUrl(raw) {
+    const videoId = extractYouTubeVideoId(raw);
+    if (!videoId) return toast("Geçerli bir YouTube URL'si değil.", "error");
+    const startAt = 0;
+    startMusicBot(videoId, startAt);
+    meshBroadcastReliable({
+        type: "music_play",
+        videoId,
+        startAt,
+        voiceChannelId: state.voiceChannelId
+    });
+    toast(`🎵 ${videoId} çalmaya başladı!`, "success");
+}
+
+/**
+ * Returns true if the current user is the voice session host.
+ */
+function isVoiceSessionHost() {
+    if (!state.voiceChannelId || !state.activeServerId) return true; // fallback
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server?.voiceSessionHost?.[state.voiceChannelId]) return true;
+    return server.voiceSessionHost[state.voiceChannelId].peerId === state.peerId;
+}
+
+/**
+ * Handle /music command from chat input.
+ * Supported: /music play <url>, /music stop, /music pause, /music resume
+ */
+function handleMusicCommand(text) {
+    if (!text.startsWith("/music")) return false;
+    if (!state.voiceChannelId) { toast("Önce bir ses kanalına katıl.", "warning"); return true; }
+    if (!isVoiceSessionHost()) { toast("Yalnızca kanal sahibi müzik botunu kontrol edebilir.", "warning"); return true; }
+
+    const parts = text.trim().split(/\s+/);
+    const sub = (parts[1] || "").toLowerCase();
+
+    if (sub === "play" && parts[2]) {
+        const raw = parts.slice(2).join(" ");
+        playMusicBotByUrl(raw);
+    } else if (sub === "stop") {
+        stopMusicBot();
+        meshBroadcastReliable({ type: "music_stop", voiceChannelId: state.voiceChannelId });
+        toast("Müzik durduruldu.", "info");
+    } else if (sub === "pause") {
+        initMusicBotState();
+        if (state.musicBot.player) state.musicBot.player.pauseVideo();
+        meshBroadcastReliable({ type: "music_pause", voiceChannelId: state.voiceChannelId });
+    } else if (sub === "resume") {
+        initMusicBotState();
+        if (state.musicBot.player) state.musicBot.player.playVideo();
+        meshBroadcastReliable({ type: "music_resume", voiceChannelId: state.voiceChannelId });
+    } else {
+        toast("Kullanım: /music play <url> | /music stop | /music pause | /music resume", "info");
+    }
+    return true;
+}
+
 function renderVoiceParticipants(serverId, channelId) {
+
     const server = state.servers.find(s => s.id === serverId);
     const container = document.getElementById("voice-participants");
     if (!container) return;
@@ -3319,28 +3646,39 @@ function renderVoiceParticipants(serverId, channelId) {
         }
 
         let watchBtn = card.querySelector('.watch-btn');
+        // BUG-3 Fix: Manage a small non-interactive thumbnail (not the full video element)
+        // so the screen does NOT auto-expand for everyone. The "İzle" button is the
+        // only way to open the full overlay.
+        let thumbEl = card.querySelector('.vpc-thumb');
 
         const hasVideoTrack = !!(videoEl && videoEl.srcObject?.getVideoTracks?.()?.length > 0);
         if (hasVideoTrack) {
             card.classList.add("has-video");
-            if (videoEl.parentNode !== card) {
-                videoEl.style.width = "100%";
-                videoEl.style.height = "100%";
-                videoEl.style.objectFit = "contain";
-                videoEl.style.marginTop = "12px";
-                videoEl.style.borderRadius = "8px";
-                videoEl.style.cursor = "pointer";
-                videoEl.onclick = () => openScreenOverlay(m.peer_id, m.username);
-                card.appendChild(videoEl);
-                videoEl.play().catch(() => { });
+            // Show a small muted thumbnail — NOT a click-to-fullscreen video
+            if (!thumbEl) {
+                thumbEl = document.createElement("video");
+                thumbEl.className = "vpc-thumb";
+                thumbEl.muted = true;
+                thumbEl.playsInline = true;
+                thumbEl.autoplay = true;
+                thumbEl.tabIndex = -1;
+                // Non-interactive thumbnail styles
+                thumbEl.style.cssText = "width:100%;max-height:120px;object-fit:contain;margin-top:10px;border-radius:8px;pointer-events:none;display:block;background:#000;";
+                card.appendChild(thumbEl);
+            }
+            if (thumbEl.srcObject !== videoEl.srcObject) {
+                thumbEl.srcObject = videoEl.srcObject;
+                thumbEl.play().catch(() => { });
             }
         } else {
             card.classList.remove("has-video");
+            if (thumbEl) thumbEl.remove();
+            // Ensure the original video el is detached from this card
             if (videoEl && videoEl.parentNode === card) videoEl.remove();
         }
 
-        // Watch button should appear as soon as someone is "sharing",
-        // even if the track is still negotiating/loading.
+        // Watch button appears as soon as someone is "sharing" — this is the ONLY
+        // way to open the full-screen overlay (no auto preview).
         if (isSharing) {
             if (!watchBtn) {
                 watchBtn = document.createElement("button");
@@ -3350,7 +3688,7 @@ function renderVoiceParticipants(serverId, channelId) {
                 card.appendChild(watchBtn);
             }
             watchBtn.disabled = !hasVideoTrack;
-            watchBtn.textContent = hasVideoTrack ? "Yayını İzle" : "Yükleniyor…";
+            watchBtn.textContent = hasVideoTrack ? "İzle 🔍" : "Yükleniyor…";
             watchBtn.onclick = (e) => { e.stopPropagation(); openScreenOverlay(m.peer_id, m.username); };
         } else if (watchBtn) {
             watchBtn.remove();
@@ -3875,7 +4213,11 @@ function showContextMenu(peerId, username, x, y) {
         addItem("❌", "Arkadaştan Çıkar", () => removeFriend(peerId), true);
     }
 
-    addItem("👤", "Profili Görüntüle", () => showMemberProfile(peerId, username, server));
+    const member = server.members?.find(mem => mem.peer_id === peerId);
+    addItem("👤", "Profili Görüntüle", () => openUserProfile(peerId, username, member?.avatar_image, member?.avatar_color));
+
+    const isBlocked = state.blockedPeers?.includes(peerId);
+    addItem(isBlocked ? "🔓" : "🚫", isBlocked ? "Engeli Kaldır" : "Engelle", () => toggleBlockStatus(peerId, username), !isBlocked);
 
     const canAssignRoles = (myRole === "owner" || myRole === "admin") && peerId !== state.peerId;
     const canModerate = ["owner", "admin", "mod"].includes(myRole) && peerId !== state.peerId;
@@ -4002,39 +4344,18 @@ function deleteChatMessage(msg) {
     renderMessages(state.activeServerId, state.activeChannelId);
     toast("Mesaj silindi.", "info");
 }
-
-function showMemberProfile(peerId, username, server) {
-    const m = server.members?.find(m => m.peer_id === peerId);
-    const pr = server.peer_roles?.[peerId];
-    const role = server.ownerId === peerId ? "Kurucu 👑"
-        : pr === "admin" ? "Yönetici 🛡️"
-            : pr === "mod" ? "Moderatör 🟢"
-                : "Üye";
-    const cls = server.ownerId === peerId ? "owner" : pr || "";
-    showModal(username, `
-      <div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:10px 0">
-        <div style="width:72px;height:72px;border-radius:50%;font-size:28px;display:flex;align-items:center;justify-content:center;background:${m?.avatar_color || '#7c3aed'};font-weight:700;color:#fff">
-          ${username.slice(0, 1).toUpperCase()}
-        </div>
-        <div style="font-size:18px;font-weight:700;color:var(--text-primary)">${username}</div>
-        <span class="role-badge ${cls}">${role}</span>
-        <div class="peer-id-display" style="font-size:10px;width:100%;text-align:center">${peerId}</div>
-      </div>`,
-        `<button class="btn-secondary" onclick="hideModal()">Kapat</button>`);
-}
-
 /* ── Moderation Actions ───────────────────────────────────── */
 function kickPeer(peerId, username) {
     if (!state.mesh) return;
     state.mesh.broadcast({ type: "force_kick", target: peerId });
-    
+
     // Remove from local state
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (server) {
         server.members = server.members.filter(m => m.peer_id !== peerId);
         updateMembersPanel(state.activeServerId);
     }
-    
+
     toast(`${username} sunucudan atıldı. 🚪`, "info");
 }
 
@@ -4083,7 +4404,31 @@ function leaveServer(serverId) {
     toast("Sunucudan ayrıldın.", "info");
 }
 
+function toggleBlockStatus(peerId, username) {
+    if (!state.blockedPeers) state.blockedPeers = [];
+    const idx = state.blockedPeers.indexOf(peerId);
+    if (idx !== -1) {
+        state.blockedPeers.splice(idx, 1);
+        toast(`@${username} için engellemeni kaldırdın.`, "success");
+    } else {
+        state.blockedPeers.push(peerId);
+        toast(`@${username} engellendi. Artık mesajlarını ve sesini duymayacaksın.`, "info");
+        // if they are in voice, mute them
+        updateMuteStates();
+    }
+    localStorage.setItem("scord_blocked_peers", JSON.stringify(state.blockedPeers));
 
+    // Refresh current views
+    if (state.activeServerId && state.activeChannelId) {
+        renderMessages(state.activeServerId, state.activeChannelId);
+    }
+    if (state.activeDM) {
+        renderDMMessages(state.activeDM);
+    }
+
+    // Close the profile modal if it's open
+    hideModal();
+}
 
 function fileToBase64(file, cb) {
     if (!file) return;
@@ -4216,6 +4561,8 @@ function openServerSettingsModal() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
 
+    if (!server.bannedUsers) server.bannedUsers = [];
+
     const isOwner = server.ownerId === state.peerId;
     const isAdmin = isOwner || server.peer_roles?.[state.peerId] === "admin";
     const isMember = isOwner || server.members?.some(m => m.peer_id === state.peerId);
@@ -4227,15 +4574,16 @@ function openServerSettingsModal() {
     const bgUrl = (server.channel_backgrounds || {})[state.activeChannelId] || "";
     const inv = server.inviteCode || server.invite_code || "";
     const voicePermissionMode = server.voicePermissionMode || "everyone";
-    const permissionNotice = canEdit ? "" : `<div style="margin-bottom:14px;color:var(--text-muted);font-size:13px;">Bu sunucunun ayarlarını düzenleme yetkin yok. Yine de davet kodunu kopyalayıp paylaşabilirsin.</div>`;
+    const permissionNotice = canEdit ? "" : `<div style="margin-bottom:14px;color:var(--text-muted);font-size:13px;">Bu sunucunun ayarlarını düzenleme yetkin yok. Sadece görüntüleyebilirsiniz.</div>`;
 
     showModal(
-        `Sunucu Ayarları: ${escapeHtml(server.name)}`,
+        `Sunucu Ayarları`,
         `${permissionNotice}
          <div class="settings-tabs" style="display:flex; gap:16px; margin-bottom:16px; border-bottom:1px solid var(--border); padding-bottom:8px;">
             <div id="stab-general" onclick="window._stabSwitch('general')" style="color:var(--accent-light); cursor:pointer; font-weight:600;">Genel</div>
-            <div id="stab-roles" onclick="window._stabSwitch('roles')" style="color:var(--text-muted); cursor:pointer;">Üyeler &amp; Roller</div>
-            <div id="stab-advanced" onclick="window._stabSwitch('advanced')" style="color:var(--text-muted); cursor:pointer;">Gelişmiş</div>
+            <div id="stab-roles" onclick="window._stabSwitch('roles')" style="color:var(--text-muted); cursor:pointer;">Üyeler & Rol Yönetimi</div>
+            <div id="stab-bans" onclick="window._stabSwitch('bans')" style="color:var(--text-muted); cursor:pointer;">Yasaklılar</div>
+            <div id="stab-advanced" onclick="window._stabSwitch('advanced')" style="color:var(--text-muted); cursor:pointer;">Gelişmiş & Kanallar</div>
          </div>
          <div id="s-tab-general">
             <div class="form-group" style="margin-bottom: 12px">
@@ -4268,8 +4616,13 @@ function openServerSettingsModal() {
             </div>
          </div>
          <div id="s-tab-roles" style="display:none;">
-            <div style="max-height:220px; overflow-y:auto;">
-                <table style="width:100%; text-align:left; color:#fff;" id="sv-roles-list"></table>
+            <div style="max-height:300px; overflow-y:auto; padding-right:8px; display:flex; flex-direction:column; gap:8px;" id="sv-roles-list">
+                 <!-- Populated by JS -->
+            </div>
+         </div>
+         <div id="s-tab-bans" style="display:none;">
+            <div style="max-height:300px; overflow-y:auto; padding-right:8px; display:flex; flex-direction:column; gap:8px;" id="sv-bans-list">
+                 <!-- Populated by JS -->
             </div>
          </div>
          <div id="s-tab-advanced" style="display:none;">
@@ -4282,6 +4635,7 @@ function openServerSettingsModal() {
                 <p class="modal-info">Ana sayfadaki «Katıl» kutusu ve ?invite= bağlantısı bu kodla senkron.</p>
                 ${isOwner ? `<button type="button" class="btn-secondary" style="margin-top:10px" onclick="window._rotateInviteCode && window._rotateInviteCode()">Yeni kod üret</button>` : ""}
             </div>
+            
             <div class="form-group" style="margin-top:24px">
                 <label class="modal-label">Sesli kanal konuşma izni</label>
                 <select id="sv-voice-permission" class="modal-input" ${canEdit ? "" : "disabled"}>
@@ -4300,7 +4654,7 @@ function openServerSettingsModal() {
     );
 
     window._stabSwitch = (tab) => {
-        ["general", "roles", "advanced"].forEach(t => {
+        ["general", "roles", "bans", "advanced"].forEach(t => {
             document.getElementById(`s-tab-${t}`).style.display = t === tab ? "block" : "none";
             const stab = document.getElementById(`stab-${t}`);
             if (stab) {
@@ -4310,30 +4664,103 @@ function openServerSettingsModal() {
         });
     };
 
-    const tbody = document.getElementById("sv-roles-list");
-    tbody.innerHTML = "<tr><th>Üye</th><th>Yetki</th></tr>";
+    // Render Members/Roles
+    const rolesContainer = document.getElementById("sv-roles-list");
+    rolesContainer.innerHTML = "";
     (server.members || []).forEach(m => {
-        if (m.peer_id === server.ownerId) {
-            tbody.innerHTML += `<tr><td>${escapeHtml(m.username)}</td><td>Kurucu 👑</td></tr>`;
+        const pr = server.peer_roles?.[m.peer_id] || "member";
+        const isTargetOwner = m.peer_id === server.ownerId;
+        const canModTarget = !isTargetOwner && m.peer_id !== state.peerId && canEdit;
+
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:12px; background:var(--bg-overlay); padding:10px; border-radius:8px;";
+
+        const ava = document.createElement("div");
+        ava.style.cssText = `width:36px; height:36px; border-radius:50%; background-color:${m.avatar_color || '#7c3aed'}; background-image:url(${m.avatar_image || ''}); background-size:cover; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700;`;
+        ava.textContent = !m.avatar_image ? initials(m.username) : "";
+
+        const info = document.createElement("div");
+        info.style.cssText = "flex:1; min-width:0;";
+        info.innerHTML = `<div style="font-weight:600; font-size:14px; text-overflow:ellipsis; overflow:hidden;">${escapeHtml(m.username)}</div><div style="font-size:11px; color:var(--text-muted);">${m.peer_id}</div>`;
+
+        const actions = document.createElement("div");
+        actions.style.cssText = "display:flex; align-items:center; gap:8px;";
+
+        if (isTargetOwner) {
+            actions.innerHTML = `<span class="role-badge owner">Kurucu 👑</span>`;
         } else {
-            const pr = server.peer_roles?.[m.peer_id] || "member";
-            tbody.innerHTML += `<tr>
-                <td>${escapeHtml(m.username)}</td>
-                <td>
-                   <select ${!isOwner ? "disabled" : ""} onchange="window._tmpSetPeerRole('${m.peer_id}', this.value)" class="modal-input" style="padding:2px; height:auto; background:var(--bg-active);">
-                     <option value="member" ${pr === "member" ? "selected" : ""}>Üye</option>
-                     <option value="mod" ${pr === "mod" ? "selected" : ""}>Moderatör</option>
-                     <option value="admin" ${pr === "admin" ? "selected" : ""}>Yönetici</option>
-                   </select>
-                </td>
-            </tr>`;
+            actions.innerHTML = `
+                <select ${!isOwner ? "disabled" : ""} onchange="window._tmpSetPeerRole('${m.peer_id}', this.value)" class="modal-input" style="padding:4px 8px; height:auto; background:var(--bg-active); width:110px;">
+                    <option value="member" ${pr === "member" ? "selected" : ""}>Üye</option>
+                    <option value="mod" ${pr === "mod" ? "selected" : ""}>Moderatör</option>
+                    <option value="admin" ${pr === "admin" ? "selected" : ""}>Yönetici</option>
+                </select>
+                ${canModTarget ? `
+                    <button class="mbot-btn mbot-btn--danger" style="width:28px;height:28px;font-size:11px;" title="Sunucudan At" onclick="window._tmpKickPeer('${m.peer_id}')">K</button>
+                    <button class="mbot-btn mbot-btn--danger" style="width:28px;height:28px;font-size:11px;background:#991b1b" title="Yasakla (Ban)" onclick="window._tmpBanPeer('${m.peer_id}', '${escapeHtml(m.username)}')">B</button>
+                ` : ''}
+            `;
         }
+
+        row.appendChild(ava);
+        row.appendChild(info);
+        row.appendChild(actions);
+        rolesContainer.appendChild(row);
     });
+
+    // Render Bans
+    const renderBans = () => {
+        const bansContainer = document.getElementById("sv-bans-list");
+        bansContainer.innerHTML = "";
+        if (server.bannedUsers.length === 0) {
+            bansContainer.innerHTML = `<div style="color:var(--text-muted); font-size:13px; text-align:center; padding: 20px;">Yasaklı kullanıcı yok.</div>`;
+            return;
+        }
+
+        server.bannedUsers.forEach(banned => {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex; align-items:center; gap:12px; background:var(--bg-overlay); padding:10px; border-radius:8px;";
+
+            row.innerHTML = `
+                <div style="flex:1; min-width:0;">
+                    <div style="font-weight:600; font-size:14px;">${escapeHtml(banned.username)}</div>
+                    <div style="font-size:11px; color:var(--text-muted);">${banned.peerId}</div>
+                </div>
+                ${canEdit ? `
+                    <button class="hero-btn tiny" style="background:var(--bg-active);" onclick="window._tmpUnbanPeer('${banned.peerId}')">Yasağı Kaldır</button>
+                ` : ''}
+            `;
+            bansContainer.appendChild(row);
+        });
+    };
+    renderBans();
 
     window._tmpPendingPeerRoles = { ...(server.peer_roles || {}) };
     window._tmpSetPeerRole = (peerId, val) => {
         if (val === "member") delete window._tmpPendingPeerRoles[peerId];
         else window._tmpPendingPeerRoles[peerId] = val;
+    };
+
+    window._tmpKickPeer = (peerId) => {
+        if (confirm("Bu üyeyi sunucudan atmak istediğine emin misin?")) {
+            kickPeer(peerId, "Üye");
+            openServerSettingsModal(); // Refresh modal
+        }
+    };
+
+    window._tmpBanPeer = (peerId, username) => {
+        if (confirm(`${username} adlı üyeyi tamamen yasaklamak istediğine emin misin?`)) {
+            kickPeer(peerId, username); // Kick them out physically
+            if (!server.bannedUsers.find(b => b.peerId === peerId)) {
+                server.bannedUsers.push({ peerId, username });
+            }
+            openServerSettingsModal(); // Refresh modal
+        }
+    };
+
+    window._tmpUnbanPeer = (peerId) => {
+        server.bannedUsers = server.bannedUsers.filter(b => b.peerId !== peerId);
+        openServerSettingsModal();
     };
 
     window._applyChannelBg = async () => {
@@ -4358,7 +4785,7 @@ function openServerSettingsModal() {
         const srv = state.servers.find(s => s.id === state.activeServerId);
         if (!srv || srv.ownerId !== state.peerId) return;
         try {
-            const res = await fetch(`${API_BASE}/rooms/${srv.id}/invite_rotate`, {
+            const res = await fetch(`${API_BASE} /rooms/${srv.id}/invite_rotate`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ owner_id: state.peerId }),
@@ -4700,34 +5127,34 @@ function showMentionSuggestions(input) {
     const cursorPos = input.selectionStart;
     const textBeforeCursor = value.substring(0, cursorPos);
     const lastAtIndex = textBeforeCursor.lastIndexOf("@");
-    
+
     if (lastAtIndex === -1 || (lastAtIndex > 0 && /\w/.test(textBeforeCursor[lastAtIndex - 1]))) {
         hideMentionSuggestions();
         return;
     }
-    
+
     const mentionText = textBeforeCursor.substring(lastAtIndex + 1);
     if (mentionText.length < 1) {
         hideMentionSuggestions();
         return;
     }
-    
+
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) {
         hideMentionSuggestions();
         return;
     }
-    
+
     const members = server.members || [];
-    _mentionSuggestions = members.filter(m => 
+    _mentionSuggestions = members.filter(m =>
         m.username.toLowerCase().includes(mentionText.toLowerCase())
     ).slice(0, 5);
-    
+
     if (_mentionSuggestions.length === 0) {
         hideMentionSuggestions();
         return;
     }
-    
+
     _mentionActiveIndex = 0;
     renderMentionSuggestions(input, lastAtIndex, mentionText);
 }
@@ -4740,7 +5167,7 @@ function renderMentionSuggestions(input, atIndex, mentionText) {
         popup.className = "mention-popup";
         input.parentElement.insertBefore(popup, input.nextSibling);
     }
-    
+
     popup.innerHTML = _mentionSuggestions.map((member, idx) => `
         <div class="mention-item ${idx === _mentionActiveIndex ? "active" : ""}" 
              data-member-id="${escapeHtml(member.peer_id)}"
@@ -4751,7 +5178,7 @@ function renderMentionSuggestions(input, atIndex, mentionText) {
             <span class="mention-name">${escapeHtml(member.username)}</span>
         </div>
     `).join("");
-    
+
     popup.classList.remove("hidden");
     popup.querySelectorAll(".mention-item").forEach((item, idx) => {
         item.onclick = () => insertMention(input, atIndex, member.username);
@@ -4770,7 +5197,7 @@ function insertMention(input, atIndex, username) {
     const cursorPos = input.selectionStart;
     const textBeforeCursor = value.substring(0, atIndex);
     const textAfterCursor = value.substring(cursorPos);
-    
+
     input.value = textBeforeCursor + "@" + username + " " + textAfterCursor;
     input.selectionStart = input.selectionEnd = atIndex + username.length + 2;
     input.style.height = "auto";
@@ -4857,7 +5284,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
         }
-        
+
         if (e.key === "ArrowUp" && chatInput.selectionStart === 0 && !e.shiftKey && !chatInput.value.trim()) {
             e.preventDefault();
             fillLastOwnChatLine();
@@ -4872,12 +5299,12 @@ document.addEventListener("DOMContentLoaded", () => {
         chatInput.style.height = "auto";
         chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + "px";
         debouncedPersistDraft();
-        
+
         // Send typing indicator
         if (state.activeServerId && state.activeChannelId && chatInput.value.trim()) {
             broadcastTypingIndicator();
         }
-        
+
         // Show mention suggestions
         showMentionSuggestions(chatInput);
     });
@@ -5331,51 +5758,61 @@ function openUserProfile(peerId, username, avatarImage, avatarColor) {
     const isSelf = peerId === state.peerId;
     const userNote = getUserNote(peerId);
     const isFriend = state.friends.some(f => f.peerId === peerId);
+    const isBlocked = state.blockedPeers?.includes(peerId);
+
+    // Context from active server if any
+    let roleBadge = "";
+    if (state.activeServerId) {
+        const server = state.servers.find(s => s.id === state.activeServerId);
+        if (server) {
+            const pr = server.peer_roles?.[peerId];
+            const roleName = server.ownerId === peerId ? "Kurucu 👑"
+                : pr === "admin" ? "Yönetici 🛡️"
+                    : pr === "mod" ? "Moderatör 🟢"
+                        : "Üye";
+            const cls = server.ownerId === peerId ? "owner" : pr || "";
+            roleBadge = `<span class="role-badge ${cls}">${roleName}</span>`;
+        }
+    }
 
     // Create Profile HTML
     const body = `
-        <div class="profile-banner" style="height:60px; background:${avatarColor || '#7c3aed'}; border-radius: 8px 8px 0 0;"></div>
-        <div class="profile-avatar" style="width:80px; height:80px; border-radius:50%; margin-top:-40px; margin-left:16px; border:4px solid var(--bg-elevated); background-color:${avatarColor || '#7c3aed'}; background-image:url(${avatarImage || ''}); background-size:cover; background-position:center; display:flex; align-items:center; justify-content:center; font-size:30px; color:#fff;">
+        <div class="profile-banner-rich" style="height:80px; background:${avatarColor || '#7c3aed'}; border-radius: 8px 8px 0 0; position: relative;">
+            <div style="position:absolute; right:12px; top:12px;">
+                ${!isSelf ? `<button class="mbot-btn ${isBlocked ? '' : 'mbot-btn--danger'}" onclick="toggleBlockStatus('${peerId}', '${escapeHtml(username)}')" title="${isBlocked ? 'Engeli Kaldır' : 'Engelle'}" style="width:32px;height:32px;font-size:12px;">${isBlocked ? '🔓' : '🚫'}</button>` : ''}
+            </div>
+        </div>
+        <div class="profile-avatar" style="width:90px; height:90px; border-radius:50%; margin-top:-45px; margin-left:16px; border:6px solid var(--bg-elevated); background-color:${avatarColor || '#7c3aed'}; background-image:url(${avatarImage || ''}); background-size:cover; background-position:center; display:flex; align-items:center; justify-content:center; font-size:36px; color:#fff; position: relative; z-index: 2;">
             ${!avatarImage ? initials(username) : ""}
         </div>
-        <div style="padding:16px;">
-            <h2 style="margin:0 0 4px 0">${username}</h2>
-            <p style="margin:0; font-family:monospace; color:var(--text-muted); font-size:12px;">ID: ${peerId}</p>
-        </div>
-        <div style="padding:0 16px 12px 16px; border-top: 1px solid var(--border); margin-top: 12px; gap: 8px; display: flex; gap: 8px;">
-            ${!isSelf ? `
-                <label style="display: flex; align-items: center; gap: 6px; flex: 1;">
-                    <input type="checkbox" id="friend-checkbox-${peerId}" ${isFriend ? 'checked' : ''} style="cursor: pointer; width: 16px; height: 16px;">
-                    <span style="font-size: 12px;">Arkadaş Ekle</span>
-                </label>
-            ` : ''}
-        </div>
-        ${!isSelf ? `
-            <div style="padding:0 16px 12px 16px;">
-                <label style="display: block; margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--text-secondary);">Notlar</label>
-                <textarea id="profile-note-input" placeholder="Bu kullanıcı hakkında notlar..." style="width: 100%; height: 60px; padding: 8px; border-radius: var(--r-sm); border: 1px solid var(--border-strong); background: var(--bg-highlight); color: var(--text-primary); resize: vertical; font-family: inherit; font-size: 12px;">${escapeHtml(userNote)}</textarea>
+        <div style="padding:16px 16px 8px 16px;">
+            <h2 style="margin:0 0 4px 0; font-size: 20px;">${escapeHtml(username)}</h2>
+            <div style="display:flex; gap:8px; align-items:center; margin-top:4px;">
+                ${roleBadge}
             </div>
-        ` : ''}
+            <p style="margin:8px 0 0 0; font-family:monospace; color:var(--text-muted); font-size:12px; background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 4px; display: inline-block;">ID: ${peerId}</p>
+        </div>
+        <div style="padding:0 16px 16px 16px; display: flex; flex-direction: column; gap: 12px;">
+            ${!isSelf ? `
+                <div style="background: var(--bg-overlay); border-radius: var(--r-sm); padding: 12px; display: flex; align-items: center; justify-content: space-between;">
+                    <div style="font-size: 13px; font-weight: 500; display:flex; align-items:center; gap:8px;">
+                        <span>${isFriend ? '❤️ Arkadaşsınız' : 'Tanışıyor musunuz?'}</span>
+                    </div>
+                    ${!isFriend ? `<button class="hero-btn tiny" onclick="addFriend('${peerId}', '${escapeHtml(username)}')">Arkadaş Ekle</button>` : `<button class="hero-btn tiny" style="background:var(--red)" onclick="removeFriend('${peerId}')">Arkadaşlıktan Çıkar</button>`}
+                </div>
+            ` : ''}
+            <div>
+                <label style="display: block; margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase;">Kendinize Not (Bunu sadece sen görebilirsin)</label>
+                <textarea id="profile-note-input" placeholder="Bu kullanıcıya dair notlar tut..." style="width: 100%; height: 60px; padding: 10px; border-radius: var(--r-sm); border: 1px solid var(--border-strong); background: var(--bg-highlight); color: var(--text-primary); resize: vertical; font-family: inherit; font-size: 13px;">${escapeHtml(userNote)}</textarea>
+            </div>
+        </div>
     `;
 
     const footer = !isSelf ? `
         <button class="btn-secondary" onclick="saveProfileNote('${peerId}')">Notu Kaydet</button>
-        <button class="btn-primary" onclick="openDM('${peerId}', '${username}', '${avatarColor || ''}', '${avatarImage || ''}'); hideModal();">Mesaj Gönder</button>
+        <button class="btn-primary" onclick="openDM('${peerId}', '${escapeHtml(username)}'); hideModal();">Mesaj Gönder</button>
     ` : `<button class="btn-secondary" onclick="hideModal()">Kapat</button>`;
-
     showModal("Kullanıcı Profili", body, footer);
-    
-    // Add event listener for friend checkbox
-    if (!isSelf) {
-        setTimeout(() => {
-            const checkbox = document.getElementById(`friend-checkbox-${peerId}`);
-            if (checkbox) {
-                checkbox.addEventListener("change", () => {
-                    toggleFriendStatus(peerId, username, avatarColor, avatarImage);
-                });
-            }
-        }, 100);
-    }
 }
 
 function saveProfileNote(peerId) {
@@ -5395,7 +5832,7 @@ function toggleFriendStatus(peerId, username, avatarColor, avatarImage) {
         state.friends.push({ peerId, username, avatarColor, avatarImage });
     }
     saveFriendsToStorage();
-    toast(`${username} ${index >= 0 ? 'arkadaş listesinden çıkarıldı' : 'arkadaş listesine eklendi'}!`, "success");
+    toast(`${username} ${index >= 0 ? 'arkadaş listesinden çıkarıldı' : 'arkadaş listesine eklendi'} !`, "success");
 }
 
 function saveFriendsToStorage() {
@@ -5459,7 +5896,7 @@ async function joinByCode() {
     const code = document.getElementById("join-invite-input").value.trim().toUpperCase();
     if (!code) return;
     try {
-        const res = await scordFetch(`${API_BASE}/rooms/join/${code}`);
+        const res = await scordFetch(`${API_BASE} /rooms/join / ${code} `);
         if (!res.ok) return;
         const room = await res.json();
         if (room.room_id) {
@@ -5484,7 +5921,7 @@ function updateTheme(themeName) {
 async function deleteServer(serverId) {
     if (!confirm("Bu sunucuyu kalıcı olarak silmek istediğine emin misin? Bu işlem geri alınamaz!")) return;
     try {
-        const res = await fetch(`${API_BASE}/rooms/${serverId}?owner_id=${state.peerId}`, { method: "DELETE" });
+        const res = await fetch(`${API_BASE} /rooms/${serverId}?owner_id = ${state.peerId} `, { method: "DELETE" });
         const data = await res.json();
         if (data.success) {
             toast("Sunucu başarıyla silindi.", "success");
@@ -5500,7 +5937,7 @@ async function deleteServer(serverId) {
 }
 
 function updateServerIcon(serverId, url) {
-    fetch(`${API_BASE}/rooms/${serverId}/icon`, {
+    fetch(`${API_BASE} /rooms/${serverId}/icon`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url })
@@ -5634,7 +6071,7 @@ function handleTypingMessage(fromPeerId, username, channelId) {
     if (!state._typingTimers) state._typingTimers = {};
     state._typingTimers[fromPeerId] = setTimeout(() => {
         delete state.typingPeers[fromPeerId];
-        handleTypingMessage = () => {};  // avoid recursion
+        handleTypingMessage = () => { };  // avoid recursion
         const remaining = Object.values(state.typingPeers);
         const el2 = document.getElementById("typing-indicator");
         if (el2) el2.textContent = remaining.length ? remaining.join(", ") + " yazıyor..." : "";
@@ -5844,7 +6281,7 @@ async function refreshDiscovery() {
             card.className = "room-card";
             const icon = room.icon_url
                 ? `<img src="${room.icon_url}" alt="" loading="lazy" decoding="async" style="width:48px;height:48px;border-radius:12px;object-fit:cover;" />`
-                : `<div style="width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#7c3aed,#4f46e5);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;">${(room.name||"?")[0].toUpperCase()}</div>`;
+                : `<div style="width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#7c3aed,#4f46e5);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#fff;">${(room.name || "?")[0].toUpperCase()}</div>`;
             card.innerHTML = `
                 <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
                   ${icon}
@@ -5942,7 +6379,7 @@ if (_joinInput) {
 }
 
 // Also handle ?invite= in URL (auto-join from shared link)
-(function() {
+(function () {
     const params = new URLSearchParams(location.search);
     const code = params.get("invite");
     if (code) {
@@ -5966,7 +6403,7 @@ if (_chatInput) {
 
 // Hook typing & reaction P2P messages into existing handleIncomingP2P
 const _origHandleP2P = handleIncomingP2P;
-window.handleIncomingP2P = function(fromPeerId, data, roomId) {
+window.handleIncomingP2P = function (fromPeerId, data, roomId) {
     if (data.type === "typing") {
         handleTypingMessage(fromPeerId, data.username, data.channelId);
         return;
@@ -5987,7 +6424,7 @@ window.handleIncomingP2P = function(fromPeerId, data, roomId) {
 
 // Server invite button in server header (add to settings modal)
 const _origOpenSettings = window.openServerSettingsModal;
-window.openServerSettingsModal = function() {
+window.openServerSettingsModal = function () {
     if (_origOpenSettings) _origOpenSettings();
     // inject invite button if not already present
     setTimeout(() => {
@@ -6011,7 +6448,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Also hook into app start
 const _origStartApp = window.startApp;
-window.startApp = function() {
+window.startApp = function () {
     if (_origStartApp) _origStartApp();
     setTimeout(initStatusSelector, 300);
     setTimeout(refreshDiscovery, 500);
@@ -6023,30 +6460,30 @@ window.startApp = function() {
 
 // Enhanced mention parsing in parseMessageText
 const _origParseMessageText = window.parseMessageText;
-window.parseMessageText = function(text, serverId) {
+window.parseMessageText = function (text, serverId) {
     if (!text) return "";
     const sid = serverId !== undefined ? serverId : state.activeServerId;
-    
+
     // First handle @everyone and @here
     let result = String(text);
     const server = state.servers.find(s => s.id === sid);
-    
+
     // @everyone mention
     result = result.replace(/@everyone/g, (match) => {
         return `<span class="mention mention-everyone" data-mention="everyone" title="Everyone" style="background:rgba(239,68,68,0.2);color:#fca5a5;">@everyone</span>`;
     });
-    
+
     // @here mention
     result = result.replace(/@here/g, (match) => {
         return `<span class="mention mention-here" data-mention="here" title="Here" style="background:rgba(34,197,94,0.2);color:#86efac;">@here</span>`;
     });
-    
+
     // @user mentions (handle usernames with spaces)
     if (server && server.members) {
         const members = server.members;
         // Sort by length descending to match longer names first
         const sortedNames = [...new Set(members.map(m => m.username).filter(Boolean))].sort((a, b) => b.length - a.length);
-        
+
         sortedNames.forEach(name => {
             const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const regex = new RegExp(`(^|\\s)@${escaped}(?!\\w)`, "g");
@@ -6056,7 +6493,7 @@ window.parseMessageText = function(text, serverId) {
             });
         });
     }
-    
+
     // Handle URLs and other formatting
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     return result.split(urlRegex).map(part => {
@@ -6078,10 +6515,10 @@ window.parseMessageText = function(text, serverId) {
 document.addEventListener("click", (e) => {
     const mention = e.target.closest(".mention");
     if (!mention) return;
-    
+
     const peerId = mention.getAttribute("data-peer");
     const mentionType = mention.getAttribute("data-mention");
-    
+
     if (peerId) {
         // Open user profile
         const server = state.servers.find(s => s.id === state.activeServerId);
@@ -6102,13 +6539,13 @@ document.addEventListener("click", (e) => {
 
 // Fix: Music bot should only play for users in the voice channel
 const _origStartMusicBot = window.startMusicBot;
-window.startMusicBot = function(videoId, startAt) {
+window.startMusicBot = function (videoId, startAt) {
     // Only play music if user is in a voice channel
     if (!state.voiceChannelId) {
         console.log("[Music Bot] Not in voice channel, skipping");
         return;
     }
-    
+
     // Check if music bot is already in voice members
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (server && server.voiceMembers && server.voiceMembers[state.voiceChannelId]) {
@@ -6124,7 +6561,7 @@ window.startMusicBot = function(videoId, startAt) {
             renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
         }
     }
-    
+
     // Call original function
     if (_origStartMusicBot) {
         _origStartMusicBot(videoId, startAt);
@@ -6133,7 +6570,7 @@ window.startMusicBot = function(videoId, startAt) {
 
 // Fix: Stop music bot when kicked from voice channel
 const _origStopMusicBot = window.stopMusicBot;
-window.stopMusicBot = function() {
+window.stopMusicBot = function () {
     // Remove bot from voice members
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (server && server.voiceMembers && state.voiceChannelId) {
@@ -6143,7 +6580,7 @@ window.stopMusicBot = function() {
         }
         updateChannelSidebar(state.activeServerId);
     }
-    
+
     // Call original function
     if (_origStopMusicBot) {
         _origStopMusicBot();
@@ -6152,7 +6589,7 @@ window.stopMusicBot = function() {
 
 // Add !kickmusic command to kick music bot from voice channel
 const _origHandleP2P_Music = window.handleIncomingP2P;
-window.handleIncomingP2P = function(fromPeerId, data, roomId) {
+window.handleIncomingP2P = function (fromPeerId, data, roomId) {
     // Handle music bot kick command
     if (data.type === "kick_music_bot" && data.target === "bot_music") {
         const server = state.servers.find(s => s.id === roomId);
@@ -6166,7 +6603,7 @@ window.handleIncomingP2P = function(fromPeerId, data, roomId) {
         }
         return;
     }
-    
+
     if (_origHandleP2P_Music) {
         _origHandleP2P_Music(fromPeerId, data, roomId);
     }
@@ -6174,10 +6611,10 @@ window.handleIncomingP2P = function(fromPeerId, data, roomId) {
 
 // Enhanced !play command with Discord-style bot mention
 const _origSendMessage = window.sendMessage;
-window.sendMessage = function() {
+window.sendMessage = function () {
     const input = document.getElementById("chat-input");
     const text = input.value.trim();
-    
+
     // Check for Discord-style music commands
     if (text.startsWith("!p ") || text.startsWith("!play ")) {
         const query = text.startsWith("!p ") ? text.slice(3).trim() : text.slice(6).trim();
@@ -6185,19 +6622,19 @@ window.sendMessage = function() {
             toast("🎵 Kullanım: !play <şarkı adı veya YouTube linki>", "info");
             return;
         }
-        
+
         // Show bot mention style message
         const botMention = `<span class="mention" style="background:rgba(239,68,68,0.2);color:#fca5a5;">🎵 Müzik Botu</span>`;
         addSystemMessage(`${botMention} Şarkı aranıyor: "${query}"...`);
     }
-    
+
     // Check for kick music bot command
     if (text === "!kickmusic" || text === "!stopmusic") {
         if (!state.voiceChannelId) {
             toast("Sesli kanalda değilsin.", "warning");
             return;
         }
-        
+
         // Broadcast kick command
         if (state.mesh) {
             state.mesh.broadcast({
@@ -6206,7 +6643,7 @@ window.sendMessage = function() {
                 voiceChannelId: state.voiceChannelId
             });
         }
-        
+
         // Remove bot locally
         const server = state.servers.find(s => s.id === state.activeServerId);
         if (server && server.voiceMembers && state.voiceChannelId) {
@@ -6214,13 +6651,13 @@ window.sendMessage = function() {
             renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
             updateChannelSidebar(state.activeServerId);
         }
-        
+
         stopMusicBot();
         toast("🎵 Müzik botu çıkarıldı.", "info");
         input.value = "";
         return;
     }
-    
+
     if (_origSendMessage) {
         _origSendMessage();
     }
@@ -6331,7 +6768,7 @@ console.log("[Shercord V19] Discord-style mentions, improved music bot, and fixe
 function saveServerData(serverId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     // Create a lightweight copy (exclude volatile data)
     const saveData = {
         id: server.id,
@@ -6350,7 +6787,7 @@ function saveServerData(serverId) {
         createdAt: server.createdAt || Date.now(),
         updatedAt: Date.now()
     };
-    
+
     try {
         localStorage.setItem(`scord_server_${serverId}`, JSON.stringify(saveData));
         console.log(`[Save] Server ${serverId} saved to localStorage`);
@@ -6383,7 +6820,7 @@ function loadServerData(serverId) {
 function trimOldServerData() {
     const keys = Object.keys(localStorage).filter(k => k.startsWith('scord_server_'));
     if (keys.length <= 3) return; // Keep at least 3 servers
-    
+
     // Find oldest servers and remove them
     const servers = keys.map(key => {
         try {
@@ -6391,7 +6828,7 @@ function trimOldServerData() {
             return { key, updatedAt: data?.updatedAt || 0 };
         } catch { return { key, updatedAt: 0 }; }
     }).sort((a, b) => a.updatedAt - b.updatedAt);
-    
+
     // Remove oldest servers until we have space
     for (let i = 0; i < servers.length - 2; i++) {
         localStorage.removeItem(servers[i].key);
@@ -6483,7 +6920,7 @@ function openServerSettingsPanel() {
     `;
 
     document.body.appendChild(panel);
-    
+
     // Tab switching
     panel.querySelectorAll('.tab-btn').forEach(btn => {
         btn.onclick = () => {
@@ -6702,7 +7139,7 @@ function renderRolesSettings(server) {
             <button class="btn-primary" style="padding:6px 12px;font-size:12px;" onclick="createNewRole()">+ Yeni Rol</button>
         </div>
     `;
-    
+
     Object.entries(roles).forEach(([roleId, roleData]) => {
         const memberCount = Object.values(server.peer_roles || {}).filter(r => r === roleId).length;
         html += `
@@ -6719,7 +7156,7 @@ function renderRolesSettings(server) {
             </div>
         `;
     });
-    
+
     return html;
 }
 
@@ -6730,14 +7167,14 @@ function renderMembersSettings(server) {
             <h4 style="color:var(--text-primary);font-size:14px;">Üyeler (${members.length})</h4>
         </div>
     `;
-    
+
     members.forEach(member => {
         const currentRole = server.peer_roles?.[member.peer_id] || 'member';
         const roles = server.roles || {};
-        const roleOptions = Object.entries(roles).map(([roleId, roleData]) => 
+        const roleOptions = Object.entries(roles).map(([roleId, roleData]) =>
             `<option value="${roleId}" ${currentRole === roleId ? 'selected' : ''}>${escapeHtml(roleData.name)}</option>`
         ).join('');
-        
+
         html += `
             <div class="role-item">
                 <div style="width:32px;height:32px;border-radius:50%;background:${member.avatar_color || '#7c3aed'};display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;font-weight:700;">
@@ -6753,7 +7190,7 @@ function renderMembersSettings(server) {
             </div>
         `;
     });
-    
+
     return html;
 }
 
@@ -6772,7 +7209,7 @@ function renderPermissionsSettings(server) {
         { id: 'screen_share', name: 'Ekran Paylaşımı', icon: '🖥️' },
         { id: 'stream', name: 'Canlı Yayın', icon: '📹' },
     ];
-    
+
     let html = `
         <div style="margin-bottom:16px;">
             <h4 style="color:var(--text-primary);font-size:14px;">Varsayılan İzinler</h4>
@@ -6780,7 +7217,7 @@ function renderPermissionsSettings(server) {
         </div>
         <div class="permission-grid">
     `;
-    
+
     permissions.forEach(perm => {
         const defaultEnabled = ['send_messages', 'join_voice', 'screen_share'].includes(perm.id);
         html += `
@@ -6793,7 +7230,7 @@ function renderPermissionsSettings(server) {
             </div>
         `;
     });
-    
+
     html += `</div>`;
     return html;
 }
@@ -6802,22 +7239,22 @@ function renderPermissionsSettings(server) {
 function saveGeneralSettings() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const name = document.getElementById('settings-sv-name').value.trim();
     const icon = document.getElementById('settings-sv-icon').value.trim();
-    
+
     if (name) server.name = name;
     if (icon) server.icon_url = icon;
-    
+
     saveServerData(server.id);
-    
+
     if (state.mesh) {
         state.mesh.broadcast({
             type: 'server_update',
             payload: { id: server.id, name: server.name, icon_url: server.icon_url }
         });
     }
-    
+
     updateChannelSidebar(server.id);
     renderServerRail();
     toast('Ayarlar kaydedildi!', 'success');
@@ -6826,7 +7263,7 @@ function saveGeneralSettings() {
 function createNewRole() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const roleId = 'role_' + genId();
     if (!server.roles) server.roles = {};
     server.roles[roleId] = {
@@ -6835,32 +7272,32 @@ function createNewRole() {
         hoist: false,
         permissions: {}
     };
-    
+
     saveServerData(server.id);
-    
+
     // Refresh roles tab
     const rolesTab = document.getElementById('tab-roles');
     if (rolesTab) {
         rolesTab.innerHTML = renderRolesSettings(server);
     }
-    
+
     toast('Yeni rol oluşturuldu!', 'success');
 }
 
 function updateRoleColor(roleId, color) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server || !server.roles?.[roleId]) return;
-    
+
     server.roles[roleId].color = color;
     saveServerData(server.id);
-    
+
     if (state.mesh) {
         state.mesh.broadcast({
             type: 'server_update',
             payload: { id: server.id, roles: server.roles }
         });
     }
-    
+
     updateMembersPanel(server.id);
     toast('Rol rengi güncellendi!', 'success');
 }
@@ -6868,26 +7305,26 @@ function updateRoleColor(roleId, color) {
 function updateRoleName(roleId, name) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server || !server.roles?.[roleId]) return;
-    
+
     server.roles[roleId].name = name.trim() || 'İsimsiz Rol';
     saveServerData(server.id);
-    
+
     if (state.mesh) {
         state.mesh.broadcast({
             type: 'server_update',
             payload: { id: server.id, roles: server.roles }
         });
     }
-    
+
     toast('Rol adı güncellendi!', 'success');
 }
 
 function deleteRole(roleId) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server || !server.roles?.[roleId]) return;
-    
+
     if (!confirm('Bu rolü silmek istediğine emin misin?')) return;
-    
+
     delete server.roles[roleId];
     // Remove role from all members
     Object.keys(server.peer_roles || {}).forEach(peerId => {
@@ -6895,22 +7332,22 @@ function deleteRole(roleId) {
             delete server.peer_roles[peerId];
         }
     });
-    
+
     saveServerData(server.id);
-    
+
     if (state.mesh) {
         state.mesh.broadcast({
             type: 'server_update',
             payload: { id: server.id, roles: server.roles, peer_roles: server.peer_roles }
         });
     }
-    
+
     // Refresh
     const rolesTab = document.getElementById('tab-roles');
     if (rolesTab) {
         rolesTab.innerHTML = renderRolesSettings(server);
     }
-    
+
     updateMembersPanel(server.id);
     toast('Rol silindi.', 'info');
 }
@@ -6918,24 +7355,24 @@ function deleteRole(roleId) {
 function updateMemberRole(peerId, roleId) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     if (!server.peer_roles) server.peer_roles = {};
-    
+
     if (roleId === 'member') {
         delete server.peer_roles[peerId];
     } else {
         server.peer_roles[peerId] = roleId;
     }
-    
+
     saveServerData(server.id);
-    
+
     if (state.mesh) {
         state.mesh.broadcast({
             type: 'server_update',
             payload: { id: server.id, peer_roles: server.peer_roles }
         });
     }
-    
+
     updateMembersPanel(server.id);
     toast('Üye rolü güncellendi!', 'success');
 }
@@ -6943,20 +7380,20 @@ function updateMemberRole(peerId, roleId) {
 function updatePermission(permId, enabled) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     // Update default member role permissions
     if (!server.roles) server.roles = {};
     if (!server.roles.member) server.roles.member = { name: 'Üye', color: '#94a3b8', hoist: false, permissions: {} };
-    
+
     server.roles.member.permissions[permId] = enabled;
     saveServerData(server.id);
-    
+
     toast('İzin güncellendi!', 'success');
 }
 
 // Load saved servers on startup
 const _origStartApp_servers = window.startApp;
-window.startApp = function() {
+window.startApp = function () {
     loadSavedServers();
     if (_origStartApp_servers) _origStartApp_servers();
 };
