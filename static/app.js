@@ -1039,6 +1039,7 @@ function showVoiceView(serverId, channelId) {
     // Show share buttons even if not joined
     document.getElementById("voice-screen-btn")?.classList.remove("hidden");
     document.getElementById("voice-camera-btn")?.classList.remove("hidden");
+    syncVoiceEphemeralChatVisibility(serverId, channelId);
     updateVoiceSessionMeta();
     applyChannelBackground(serverId, channelId);
 }
@@ -2340,7 +2341,10 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         if (!inactive && msg.authorId !== state.peerId) {
             announceA11y(`${msg.author} yazdı`);
         }
-    } else if (data.type === "dm") {
+    } else if (data.type === "dm" || data.type === "dm_relay") {
+        if (data.type === "dm_relay" && data.target && data.target !== state.peerId) {
+            return;
+        }
         if (!state.dms) state.dms = {};
         if (!state.dms[fromPeerId]) state.dms[fromPeerId] = [];
         state.dms[fromPeerId].push(data.payload);
@@ -5298,7 +5302,15 @@ function sendDM() {
     renderDMMessages(state.activeDM);
 
     if (state.mesh) {
-        state.mesh.sendTo(state.activeDM, { type: "dm", payload: msg });
+        const peer = state.mesh.peers?.[state.activeDM];
+        const dcOpen = !!(peer?.dc && peer.dc.readyState === "open");
+        if (dcOpen) {
+            state.mesh.sendTo(state.activeDM, { type: "dm", payload: msg });
+        } else if (state.mesh.ws && state.mesh.ws.readyState === WebSocket.OPEN && typeof state.mesh.broadcastSignal === "function") {
+            state.mesh.broadcastSignal({ type: "dm_relay", target: state.activeDM, payload: msg });
+        } else {
+            toast("DM şu an gönderilemedi: bağlantı hazır değil.", "warning");
+        }
     }
     if (mainInput) mainInput.value = "";
     if (overlayInput) overlayInput.value = "";
@@ -9033,7 +9045,13 @@ function ensureVoiceEphemeralChatPanel() {
     panel.id = "voice-ephemeral-chat";
     panel.className = "voice-ephemeral-chat collapsed";
     panel.innerHTML = `
-      <button type="button" class="voice-chat-toggle" id="voice-chat-toggle">Ses Odasi Sohbeti</button>
+      <div class="voice-chat-head">
+        <div class="voice-chat-title-wrap">
+          <span class="voice-chat-icon">#</span>
+          <strong>Sesli Oda Sohbeti</strong>
+        </div>
+        <button type="button" class="voice-chat-toggle" id="voice-chat-toggle" aria-label="Sesli sohbet panelini aç/kapat">Aç</button>
+      </div>
       <div class="voice-chat-body">
         <div id="voice-chat-messages" class="voice-chat-messages"></div>
         <div class="voice-chat-input-row">
@@ -9044,7 +9062,11 @@ function ensureVoiceEphemeralChatPanel() {
     const controls = voiceView.querySelector(".voice-controls");
     if (controls) controls.insertAdjacentElement("beforebegin", panel);
     else voiceView.appendChild(panel);
-    panel.querySelector("#voice-chat-toggle").onclick = () => panel.classList.toggle("collapsed");
+    panel.querySelector("#voice-chat-toggle").onclick = () => {
+        panel.classList.toggle("collapsed");
+        const btn = panel.querySelector("#voice-chat-toggle");
+        if (btn) btn.textContent = panel.classList.contains("collapsed") ? "Aç" : "Kapat";
+    };
     panel.querySelector("#voice-chat-send").onclick = sendVoiceEphemeralChat;
     panel.querySelector("#voice-chat-input").addEventListener("keydown", e => {
         if (e.key === "Enter") {
@@ -9052,6 +9074,19 @@ function ensureVoiceEphemeralChatPanel() {
             sendVoiceEphemeralChat();
         }
     });
+}
+
+function syncVoiceEphemeralChatVisibility(serverId = state.activeServerId, channelId = state.activeChannelId) {
+    ensureVoiceEphemeralChatPanel();
+    const panel = document.getElementById("voice-ephemeral-chat");
+    if (!panel) return;
+    const server = state.servers.find(s => s.id === serverId);
+    const ch = server?.channels?.find(c => c.id === channelId);
+    const isDirectCall = !!ch?.directCall;
+    panel.classList.toggle("hidden", isDirectCall);
+    if (!isDirectCall) {
+        renderVoiceEphemeralChat();
+    }
 }
 
 function voiceChatKey(serverId = state.activeServerId, channelId = state.voiceChannelId || state.activeChannelId) {
