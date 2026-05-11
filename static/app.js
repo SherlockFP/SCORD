@@ -51,6 +51,21 @@ let state = {
     screenShareQuality: "720p",
     cameraQuality: "720p",
     roomCreatedAt: {}, // roomId -> timestamp
+    // Game activity state
+    gameActivity: null, // { game: string, icon: string, color: string }
+    spotifyActivity: null, // { song: string, artist: string, album: string, icon: string }
+    // Settings state
+    settings: {
+        theme: 'dark', // dark, light, auto
+        messageDensity: 'cozy', // comfortable, cozy, compact
+        emojiSize: 'medium', // small, medium, large
+        animations: true,
+        soundEnabled: true,
+        notificationSound: 'default',
+        highContrast: false,
+        fontSize: 14,
+        fontFamily: 'Inter',
+    },
     servers: [],        // { id, name, ownerId, channels, members, messages }
     activeServerId: null,
     activeChannelId: null,
@@ -686,20 +701,6 @@ function hideModal() {
 
 /* ── Setup overlay ────────────────────────────────────────── */
 function initSetup() {
-    // Populate color swatches
-    const container = document.getElementById("color-swatches");
-    AVATAR_COLORS.forEach(color => {
-        const swatch = document.createElement("div");
-        swatch.className = "color-swatch" + (color === state.avatarColor ? " selected" : "");
-        swatch.style.background = color;
-        swatch.onclick = () => {
-            state.avatarColor = color;
-            container.querySelectorAll(".color-swatch").forEach(s => s.classList.remove("selected"));
-            swatch.classList.add("selected");
-        };
-        container.appendChild(swatch);
-    });
-
     const nameInput = document.getElementById("username-input");
     const enterBtn = document.getElementById("enter-btn");
 
@@ -714,11 +715,6 @@ function initSetup() {
     enterBtn.addEventListener("click", () => {
         state.username = nameInput.value.trim();
         state.peerId = genId();
-        const avUrl = document.getElementById("avatar-url-input")?.value?.trim();
-        if (avUrl && /^https?:\/\//i.test(avUrl)) {
-            state.avatarImage = avUrl;
-            localStorage.setItem("scord_avatar_image", avUrl);
-        }
         localStorage.setItem("scord_username", state.username);
         localStorage.setItem("scord_color", state.avatarColor);
         localStorage.setItem("scord_peer_id", state.peerId);
@@ -757,17 +753,12 @@ function initSetup() {
     }
     if (saved.image) {
         state.avatarImage = saved.image;
-        const urlIn = document.getElementById("avatar-url-input");
-        if (urlIn && /^https?:\/\//i.test(saved.image)) urlIn.value = saved.image;
     }
     if (saved.username) {
         nameInput.value = saved.username;
         enterBtn.disabled = false;
         if (saved.color) {
             state.avatarColor = saved.color;
-            container.querySelectorAll(".color-swatch").forEach(s => {
-                s.classList.toggle("selected", s.style.background === saved.color || s.style.backgroundColor === saved.color);
-            });
         }
         if (saved.peerId) state.peerId = saved.peerId;
     }
@@ -918,6 +909,15 @@ function showHomeView() {
     document.getElementById("home-btn").classList.add("active");
     document.getElementById("sidebar-server-name").textContent = "SCORD";
 }
+
+// Message search state
+let searchState = {
+    open: false,
+    query: "",
+    results: [],
+    activeIndex: 0,
+    filters: { from: "", has: "", in: "", on: "" }
+};
 
 function showChatView(serverId, channelId) {
     closeMobileNav();
@@ -5676,3 +5676,949 @@ window.startApp = function() {
     setTimeout(initStatusSelector, 300);
     setTimeout(refreshDiscovery, 500);
 };
+
+/* ══════════════════════════════════════════════════════════════
+   DISCORD-STYLE MENTION SYSTEM (@user, @everyone, @here)
+══════════════════════════════════════════════════════════════ */
+
+// Enhanced mention parsing in parseMessageText
+const _origParseMessageText = window.parseMessageText;
+window.parseMessageText = function(text, serverId) {
+    if (!text) return "";
+    const sid = serverId !== undefined ? serverId : state.activeServerId;
+    
+    // First handle @everyone and @here
+    let result = String(text);
+    const server = state.servers.find(s => s.id === sid);
+    
+    // @everyone mention
+    result = result.replace(/@everyone/g, (match) => {
+        return `<span class="mention mention-everyone" data-mention="everyone" title="Everyone" style="background:rgba(239,68,68,0.2);color:#fca5a5;">@everyone</span>`;
+    });
+    
+    // @here mention
+    result = result.replace(/@here/g, (match) => {
+        return `<span class="mention mention-here" data-mention="here" title="Here" style="background:rgba(34,197,94,0.2);color:#86efac;">@here</span>`;
+    });
+    
+    // @user mentions (handle usernames with spaces)
+    if (server && server.members) {
+        const members = server.members;
+        // Sort by length descending to match longer names first
+        const sortedNames = [...new Set(members.map(m => m.username).filter(Boolean))].sort((a, b) => b.length - a.length);
+        
+        sortedNames.forEach(name => {
+            const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const regex = new RegExp(`(^|\\s)@${escaped}(?!\\w)`, "g");
+            result = result.replace(regex, (full, lead) => {
+                const member = members.find(m => m.username === name);
+                return `${lead}<span class="mention" data-peer="${member?.peer_id || ""}" style="background:rgba(99,102,241,0.2);color:#c7d2fe;cursor:pointer;">@${escapeHtml(name)}</span>`;
+            });
+        });
+    }
+    
+    // Handle URLs and other formatting
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    return result.split(urlRegex).map(part => {
+        if (part.match(urlRegex)) {
+            if (part.match(/\.(jpeg|jpg|gif|png|webp)($|\?)/i)) {
+                return `<a href="${part}" target="_blank" class="rich-link"><img src="${part}" class="chat-embed-img" alt="" loading="lazy" decoding="async" /></a>`;
+            }
+            const ytMatch = part.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+            if (ytMatch) {
+                return `<div class="chat-embed-video"><iframe src="https://www.youtube.com/embed/${ytMatch[1]}" frameborder="0" allowfullscreen></iframe></div>`;
+            }
+            return `<a href="${part}" target="_blank" class="chat-link">${part}</a>`;
+        }
+        return part;
+    }).join("");
+};
+
+// Mention click handler
+document.addEventListener("click", (e) => {
+    const mention = e.target.closest(".mention");
+    if (!mention) return;
+    
+    const peerId = mention.getAttribute("data-peer");
+    const mentionType = mention.getAttribute("data-mention");
+    
+    if (peerId) {
+        // Open user profile
+        const server = state.servers.find(s => s.id === state.activeServerId);
+        const member = server?.members.find(m => m.peer_id === peerId);
+        if (member) {
+            openUserProfile(peerId, member.username, member.avatar_image, member.avatar_color);
+        }
+    } else if (mentionType === "everyone") {
+        toast("📢 @everyone - Tüm üyeler etiketlendi!", "info");
+    } else if (mentionType === "here") {
+        toast("📍 @here - Çevrimiçi üyeler etiketlendi!", "info");
+    }
+});
+
+/* ══════════════════════════════════════════════════════════════
+   IMPROVED MUSIC BOT - FIXES & FEATURES
+══════════════════════════════════════════════════════════════ */
+
+// Fix: Music bot should only play for users in the voice channel
+const _origStartMusicBot = window.startMusicBot;
+window.startMusicBot = function(videoId, startAt) {
+    // Only play music if user is in a voice channel
+    if (!state.voiceChannelId) {
+        console.log("[Music Bot] Not in voice channel, skipping");
+        return;
+    }
+    
+    // Check if music bot is already in voice members
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (server && server.voiceMembers && server.voiceMembers[state.voiceChannelId]) {
+        const botInChannel = server.voiceMembers[state.voiceChannelId].some(m => m.peer_id === "bot_music");
+        if (!botInChannel) {
+            // Add bot to voice channel
+            server.voiceMembers[state.voiceChannelId].push({
+                peer_id: "bot_music",
+                username: "🎵 Müzik Botu",
+                avatar_color: "#ef4444",
+                avatar_image: null
+            });
+            renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+        }
+    }
+    
+    // Call original function
+    if (_origStartMusicBot) {
+        _origStartMusicBot(videoId, startAt);
+    }
+};
+
+// Fix: Stop music bot when kicked from voice channel
+const _origStopMusicBot = window.stopMusicBot;
+window.stopMusicBot = function() {
+    // Remove bot from voice members
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (server && server.voiceMembers && state.voiceChannelId) {
+        server.voiceMembers[state.voiceChannelId] = (server.voiceMembers[state.voiceChannelId] || []).filter(m => m.peer_id !== "bot_music");
+        if (state.activeChannelId === state.voiceChannelId) {
+            renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+        }
+        updateChannelSidebar(state.activeServerId);
+    }
+    
+    // Call original function
+    if (_origStopMusicBot) {
+        _origStopMusicBot();
+    }
+};
+
+// Add !kickmusic command to kick music bot from voice channel
+const _origHandleP2P_Music = window.handleIncomingP2P;
+window.handleIncomingP2P = function(fromPeerId, data, roomId) {
+    // Handle music bot kick command
+    if (data.type === "kick_music_bot" && data.target === "bot_music") {
+        const server = state.servers.find(s => s.id === roomId);
+        if (server && server.voiceMembers && state.voiceChannelId) {
+            server.voiceMembers[state.voiceChannelId] = (server.voiceMembers[state.voiceChannelId] || []).filter(m => m.peer_id !== "bot_music");
+            if (state.activeChannelId === state.voiceChannelId) {
+                renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+            }
+            updateChannelSidebar(state.activeServerId);
+            toast("🎵 Müzik botu sesli kanaldan çıkarıldı.", "info");
+        }
+        return;
+    }
+    
+    if (_origHandleP2P_Music) {
+        _origHandleP2P_Music(fromPeerId, data, roomId);
+    }
+};
+
+// Enhanced !play command with Discord-style bot mention
+const _origSendMessage = window.sendMessage;
+window.sendMessage = function() {
+    const input = document.getElementById("chat-input");
+    const text = input.value.trim();
+    
+    // Check for Discord-style music commands
+    if (text.startsWith("!p ") || text.startsWith("!play ")) {
+        const query = text.startsWith("!p ") ? text.slice(3).trim() : text.slice(6).trim();
+        if (!query) {
+            toast("🎵 Kullanım: !play <şarkı adı veya YouTube linki>", "info");
+            return;
+        }
+        
+        // Show bot mention style message
+        const botMention = `<span class="mention" style="background:rgba(239,68,68,0.2);color:#fca5a5;">🎵 Müzik Botu</span>`;
+        addSystemMessage(`${botMention} Şarkı aranıyor: "${query}"...`);
+    }
+    
+    // Check for kick music bot command
+    if (text === "!kickmusic" || text === "!stopmusic") {
+        if (!state.voiceChannelId) {
+            toast("Sesli kanalda değilsin.", "warning");
+            return;
+        }
+        
+        // Broadcast kick command
+        if (state.mesh) {
+            state.mesh.broadcast({
+                type: "kick_music_bot",
+                target: "bot_music",
+                voiceChannelId: state.voiceChannelId
+            });
+        }
+        
+        // Remove bot locally
+        const server = state.servers.find(s => s.id === state.activeServerId);
+        if (server && server.voiceMembers && state.voiceChannelId) {
+            server.voiceMembers[state.voiceChannelId] = (server.voiceMembers[state.voiceChannelId] || []).filter(m => m.peer_id !== "bot_music");
+            renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+            updateChannelSidebar(state.activeServerId);
+        }
+        
+        stopMusicBot();
+        toast("🎵 Müzik botu çıkarıldı.", "info");
+        input.value = "";
+        return;
+    }
+    
+    if (_origSendMessage) {
+        _origSendMessage();
+    }
+};
+
+/* ══════════════════════════════════════════════════════════════
+   CSS STYLES FOR NEW FEATURES
+══════════════════════════════════════════════════════════════ */
+
+// Add CSS for mention styles
+const mentionStyles = document.createElement("style");
+mentionStyles.textContent = `
+    .mention {
+        padding: 0 3px;
+        border-radius: 3px;
+        background: rgba(99, 102, 241, 0.25);
+        color: #c9cdfb;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+    
+    .mention:hover {
+        background: rgba(99, 102, 241, 0.45);
+        color: #fff;
+    }
+    
+    .mention-everyone {
+        background: rgba(239, 68, 68, 0.2) !important;
+        color: #fca5a5 !important;
+    }
+    
+    .mention-everyone:hover {
+        background: rgba(239, 68, 68, 0.4) !important;
+    }
+    
+    .mention-here {
+        background: rgba(34, 197, 94, 0.2) !important;
+        color: #86efac !important;
+    }
+    
+    .mention-here:hover {
+        background: rgba(34, 197, 94, 0.4) !important;
+    }
+    
+    /* Unread badge styles */
+    .unread-badge {
+        min-width: 20px;
+        height: 20px;
+        background: #ef4444;
+        color: white;
+        border-radius: 10px;
+        font-size: 11px;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 6px;
+        margin-left: auto;
+    }
+    
+    .unread-badge.hidden {
+        display: none !important;
+    }
+    
+    /* Typing indicator styles */
+    .typing-indicator {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 8px 12px;
+        font-size: 12px;
+        color: var(--text-muted);
+        font-style: italic;
+    }
+    
+    .typing-dots {
+        display: flex;
+        gap: 3px;
+        margin-left: 6px;
+    }
+    
+    .typing-dots span {
+        width: 6px;
+        height: 6px;
+        background: var(--text-muted);
+        border-radius: 50%;
+        animation: typing-bounce 1.4s ease-in-out infinite;
+    }
+    
+    .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+    
+    @keyframes typing-bounce {
+        0%, 60%, 100% { transform: translateY(0); }
+        30% { transform: translateY(-6px); }
+    }
+`;
+document.head.appendChild(mentionStyles);
+
+console.log("[Shercord V19] Discord-style mentions, improved music bot, and fixes loaded!");
+
+/* ══════════════════════════════════════════════════════════════
+   SERVER DATA PERSISTENCE (localStorage + GitHub-ready)
+══════════════════════════════════════════════════════════════ */
+
+// Save server data to localStorage
+function saveServerData(serverId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    // Create a lightweight copy (exclude volatile data)
+    const saveData = {
+        id: server.id,
+        name: server.name,
+        ownerId: server.ownerId,
+        inviteCode: server.inviteCode,
+        icon_url: server.icon_url,
+        channels: server.channels,
+        roles: server.roles,
+        peer_roles: server.peer_roles,
+        members: server.members,
+        messages: server.messages,
+        pinned_messages: server.pinned_messages,
+        channel_backgrounds: server.channel_backgrounds,
+        voicePermissionMode: server.voicePermissionMode,
+        createdAt: server.createdAt || Date.now(),
+        updatedAt: Date.now()
+    };
+    
+    try {
+        localStorage.setItem(`scord_server_${serverId}`, JSON.stringify(saveData));
+        console.log(`[Save] Server ${serverId} saved to localStorage`);
+    } catch (e) {
+        console.warn('[Save] localStorage full, trimming old data...');
+        // If storage is full, remove oldest server
+        trimOldServerData();
+        try {
+            localStorage.setItem(`scord_server_${serverId}`, JSON.stringify(saveData));
+        } catch (e2) {
+            console.error('[Save] Failed to save:', e2);
+        }
+    }
+}
+
+// Load server data from localStorage
+function loadServerData(serverId) {
+    try {
+        const data = localStorage.getItem(`scord_server_${serverId}`);
+        if (data) {
+            return JSON.parse(data);
+        }
+    } catch (e) {
+        console.error('[Load] Failed to load server:', e);
+    }
+    return null;
+}
+
+// Trim old server data if storage is full
+function trimOldServerData() {
+    const keys = Object.keys(localStorage).filter(k => k.startsWith('scord_server_'));
+    if (keys.length <= 3) return; // Keep at least 3 servers
+    
+    // Find oldest servers and remove them
+    const servers = keys.map(key => {
+        try {
+            const data = JSON.parse(localStorage.getItem(key));
+            return { key, updatedAt: data?.updatedAt || 0 };
+        } catch { return { key, updatedAt: 0 }; }
+    }).sort((a, b) => a.updatedAt - b.updatedAt);
+    
+    // Remove oldest servers until we have space
+    for (let i = 0; i < servers.length - 2; i++) {
+        localStorage.removeItem(servers[i].key);
+    }
+}
+
+// Save all servers on page unload
+window.addEventListener('beforeunload', () => {
+    state.servers.forEach(server => saveServerData(server.id));
+});
+
+// Auto-save every 30 seconds
+setInterval(() => {
+    state.servers.forEach(server => saveServerData(server.id));
+}, 30000);
+
+// Load saved servers on startup
+function loadSavedServers() {
+    const keys = Object.keys(localStorage).filter(k => k.startsWith('scord_server_'));
+    keys.forEach(key => {
+        try {
+            const data = JSON.parse(localStorage.getItem(key));
+            if (data && data.id) {
+                // Check if server is already in state
+                if (!state.servers.find(s => s.id === data.id)) {
+                    state.servers.push({
+                        ...data,
+                        voiceMembers: {},
+                        voiceSessionHost: {},
+                        unread: {}
+                    });
+                    console.log(`[Load] Loaded server: ${data.name}`);
+                }
+            }
+        } catch (e) {
+            console.error('[Load] Failed to parse server data:', e);
+        }
+    });
+}
+
+/* ══════════════════════════════════════════════════════════════
+   DISCORD-STYLE EMBEDDED SETTINGS PANEL
+══════════════════════════════════════════════════════════════ */
+
+function openServerSettingsPanel() {
+    if (!state.activeServerId) return toast("Önce bir sunucu seç.", "info");
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+
+    const isOwner = server.ownerId === state.peerId;
+    const isAdmin = isOwner || server.peer_roles?.[state.peerId] === "admin";
+    if (!isAdmin) return toast("Bu işlem için yönetici yetkisi gerekli.", "error");
+
+    // Create embedded settings panel
+    let panel = document.getElementById("server-settings-panel");
+    if (panel) {
+        panel.classList.toggle("hidden");
+        return;
+    }
+
+    panel = document.createElement("div");
+    panel.id = "server-settings-panel";
+    panel.className = "settings-panel-embedded";
+    panel.innerHTML = `
+        <div class="settings-panel-header">
+            <h3>⚙️ Sunucu Ayarları</h3>
+            <button class="settings-panel-close" onclick="closeServerSettingsPanel()">✕</button>
+        </div>
+        <div class="settings-panel-tabs">
+            <button class="tab-btn active" data-tab="general">Genel</button>
+            <button class="tab-btn" data-tab="roles">Roller</button>
+            <button class="tab-btn" data-tab="members">Üyeler</button>
+            <button class="tab-btn" data-tab="permissions">İzinler</button>
+        </div>
+        <div class="settings-panel-content">
+            <div id="tab-general" class="tab-content active">
+                ${renderGeneralSettings(server)}
+            </div>
+            <div id="tab-roles" class="tab-content">
+                ${renderRolesSettings(server)}
+            </div>
+            <div id="tab-members" class="tab-content">
+                ${renderMembersSettings(server)}
+            </div>
+            <div id="tab-permissions" class="tab-content">
+                ${renderPermissionsSettings(server)}
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(panel);
+    
+    // Tab switching
+    panel.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.onclick = () => {
+            panel.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            panel.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+        };
+    });
+
+    // Add CSS for settings panel
+    if (!document.getElementById('settings-panel-css')) {
+        const style = document.createElement('style');
+        style.id = 'settings-panel-css';
+        style.textContent = `
+            .settings-panel-embedded {
+                position: fixed;
+                right: 0;
+                top: 0;
+                bottom: 0;
+                width: 480px;
+                max-width: 90vw;
+                background: var(--bg-deep);
+                border-left: 1px solid var(--border-strong);
+                z-index: 1000;
+                display: flex;
+                flex-direction: column;
+                animation: slideInRight 0.3s ease;
+                box-shadow: -8px 0 32px rgba(0,0,0,0.4);
+            }
+            
+            @keyframes slideInRight {
+                from { transform: translateX(100%); }
+                to { transform: translateX(0); }
+            }
+            
+            .settings-panel-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 16px 20px;
+                border-bottom: 1px solid var(--border);
+                background: var(--bg-mid);
+            }
+            
+            .settings-panel-header h3 {
+                font-size: 16px;
+                font-weight: 700;
+                color: var(--text-primary);
+            }
+            
+            .settings-panel-close {
+                width: 32px;
+                height: 32px;
+                border: none;
+                background: none;
+                color: var(--text-secondary);
+                cursor: pointer;
+                border-radius: var(--r-md);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 18px;
+            }
+            
+            .settings-panel-close:hover {
+                background: var(--bg-hover);
+                color: var(--text-primary);
+            }
+            
+            .settings-panel-tabs {
+                display: flex;
+                padding: 8px 16px;
+                gap: 4px;
+                border-bottom: 1px solid var(--border);
+                background: var(--bg-base);
+            }
+            
+            .tab-btn {
+                flex: 1;
+                padding: 8px 12px;
+                border: none;
+                background: none;
+                color: var(--text-secondary);
+                cursor: pointer;
+                border-radius: var(--r-md);
+                font-size: 13px;
+                font-weight: 500;
+                transition: all 0.2s;
+            }
+            
+            .tab-btn:hover {
+                background: var(--bg-hover);
+                color: var(--text-primary);
+            }
+            
+            .tab-btn.active {
+                background: var(--bg-active);
+                color: var(--accent-light);
+                font-weight: 600;
+            }
+            
+            .settings-panel-content {
+                flex: 1;
+                overflow-y: auto;
+                padding: 16px 20px;
+            }
+            
+            .tab-content {
+                display: none;
+            }
+            
+            .tab-content.active {
+                display: block;
+            }
+            
+            .role-item {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 12px;
+                background: var(--bg-base);
+                border-radius: var(--r-md);
+                margin-bottom: 8px;
+                border: 1px solid var(--border);
+            }
+            
+            .role-color-picker {
+                width: 24px;
+                height: 24px;
+                border-radius: 50%;
+                border: 2px solid var(--border-strong);
+                cursor: pointer;
+                padding: 0;
+            }
+            
+            .role-name-input {
+                flex: 1;
+                background: var(--bg-deep);
+                border: 1px solid var(--border);
+                border-radius: var(--r-sm);
+                padding: 6px 10px;
+                color: var(--text-primary);
+                font-size: 14px;
+            }
+            
+            .permission-grid {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 8px;
+                margin-top: 12px;
+            }
+            
+            .permission-item {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 8px 12px;
+                background: var(--bg-base);
+                border-radius: var(--r-sm);
+                border: 1px solid var(--border);
+            }
+            
+            .permission-item input[type="checkbox"] {
+                width: 16px;
+                height: 16px;
+                accent-color: var(--accent);
+            }
+            
+            .member-role-select {
+                background: var(--bg-deep);
+                border: 1px solid var(--border);
+                border-radius: var(--r-sm);
+                padding: 4px 8px;
+                color: var(--text-primary);
+                font-size: 12px;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+}
+
+function closeServerSettingsPanel() {
+    const panel = document.getElementById("server-settings-panel");
+    if (panel) {
+        panel.remove();
+    }
+}
+
+function renderGeneralSettings(server) {
+    return `
+        <div class="form-group" style="margin-bottom:16px">
+            <label class="modal-label">Sunucu Adı</label>
+            <input class="modal-input" id="settings-sv-name" value="${escapeHtml(server.name)}" />
+        </div>
+        <div class="form-group" style="margin-bottom:16px">
+            <label class="modal-label">Sunucu İkonu (URL)</label>
+            <input class="modal-input" id="settings-sv-icon" value="${escapeHtml(server.icon_url || '')}" placeholder="https://..." />
+        </div>
+        <div class="form-group" style="margin-bottom:16px">
+            <label class="modal-label">Davet Kodu</label>
+            <div class="peer-id-display" style="display:flex;justify-content:space-between;align-items:center;">
+                <span>${escapeHtml(server.inviteCode || '—')}</span>
+                <button class="btn-secondary" style="padding:6px 12px;font-size:12px;" onclick="navigator.clipboard.writeText('${server.inviteCode || ''}');toast('Kopyalandı!','success')">Kopyala</button>
+            </div>
+        </div>
+        <button class="btn-primary" onclick="saveGeneralSettings()" style="width:100%">Kaydet</button>
+    `;
+}
+
+function renderRolesSettings(server) {
+    const roles = server.roles || {};
+    let html = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <h4 style="color:var(--text-primary);font-size:14px;">Roller</h4>
+            <button class="btn-primary" style="padding:6px 12px;font-size:12px;" onclick="createNewRole()">+ Yeni Rol</button>
+        </div>
+    `;
+    
+    Object.entries(roles).forEach(([roleId, roleData]) => {
+        const memberCount = Object.values(server.peer_roles || {}).filter(r => r === roleId).length;
+        html += `
+            <div class="role-item">
+                <input type="color" class="role-color-picker" value="${roleData.color || '#7c3aed'}" 
+                       onchange="updateRoleColor('${roleId}', this.value)" />
+                <input type="text" class="role-name-input" value="${escapeHtml(roleData.name)}" 
+                       onchange="updateRoleName('${roleId}', this.value)" />
+                <span style="font-size:11px;color:var(--text-muted);">${memberCount} üye</span>
+                ${server.ownerId !== state.peerId ? '' : `
+                    <button style="background:none;border:none;color:var(--red);cursor:pointer;font-size:16px;" 
+                            onclick="deleteRole('${roleId}')">🗑️</button>
+                `}
+            </div>
+        `;
+    });
+    
+    return html;
+}
+
+function renderMembersSettings(server) {
+    const members = server.members || [];
+    let html = `
+        <div style="margin-bottom:16px;">
+            <h4 style="color:var(--text-primary);font-size:14px;">Üyeler (${members.length})</h4>
+        </div>
+    `;
+    
+    members.forEach(member => {
+        const currentRole = server.peer_roles?.[member.peer_id] || 'member';
+        const roles = server.roles || {};
+        const roleOptions = Object.entries(roles).map(([roleId, roleData]) => 
+            `<option value="${roleId}" ${currentRole === roleId ? 'selected' : ''}>${escapeHtml(roleData.name)}</option>`
+        ).join('');
+        
+        html += `
+            <div class="role-item">
+                <div style="width:32px;height:32px;border-radius:50%;background:${member.avatar_color || '#7c3aed'};display:flex;align-items:center;justify-content:center;font-size:14px;color:#fff;font-weight:700;">
+                    ${initials(member.username)}
+                </div>
+                <span style="flex:1;font-size:14px;color:var(--text-primary);">${escapeHtml(member.username)}</span>
+                ${server.ownerId === state.peerId ? `
+                    <select class="member-role-select" onchange="updateMemberRole('${member.peer_id}', this.value)">
+                        <option value="member">Üye</option>
+                        ${roleOptions}
+                    </select>
+                ` : `<span style="font-size:12px;color:var(--text-muted);">${roles[currentRole]?.name || 'Üye'}</span>`}
+            </div>
+        `;
+    });
+    
+    return html;
+}
+
+function renderPermissionsSettings(server) {
+    const permissions = [
+        { id: 'send_messages', name: 'Mesaj Gönder', icon: '💬' },
+        { id: 'delete_own_messages', name: 'Kendi Mesajını Sil', icon: '🗑️' },
+        { id: 'delete_all_messages', name: 'Herkesin Mesajını Sil', icon: '🗑️' },
+        { id: 'create_channels', name: 'Kanal Oluştur', icon: '📝' },
+        { id: 'delete_channels', name: 'Kanal Sil', icon: '❌' },
+        { id: 'join_voice', name: 'Sesli Kanala Katıl', icon: '🔊' },
+        { id: 'kick_members', name: 'Üye At', icon: '🚪' },
+        { id: 'mute_members', name: 'Sustur', icon: '🔇' },
+        { id: 'manage_roles', name: 'Rol Yönetimi', icon: '🛡️' },
+        { id: 'manage_server', name: 'Sunucu Yönetimi', icon: '⚙️' },
+        { id: 'screen_share', name: 'Ekran Paylaşımı', icon: '🖥️' },
+        { id: 'stream', name: 'Canlı Yayın', icon: '📹' },
+    ];
+    
+    let html = `
+        <div style="margin-bottom:16px;">
+            <h4 style="color:var(--text-primary);font-size:14px;">Varsayılan İzinler</h4>
+            <p style="font-size:12px;color:var(--text-muted);margin-top:4px;">"Üye" rolü için varsayılan izinler</p>
+        </div>
+        <div class="permission-grid">
+    `;
+    
+    permissions.forEach(perm => {
+        const defaultEnabled = ['send_messages', 'join_voice', 'screen_share'].includes(perm.id);
+        html += `
+            <div class="permission-item">
+                <input type="checkbox" id="perm_${perm.id}" ${defaultEnabled ? 'checked' : ''} 
+                       onchange="updatePermission('${perm.id}', this.checked)" />
+                <label for="perm_${perm.id}" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;">
+                    <span>${perm.icon}</span> ${perm.name}
+                </label>
+            </div>
+        `;
+    });
+    
+    html += `</div>`;
+    return html;
+}
+
+// Settings save functions
+function saveGeneralSettings() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const name = document.getElementById('settings-sv-name').value.trim();
+    const icon = document.getElementById('settings-sv-icon').value.trim();
+    
+    if (name) server.name = name;
+    if (icon) server.icon_url = icon;
+    
+    saveServerData(server.id);
+    
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: 'server_update',
+            payload: { id: server.id, name: server.name, icon_url: server.icon_url }
+        });
+    }
+    
+    updateChannelSidebar(server.id);
+    renderServerRail();
+    toast('Ayarlar kaydedildi!', 'success');
+}
+
+function createNewRole() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const roleId = 'role_' + genId();
+    if (!server.roles) server.roles = {};
+    server.roles[roleId] = {
+        name: 'Yeni Rol',
+        color: '#7c3aed',
+        hoist: false,
+        permissions: {}
+    };
+    
+    saveServerData(server.id);
+    
+    // Refresh roles tab
+    const rolesTab = document.getElementById('tab-roles');
+    if (rolesTab) {
+        rolesTab.innerHTML = renderRolesSettings(server);
+    }
+    
+    toast('Yeni rol oluşturuldu!', 'success');
+}
+
+function updateRoleColor(roleId, color) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server || !server.roles?.[roleId]) return;
+    
+    server.roles[roleId].color = color;
+    saveServerData(server.id);
+    
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: 'server_update',
+            payload: { id: server.id, roles: server.roles }
+        });
+    }
+    
+    updateMembersPanel(server.id);
+    toast('Rol rengi güncellendi!', 'success');
+}
+
+function updateRoleName(roleId, name) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server || !server.roles?.[roleId]) return;
+    
+    server.roles[roleId].name = name.trim() || 'İsimsiz Rol';
+    saveServerData(server.id);
+    
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: 'server_update',
+            payload: { id: server.id, roles: server.roles }
+        });
+    }
+    
+    toast('Rol adı güncellendi!', 'success');
+}
+
+function deleteRole(roleId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server || !server.roles?.[roleId]) return;
+    
+    if (!confirm('Bu rolü silmek istediğine emin misin?')) return;
+    
+    delete server.roles[roleId];
+    // Remove role from all members
+    Object.keys(server.peer_roles || {}).forEach(peerId => {
+        if (server.peer_roles[peerId] === roleId) {
+            delete server.peer_roles[peerId];
+        }
+    });
+    
+    saveServerData(server.id);
+    
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: 'server_update',
+            payload: { id: server.id, roles: server.roles, peer_roles: server.peer_roles }
+        });
+    }
+    
+    // Refresh
+    const rolesTab = document.getElementById('tab-roles');
+    if (rolesTab) {
+        rolesTab.innerHTML = renderRolesSettings(server);
+    }
+    
+    updateMembersPanel(server.id);
+    toast('Rol silindi.', 'info');
+}
+
+function updateMemberRole(peerId, roleId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    if (!server.peer_roles) server.peer_roles = {};
+    
+    if (roleId === 'member') {
+        delete server.peer_roles[peerId];
+    } else {
+        server.peer_roles[peerId] = roleId;
+    }
+    
+    saveServerData(server.id);
+    
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: 'server_update',
+            payload: { id: server.id, peer_roles: server.peer_roles }
+        });
+    }
+    
+    updateMembersPanel(server.id);
+    toast('Üye rolü güncellendi!', 'success');
+}
+
+function updatePermission(permId, enabled) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    // Update default member role permissions
+    if (!server.roles) server.roles = {};
+    if (!server.roles.member) server.roles.member = { name: 'Üye', color: '#94a3b8', hoist: false, permissions: {} };
+    
+    server.roles.member.permissions[permId] = enabled;
+    saveServerData(server.id);
+    
+    toast('İzin güncellendi!', 'success');
+}
+
+// Load saved servers on startup
+const _origStartApp = window.startApp;
+window.startApp = function() {
+    loadSavedServers();
+    if (_origStartApp) _origStartApp();
+};
+
+console.log("[Shercord V20] Server persistence, role management, and embedded settings panel loaded!");
