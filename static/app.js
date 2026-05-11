@@ -51,6 +51,11 @@ let state = {
     screenShareQuality: "720p",
     cameraQuality: "720p",
     roomCreatedAt: {}, // roomId -> timestamp
+    // Status system
+    status: "online", // online, idle, dnd, invisible
+    customStatus: "", // custom status text
+    statusEmoji: "", // status emoji
+    lastActive: Date.now(), // for idle detection
     // Game activity state
     gameActivity: null, // { game: string, icon: string, color: string }
     spotifyActivity: null, // { song: string, artist: string, album: string, icon: string }
@@ -402,42 +407,59 @@ function attachMeshBroadcastSync(mesh, roomId) {
 }
 
 function updateVoiceSessionMeta() {
-    const el = document.getElementById("voice-sync-meta");
-    const voiceView = document.getElementById("voice-view");
-    if (!el || !voiceView || voiceView.classList.contains("hidden")) {
-        if (el) el.textContent = "";
+    const meta = document.getElementById("voice-sync-meta");
+    if (!meta || !state.voiceChannelId) {
+        if (meta) meta.textContent = "";
         return;
     }
     const server = state.servers.find(s => s.id === state.activeServerId);
-    const ch = state.voiceChannelId || state.activeChannelId;
-    if (!server || !ch) {
-        el.textContent = "";
-        return;
+    const ch = state.voiceChannelId;
+    let txt = "";
+    if (server?.voiceSessionHost?.[ch]) {
+        const host = server.voiceSessionHost[ch];
+        txt = `Host: ${host.username}`;
     }
-    const host = server.voiceSessionHost?.[ch];
-    const rt = state.peerLatencyMs || {};
-    const vals = Object.values(rt).filter(n => typeof n === "number" && n >= 0);
-    const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
-    const ing = state.peerIngressMs || {};
-    const ingVals = Object.values(ing).filter(n => typeof n === "number");
-    const ingAvg = ingVals.length ? Math.round(ingVals.reduce((a, b) => a + b, 0) / ingVals.length) : null;
-    const st = SCORD_T();
-    const parts = [];
-    if (host) parts.push(`Oturumu ilk açan: ${host.username}`);
-    if (avg != null) parts.push(`RTT ~${avg}ms`);
-    if (ingAvg != null) parts.push(`paket ~${ingAvg}ms`);
-    parts.push(
-        `UI ${st.VOICE_SPEAKING_POLL_MS ?? 100}/${st.VOICE_SPEAKING_HOLD_MS ?? 250}ms · overlay ${st.SCREEN_OVERLAY_SYNC_INTERVAL_MS ?? 750}ms · neg ${st.P2P_NEGOTIATION_DEBOUNCE_MS ?? 150}ms · ping ${st.RTT_PING_INTERVAL_MS ?? 4000}ms`
-    );
-    el.textContent = parts.join(" · ");
-    el.title = [
-        host ? `Ses oturumunu ilk başlatan: ${host.username}` : null,
-        avg != null ? `Ölçülen ortalama RTT (yaklaşık tek yön ×2): ~${avg} ms` : null,
-        ingAvg != null ? `Paket üzerinden tahmini gecikme: ~${ingAvg} ms` : null,
-        `timing.js sabitleri — konuşma tarama ${st.VOICE_SPEAKING_POLL_MS}ms, histerezis ${st.VOICE_SPEAKING_HOLD_MS}ms, uzak video UI ${st.VOICE_TRACK_RENDER_DELAY_MS}ms, akış UI ${st.VOICE_STREAM_RENDER_DELAY_MS}ms, ekran overlay ${st.SCREEN_OVERLAY_SYNC_INTERVAL_MS}ms, WebRTC offer debounce ${st.P2P_NEGOTIATION_DEBOUNCE_MS}ms, WS yeniden bağlanma ${st.P2P_WS_RECONNECT_MS}ms, sinyal ping ${st.P2P_SIGNALING_PING_INTERVAL_MS}ms, üye paneli ${st.MEMBERS_PANEL_DEBOUNCE_MS}ms, RTT ölçüm ${st.RTT_PING_INTERVAL_MS}ms`,
-    ]
-        .filter(Boolean)
-        .join("\n");
+    meta.textContent = txt;
+    
+    // Show voice call indicator when in different server
+    showVoiceCallIndicator();
+}
+
+function showVoiceCallIndicator() {
+    if (!state.voiceChannelId) return;
+    
+    // Remove existing indicator
+    const existing = document.getElementById("voice-call-indicator");
+    if (existing) existing.remove();
+    
+    // Create indicator if not in voice view of current server
+    if (document.getElementById("voice-view").classList.contains("hidden")) {
+        const indicator = document.createElement("div");
+        indicator.id = "voice-call-indicator";
+        indicator.className = "voice-call-indicator";
+        indicator.innerHTML = `
+            <div class="voice-call-indicator-content">
+                <span>🔊 Sesli aramadasın</span>
+                <button id="voice-return-btn" class="voice-return-btn">Aramaya Dön</button>
+            </div>
+        `;
+        
+        // Add click handler to return to voice
+        indicator.querySelector("#voice-return-btn").onclick = () => {
+            const server = state.servers.find(s => s.voiceMembers?.[state.voiceChannelId]);
+            if (server) {
+                showVoiceView(server.id, state.voiceChannelId);
+            }
+        };
+        
+        // Add to page
+        document.body.appendChild(indicator);
+    }
+}
+
+function hideVoiceCallIndicator() {
+    const indicator = document.getElementById("voice-call-indicator");
+    if (indicator) indicator.remove();
 }
 
 function sendPeerLatencyPings() {
@@ -589,6 +611,1202 @@ function escapeHtml(s) {
     const d = document.createElement("div");
     d.textContent = String(s);
     return d.innerHTML;
+}
+
+// Status System Functions
+const STATUS_TYPES = {
+    online: { color: "#3ba55c", text: "Çevrimiçi", icon: "🟢" },
+    idle: { color: "#faa61a", text: "Boşta", icon: "🟡" },
+    dnd: { color: "#ed4245", text: "Rahatsız Etmeyin", icon: "🔴" },
+    invisible: { color: "#747f8d", text: "Çevrimdışı", icon: "⚫" }
+};
+
+function setStatus(newStatus, customStatus = "", statusEmoji = "") {
+    const oldStatus = state.status;
+    state.status = newStatus;
+    state.customStatus = customStatus;
+    state.statusEmoji = statusEmoji;
+    state.lastActive = Date.now();
+    
+    // Save to localStorage
+    localStorage.setItem("scord_status", newStatus);
+    localStorage.setItem("scord_custom_status", customStatus);
+    localStorage.setItem("scord_status_emoji", statusEmoji);
+    
+    // Broadcast status change to all servers
+    if (state.mesh && state.mesh.broadcast) {
+        state.mesh.broadcast({
+            type: "status_update",
+            status: newStatus,
+            customStatus,
+            statusEmoji,
+            timestamp: Date.now()
+        });
+    }
+    
+    // Update UI
+    updateStatusBar();
+    updateMemberList();
+    
+    // Start idle detection if online
+    if (newStatus === "online") {
+        startIdleDetection();
+    } else {
+        stopIdleDetection();
+    }
+}
+
+function startIdleDetection() {
+    stopIdleDetection();
+    state._idleTimer = setInterval(() => {
+        const idleTime = Date.now() - state.lastActive;
+        const idleThreshold = 5 * 60 * 1000; // 5 minutes
+        
+        if (idleTime >= idleThreshold && state.status === "online") {
+            setStatus("idle", state.customStatus, state.statusEmoji);
+        }
+    }, 60000); // Check every minute
+}
+
+function stopIdleDetection() {
+    if (state._idleTimer) {
+        clearInterval(state._idleTimer);
+        state._idleTimer = null;
+    }
+}
+
+function updateLastActive() {
+    state.lastActive = Date.now();
+    // If user was idle, set back to online
+    if (state.status === "idle") {
+        setStatus("online", state.customStatus, state.statusEmoji);
+    }
+}
+
+function loadStatusFromStorage() {
+    const savedStatus = localStorage.getItem("scord_status") || "online";
+    const savedCustomStatus = localStorage.getItem("scord_custom_status") || "";
+    const savedStatusEmoji = localStorage.getItem("scord_status_emoji") || "";
+    
+    state.status = savedStatus;
+    state.customStatus = savedCustomStatus;
+    state.statusEmoji = savedStatusEmoji;
+}
+
+function getStatusDisplay(status, customStatus = "", statusEmoji = "") {
+    const statusInfo = STATUS_TYPES[status] || STATUS_TYPES.online;
+    let display = statusInfo.icon;
+    
+    if (statusEmoji) {
+        display = statusEmoji;
+    }
+    
+    if (customStatus) {
+        display += " " + customStatus;
+    }
+    
+    return display;
+}
+
+function updateStatusBar() {
+    const statusBar = document.getElementById("status-bar");
+    if (!statusBar) return;
+    
+    const statusInfo = STATUS_TYPES[state.status] || STATUS_TYPES.online;
+    let activityHtml = "";
+    
+    // Add activities
+    const activities = [];
+    if (state.gameActivity) {
+        activities.push(`${state.gameActivity.icon} <span style="color: ${state.gameActivity.color}">${state.gameActivity.game}</span>`);
+    }
+    if (state.spotifyActivity) {
+        activities.push(`${state.spotifyActivity.icon} <span style="color: ${state.spotifyActivity.color}">${state.spotifyActivity.song}</span>`);
+    }
+    
+    if (activities.length > 0) {
+        activityHtml = `
+            <div class="status-activities">
+                ${activities.join(' • ')}
+            </div>
+        `;
+    }
+    
+    statusBar.innerHTML = `
+        <div class="status-indicator" style="--status-color: ${statusInfo.color}" title="Durumu değiştirmek için tıkla">
+            <span class="status-dot"></span>
+            <span class="status-text">${statusInfo.text}</span>
+        </div>
+        <div class="status-custom">
+            ${state.statusEmoji ? `<span class="status-emoji">${state.statusEmoji}</span>` : ""}
+            ${state.customStatus ? `<span class="custom-status-text">${state.customStatus}</span>` : ""}
+        </div>
+        ${activityHtml}
+    `;
+}
+
+function updateMemberList() {
+    // This will be called when rendering member panels
+    const servers = document.querySelectorAll(".member-item");
+    servers.forEach(memberEl => {
+        const peerId = memberEl.dataset.peerId;
+        const member = getCurrentMemberInfo(peerId);
+        if (member) {
+            updateMemberStatusDisplay(memberEl, member);
+        }
+    });
+}
+
+function updateMemberStatusDisplay(memberEl, member) {
+    const statusDot = memberEl.querySelector(".member-status-dot");
+    const statusText = memberEl.querySelector(".member-status-text");
+    
+    if (statusDot && member.status) {
+        const statusInfo = STATUS_TYPES[member.status] || STATUS_TYPES.online;
+        statusDot.style.backgroundColor = statusInfo.color;
+        statusDot.title = statusInfo.text;
+    }
+    
+    if (statusText && (member.customStatus || member.statusEmoji)) {
+        statusText.textContent = getStatusDisplay(member.status, member.customStatus, member.statusEmoji);
+        statusText.classList.remove("hidden");
+    } else if (statusText) {
+        statusText.classList.add("hidden");
+    }
+}
+
+function getCurrentMemberInfo(peerId) {
+    // Find member info across all servers
+    for (const server of state.servers) {
+        const member = server.members?.find(m => m.peer_id === peerId);
+        if (member) {
+            return {
+                ...member,
+                status: member.status || "online",
+                customStatus: member.customStatus || "",
+                statusEmoji: member.statusEmoji || ""
+            };
+        }
+    }
+    return null;
+}
+
+// Track user activity for idle detection
+document.addEventListener("mousemove", updateLastActive);
+document.addEventListener("keypress", updateLastActive);
+document.addEventListener("click", updateLastActive);
+document.addEventListener("scroll", updateLastActive);
+
+// Status Picker Modal
+function showStatusPicker() {
+    const modalContent = `
+        <div class="status-picker">
+            <div class="status-picker-header">Durumunu Ayarla</div>
+            <div class="status-options">
+                ${Object.entries(STATUS_TYPES).map(([key, info]) => `
+                    <div class="status-option ${state.status === key ? 'selected' : ''}" data-status="${key}">
+                        <div class="status-option-dot" style="background: ${info.color}"></div>
+                        <div class="status-option-info">
+                            <div class="status-option-title">${info.icon} ${info.text}</div>
+                            <div class="status-option-desc">${getStatusDescription(key)}</div>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+            <div class="custom-status-input">
+                <div class="status-picker-header">Özel Durum</div>
+                <div class="custom-status-input-row">
+                    <input type="text" id="custom-status-input" placeholder="Ne yapıyorsun?" maxlength="50" value="${state.customStatus}">
+                    <button type="button" class="emoji-picker-btn" id="status-emoji-btn" title="Emoji Seç">${state.statusEmoji || '😀'}</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showModal("Durum Ayarları", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">İptal</button>
+        <button class="btn-primary" onclick="saveStatusSettings()">Kaydet</button>
+    `);
+    
+    // Add event listeners
+    setTimeout(() => {
+        const statusOptions = document.querySelectorAll('.status-option');
+        statusOptions.forEach(option => {
+            option.addEventListener('click', () => {
+                statusOptions.forEach(opt => opt.classList.remove('selected'));
+                option.classList.add('selected');
+            });
+        });
+        
+        const emojiBtn = document.getElementById('status-emoji-btn');
+        if (emojiBtn) {
+            emojiBtn.addEventListener('click', showStatusEmojiPicker);
+        }
+    }, 100);
+}
+
+function getStatusDescription(status) {
+    const descriptions = {
+        online: "Çevrimiçi ve sohbet için hazırsın",
+        idle: "Boşta - birazdan geri döneceksin",
+        dnd: "Rahatsız edilmek istemiyorsun",
+        invisible: "Çevrimdışı görünüyorsun"
+    };
+    return descriptions[status] || "";
+}
+
+function saveStatusSettings() {
+    const selectedOption = document.querySelector('.status-option.selected');
+    const customStatusInput = document.getElementById('custom-status-input');
+    
+    if (selectedOption) {
+        const newStatus = selectedOption.dataset.status;
+        const customStatus = customStatusInput ? customStatusInput.value.trim() : "";
+        const statusEmoji = state.statusEmoji; // Keep current emoji
+        
+        setStatus(newStatus, customStatus, statusEmoji);
+        hideModal();
+        toast("Durum güncellendi!", "success");
+    }
+}
+
+function showStatusEmojiPicker() {
+    // Simple emoji picker
+    const commonEmojis = ["😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "😉", "😊", "😇", "🥰", "😍", "🤩", "😘", "😗", "😚", "🎮", "💻", "📱", "🎧", "📚", "🎨", "🎵", "🎬", "🏃", "💪", "🧠", "💡", "☕", "🍕", "🎯", "🚀", "🌟", "✨", "🔥", "💯"];
+    
+    const emojiGrid = document.createElement('div');
+    emojiGrid.style.cssText = 'display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; padding: 12px; max-height: 200px; overflow-y: auto;';
+    
+    commonEmojis.forEach(emoji => {
+        const emojiBtn = document.createElement('button');
+        emojiBtn.textContent = emoji;
+        emojiBtn.style.cssText = 'font-size: 20px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-elevated); cursor: pointer; transition: all 0.2s;';
+        emojiBtn.onmouseover = () => emojiBtn.style.background = 'var(--bg-highlight)';
+        emojiBtn.onmouseout = () => emojiBtn.style.background = 'var(--bg-elevated)';
+        emojiBtn.onclick = () => {
+            state.statusEmoji = emoji;
+            const emojiBtn = document.getElementById('status-emoji-btn');
+            if (emojiBtn) emojiBtn.textContent = emoji;
+            emojiGrid.remove();
+        };
+        emojiGrid.appendChild(emojiBtn);
+    });
+    
+    // Position emoji picker
+    const emojiBtn = document.getElementById('status-emoji-btn');
+    if (emojiBtn) {
+        emojiGrid.style.position = 'absolute';
+        emojiGrid.style.background = 'var(--bg-surface)';
+        emojiGrid.style.border = '1px solid var(--border)';
+        emojiGrid.style.borderRadius = '8px';
+        emojiGrid.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
+        emojiGrid.style.zIndex = '1000';
+        
+        const rect = emojiBtn.getBoundingClientRect();
+        emojiGrid.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+        emojiGrid.style.left = rect.left + 'px';
+        
+        document.body.appendChild(emojiGrid);
+        
+        // Close on outside click
+        setTimeout(() => {
+            const closeEmojiPicker = (e) => {
+                if (!emojiGrid.contains(e.target) && e.target !== emojiBtn) {
+                    emojiGrid.remove();
+                    document.removeEventListener('click', closeEmojiPicker);
+                }
+            };
+            document.addEventListener('click', closeEmojiPicker);
+        }, 100);
+    }
+}
+
+// Handle status updates from other users
+function handleStatusUpdate(data) {
+    const { from, status, customStatus, statusEmoji, timestamp } = data;
+    
+    // Update member info across all servers
+    state.servers.forEach(server => {
+        const member = server.members?.find(m => m.peer_id === from);
+        if (member) {
+            member.status = status;
+            member.customStatus = customStatus;
+            member.statusEmoji = statusEmoji;
+            member.lastStatusUpdate = timestamp;
+        }
+    });
+    
+    // Update UI if member is visible
+    updateMemberList();
+}
+
+// Activity System
+const ACTIVITY_TYPES = {
+    playing: { icon: "🎮", color: "#1f8b4c", text: "Oynuyor" },
+    listening: { icon: "🎵", color: "#1db954", text: "Dinliyor" },
+    watching: { icon: "📺", color: "#e94057", text: "İzliyor" },
+    streaming: { icon: "🔴", color: "#593695", text: "Yayında" },
+    working: { icon: "💻", color: "#4a90e2", text: "Çalışıyor" },
+    studying: { icon: "📚", color: "#f39c12", text: "Öğreniyor" }
+};
+
+function setGameActivity(game, icon = "🎮") {
+    state.gameActivity = { game, icon, color: ACTIVITY_TYPES.playing.color };
+    localStorage.setItem("scord_game_activity", JSON.stringify(state.gameActivity));
+    broadcastActivityUpdate();
+    updateStatusBar();
+}
+
+function setSpotifyActivity(song, artist, album = "", icon = "🎵") {
+    state.spotifyActivity = { song, artist, album, icon, color: ACTIVITY_TYPES.listening.color };
+    localStorage.setItem("scord_spotify_activity", JSON.stringify(state.spotifyActivity));
+    broadcastActivityUpdate();
+    updateStatusBar();
+}
+
+function clearActivity(type = "all") {
+    if (type === "all" || type === "game") {
+        state.gameActivity = null;
+        localStorage.removeItem("scord_game_activity");
+    }
+    if (type === "all" || type === "spotify") {
+        state.spotifyActivity = null;
+        localStorage.removeItem("scord_spotify_activity");
+    }
+    broadcastActivityUpdate();
+    updateStatusBar();
+}
+
+// Message Reactions System
+function addReaction(serverId, channelId, messageId, emoji) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    if (!server.reactions) server.reactions = {};
+    const key = `${channelId}-${messageId}`;
+    if (!server.reactions[key]) server.reactions[key] = {};
+    
+    const reaction = server.reactions[key];
+    if (!reaction[emoji]) reaction[emoji] = new Set();
+    
+    // Add user's reaction
+    reaction[emoji].add(state.peerId);
+    
+    // Broadcast reaction
+    if (state.mesh && state.mesh.broadcast) {
+        state.mesh.broadcast({
+            type: "reaction_add",
+            serverId,
+            channelId,
+            messageId,
+            emoji,
+            userId: state.peerId,
+            timestamp: Date.now()
+        });
+    }
+    
+    // Update UI
+    renderMessageReactions(serverId, channelId, messageId);
+    saveReactionsToStorage(serverId);
+}
+
+function removeReaction(serverId, channelId, messageId, emoji) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    if (!server.reactions) server.reactions = {};
+    const key = `${channelId}-${messageId}`;
+    if (!server.reactions[key]) return;
+    
+    const reaction = server.reactions[key];
+    if (!reaction[emoji]) return;
+    
+    // Remove user's reaction
+    reaction[emoji].delete(state.peerId);
+    
+    // Clean up empty reactions
+    if (reaction[emoji].size === 0) {
+        delete reaction[emoji];
+    }
+    
+    if (Object.keys(reaction).length === 0) {
+        delete server.reactions[key];
+    }
+    
+    // Broadcast reaction removal
+    if (state.mesh && state.mesh.broadcast) {
+        state.mesh.broadcast({
+            type: "reaction_remove",
+            serverId,
+            channelId,
+            messageId,
+            emoji,
+            userId: state.peerId,
+            timestamp: Date.now()
+        });
+    }
+    
+    // Update UI
+    renderMessageReactions(serverId, channelId, messageId);
+    saveReactionsToStorage(serverId);
+}
+
+function handleReactionAdd(data) {
+    const { serverId, channelId, messageId, emoji, userId } = data;
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    if (!server.reactions) server.reactions = {};
+    const key = `${channelId}-${messageId}`;
+    if (!server.reactions[key]) server.reactions[key] = {};
+    
+    const reaction = server.reactions[key];
+    if (!reaction[emoji]) reaction[emoji] = new Set();
+    reaction[emoji].add(userId);
+    
+    renderMessageReactions(serverId, channelId, messageId);
+}
+
+function handleReactionRemove(data) {
+    const { serverId, channelId, messageId, emoji, userId } = data;
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    if (!server.reactions) server.reactions = {};
+    const key = `${channelId}-${messageId}`;
+    if (!server.reactions[key]) return;
+    
+    const reaction = server.reactions[key];
+    if (!reaction[emoji]) return;
+    
+    reaction[emoji].delete(userId);
+    
+    // Clean up empty reactions
+    if (reaction[emoji].size === 0) {
+        delete reaction[emoji];
+    }
+    
+    if (Object.keys(reaction).length === 0) {
+        delete server.reactions[key];
+    }
+    
+    renderMessageReactions(serverId, channelId, messageId);
+}
+
+function renderMessageReactions(serverId, channelId, messageId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    const key = `${channelId}-${messageId}`;
+    const reactions = server.reactions?.[key];
+    if (!reactions) return;
+    
+    const msgEl = document.querySelector(`[data-msg-id="${messageId}"]`);
+    if (!msgEl) return;
+    
+    // Remove existing reaction bar
+    const existingBar = msgEl.querySelector('.reaction-bar');
+    if (existingBar) existingBar.remove();
+    
+    // Create reaction bar
+    const reactionBar = document.createElement('div');
+    reactionBar.className = 'reaction-bar';
+    
+    Object.entries(reactions).forEach(([emoji, users]) => {
+        const pill = document.createElement('div');
+        pill.className = 'reaction-pill';
+        
+        const userReacted = users.has(state.peerId);
+        if (userReacted) pill.classList.add('reacted');
+        
+        pill.innerHTML = `
+            <span class="reaction-emoji">${emoji}</span>
+            <span class="reaction-count">${users.size}</span>
+        `;
+        
+        pill.onclick = () => {
+            if (userReacted) {
+                removeReaction(serverId, channelId, messageId, emoji);
+            } else {
+                addReaction(serverId, channelId, messageId, emoji);
+            }
+        };
+        
+        pill.oncontextmenu = (e) => {
+            e.preventDefault();
+            showReactionContextMenu(e, serverId, channelId, messageId, emoji, users);
+        };
+        
+        reactionBar.appendChild(pill);
+    });
+    
+    // Add reaction button
+    const addBtn = document.createElement('div');
+    addBtn.className = 'reaction-add-btn';
+    addBtn.innerHTML = '+';
+    addBtn.title = 'Tepki Ekle';
+    addBtn.onclick = () => showReactionPicker(serverId, channelId, messageId);
+    
+    reactionBar.appendChild(addBtn);
+    msgEl.appendChild(reactionBar);
+}
+
+function showReactionPicker(serverId, channelId, messageId) {
+    // Common reactions
+    const commonEmojis = ["👍", "👎", "😄", "❤️", "😢", "😮", "😡", "🎉", "🔥", "👏", "🤔", "👀"];
+    
+    const picker = document.createElement('div');
+    picker.className = 'reaction-picker';
+    picker.innerHTML = `
+        <div class="reaction-picker-header">Tepki Ekle</div>
+        <div class="reaction-picker-grid">
+            ${commonEmojis.map(emoji => `
+                <button class="reaction-emoji-btn" data-emoji="${emoji}">${emoji}</button>
+            `).join('')}
+        </div>
+        <div class="reaction-picker-custom">
+            <input type="text" placeholder="Emoji ara..." maxlength="2">
+        </div>
+    `;
+    
+    // Position picker
+    const msgEl = document.querySelector(`[data-msg-id="${messageId}"]`);
+    if (!msgEl) return;
+    
+    const rect = msgEl.getBoundingClientRect();
+    picker.style.position = 'absolute';
+    picker.style.top = (rect.bottom + 5) + 'px';
+    picker.style.left = rect.left + 'px';
+    picker.style.zIndex = '1000';
+    
+    document.body.appendChild(picker);
+    
+    // Add event listeners
+    const emojiBtns = picker.querySelectorAll('.reaction-emoji-btn');
+    emojiBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const emoji = btn.dataset.emoji;
+            addReaction(serverId, channelId, messageId, emoji);
+            picker.remove();
+        });
+    });
+    
+    const searchInput = picker.querySelector('input');
+    searchInput.addEventListener('input', (e) => {
+        const query = e.target.value;
+        if (query.length === 1) {
+            // Replace grid with matching emojis
+            const grid = picker.querySelector('.reaction-picker-grid');
+            grid.innerHTML = `<button class="reaction-emoji-btn" data-emoji="${query}">${query}</button>`;
+            grid.querySelector('.reaction-emoji-btn').addEventListener('click', () => {
+                addReaction(serverId, channelId, messageId, query);
+                picker.remove();
+            });
+        }
+    });
+    
+    // Close on outside click
+    setTimeout(() => {
+        const closePicker = (e) => {
+            if (!picker.contains(e.target)) {
+                picker.remove();
+                document.removeEventListener('click', closePicker);
+            }
+        };
+        document.addEventListener('click', closePicker);
+    }, 100);
+}
+
+function showReactionContextMenu(ev, serverId, channelId, messageId, emoji, users) {
+    closeContextMenu();
+    ev.preventDefault();
+    ev.stopPropagation();
+    
+    const menu = document.createElement('div');
+    menu.className = 'ctx-menu ctx-menu--reaction';
+    menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 200)}px`;
+    menu.style.top = `${Math.min(ev.clientY, window.innerHeight - 150)}px`;
+    
+    const userNames = Array.from(users).map(userId => {
+        const member = getCurrentMemberInfo(userId);
+        return member?.username || 'Bilinmeyen';
+    }).join(', ');
+    
+    menu.innerHTML = `
+        <div class="ctx-section">${emoji} - ${users.size} tepki</div>
+        <div class="ctx-item" style="font-size: 12px; color: var(--text-muted); max-width: 200px; word-break: break-all;">
+            ${userNames}
+        </div>
+    `;
+    
+    document.body.appendChild(menu);
+    setTimeout(() => {
+        document.addEventListener('click', closeContextMenu, { once: true });
+    }, 10);
+}
+
+function saveReactionsToStorage(serverId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server || !server.reactions) return;
+    
+    // Convert Sets to arrays for storage
+    const serializable = {};
+    Object.entries(server.reactions).forEach(([key, reactions]) => {
+        serializable[key] = {};
+        Object.entries(reactions).forEach(([emoji, users]) => {
+            serializable[key][emoji] = Array.from(users);
+        });
+    });
+    
+    localStorage.setItem(`scord_reactions_${serverId}`, JSON.stringify(serializable));
+}
+
+function loadReactionsFromStorage(serverId) {
+    try {
+        const saved = localStorage.getItem(`scord_reactions_${serverId}`);
+        if (!saved) return;
+        
+        const server = state.servers.find(s => s.id === serverId);
+        if (!server) return;
+        
+        const data = JSON.parse(saved);
+        server.reactions = {};
+        
+        Object.entries(data).forEach(([key, reactions]) => {
+            server.reactions[key] = {};
+            Object.entries(reactions).forEach(([emoji, users]) => {
+                server.reactions[key][emoji] = new Set(users);
+            });
+        });
+    } catch (e) {
+        console.warn("Failed to load reactions from storage:", e);
+    }
+}
+
+// Message Threads System
+function createThread(serverId, channelId, parentMessageId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    if (!server.threads) server.threads = {};
+    const threadId = genId();
+    
+    const thread = {
+        id: threadId,
+        parentMessageId,
+        channelId,
+        messages: [],
+        createdAt: Date.now(),
+        createdBy: state.peerId,
+        archived: false
+    };
+    
+    server.threads[threadId] = thread;
+    
+    // Broadcast thread creation
+    if (state.mesh && state.mesh.broadcast) {
+        state.mesh.broadcast({
+            type: "thread_create",
+            serverId,
+            channelId,
+            threadId,
+            parentMessageId,
+            timestamp: Date.now()
+        });
+    }
+    
+    // Open thread view
+    openThreadView(serverId, threadId);
+    saveThreadsToStorage(serverId);
+}
+
+function handleThreadCreate(data) {
+    const { serverId, channelId, threadId, parentMessageId } = data;
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    if (!server.threads) server.threads = {};
+    
+    server.threads[threadId] = {
+        id: threadId,
+        parentMessageId,
+        channelId,
+        messages: [],
+        createdAt: Date.now(),
+        createdBy: data.createdBy || data.from,
+        archived: false
+    };
+    
+    // Update UI to show thread indicator on parent message
+    updateThreadIndicator(serverId, channelId, parentMessageId, threadId);
+}
+
+function addThreadMessage(serverId, threadId, text) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server || !server.threads[threadId]) return;
+    
+    const thread = server.threads[threadId];
+    const msg = {
+        id: genId(),
+        text,
+        author: state.username,
+        authorId: state.peerId,
+        avatarColor: state.avatarColor,
+        avatarImage: state.avatarImage,
+        time: now(),
+        threadId,
+        channelId: thread.channelId
+    };
+    
+    thread.messages.push(msg);
+    
+    // Broadcast thread message
+    if (state.mesh && state.mesh.broadcast) {
+        state.mesh.broadcast({
+            type: "thread_message",
+            serverId,
+            threadId,
+            message: msg,
+            timestamp: Date.now()
+        });
+    }
+    
+    // Update UI
+    renderThreadMessages(serverId, threadId);
+    saveThreadsToStorage(serverId);
+}
+
+function handleThreadMessage(data) {
+    const { serverId, threadId, message } = data;
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server || !server.threads[threadId]) return;
+    
+    server.threads[threadId].messages.push(message);
+    
+    // Update UI if thread is open
+    if (state.activeThreadId === threadId) {
+        renderThreadMessages(serverId, threadId);
+    }
+    
+    // Update thread indicator on parent message
+    updateThreadIndicator(serverId, server.threads[threadId].channelId, server.threads[threadId].parentMessageId, threadId);
+}
+
+function openThreadView(serverId, threadId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server || !server.threads[threadId]) return;
+    
+    state.activeThreadId = threadId;
+    state.activeServerId = serverId;
+    
+    // Hide main views
+    document.getElementById("chat-view").classList.add("hidden");
+    document.getElementById("voice-view").classList.add("hidden");
+    document.getElementById("home-view").classList.add("hidden");
+    hideDMMainView(false);
+    
+    // Show thread view
+    const threadView = document.getElementById("thread-view");
+    if (!threadView) {
+        createThreadViewElement();
+    }
+    
+    document.getElementById("thread-view").classList.remove("hidden");
+    renderThreadMessages(serverId, threadId);
+    updateThreadHeader(serverId, threadId);
+}
+
+function createThreadViewElement() {
+    const main = document.querySelector(".main-content");
+    const threadView = document.createElement("div");
+    threadView.id = "thread-view";
+    threadView.className = "thread-view hidden";
+    threadView.innerHTML = `
+        <div class="thread-header">
+            <button class="thread-back-btn" onclick="closeThreadView()">← Geri</button>
+            <div class="thread-title">
+                <div class="thread-title-text">Thread</div>
+                <div class="thread-subtitle">Ana mesaja yanıt</div>
+            </div>
+            <button class="thread-archive-btn" onclick="toggleThreadArchive()">📁 Arşivle</button>
+        </div>
+        <div class="thread-messages-area" id="thread-messages-area"></div>
+        <div class="thread-input-area">
+            <div class="thread-input-wrapper">
+                <textarea id="thread-input" placeholder="Thread'e mesaj gönder..." rows="1"></textarea>
+                <button id="thread-send-btn" class="thread-send-btn">Gönder</button>
+            </div>
+        </div>
+    `;
+    main.appendChild(threadView);
+    
+    // Add event listeners
+    document.getElementById("thread-send-btn").addEventListener("click", sendThreadMessage);
+    document.getElementById("thread-input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            sendThreadMessage();
+        }
+    });
+}
+
+function renderThreadMessages(serverId, threadId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server || !server.threads[threadId]) return;
+    
+    const thread = server.threads[threadId];
+    const area = document.getElementById("thread-messages-area");
+    if (!area) return;
+    
+    area.innerHTML = "";
+    
+    // Show parent message
+    const parentMsg = findMessageById(serverId, thread.channelId, thread.parentMessageId);
+    if (parentMsg) {
+        const parentEl = document.createElement("div");
+        parentEl.className = "thread-parent-message";
+        parentEl.innerHTML = `
+            <div class="thread-parent-header">Ana Mesaj</div>
+            <div class="msg-row msg-row--other">
+                <div class="msg-avatar" style="background: ${parentMsg.avatarColor || '#7c3aed'}; color: white;">
+                    ${(parentMsg.avatarImage ? `<img src="${parentMsg.avatarImage}" alt="${parentMsg.author}" />` : (parentMsg.author || "?")[0].toUpperCase())}
+                </div>
+                <div class="msg-stack">
+                    <div class="msg-bubble msg-bubble--other">
+                        <div class="msg-header">
+                            <span class="msg-author">${parentMsg.author}</span>
+                            <span class="msg-time">${parentMsg.time}</span>
+                        </div>
+                        <div class="msg-text">${parseMessageText(parentMsg.text, serverId)}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+        area.appendChild(parentEl);
+    }
+    
+    // Render thread messages
+    thread.messages.forEach(msg => {
+        const msgEl = createThreadMessageDOM(msg, serverId);
+        area.appendChild(msgEl);
+    });
+    
+    // Scroll to bottom
+    area.scrollTop = area.scrollHeight;
+}
+
+function createThreadMessageDOM(msg, serverId) {
+    const isSelf = msg.authorId === state.peerId;
+    const el = document.createElement("div");
+    el.className = "thread-message msg-row" + (isSelf ? " msg-row--self" : " msg-row--other");
+    
+    el.innerHTML = `
+        <div class="msg-avatar" style="background: ${msg.avatarColor || '#7c3aed'}; color: white;">
+            ${(msg.avatarImage ? `<img src="${msg.avatarImage}" alt="${msg.author}" />` : (msg.author || "?")[0].toUpperCase())}
+        </div>
+        <div class="msg-stack">
+            <div class="msg-bubble${isSelf ? " msg-bubble--self" : " msg-bubble--other"}">
+                <div class="msg-header">
+                    <span class="msg-author${isSelf ? " is-you" : ""}">${msg.author}</span>
+                    <span class="msg-time">${msg.time}</span>
+                </div>
+                <div class="msg-text">${parseMessageText(msg.text, serverId)}</div>
+            </div>
+        </div>
+    `;
+    
+    return el;
+}
+
+function updateThreadHeader(serverId, threadId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server || !server.threads[threadId]) return;
+    
+    const thread = server.threads[threadId];
+    const titleEl = document.querySelector(".thread-title-text");
+    const subtitleEl = document.querySelector(".thread-subtitle");
+    
+    if (titleEl) titleEl.textContent = `Thread (${thread.messages.length} mesaj)`;
+    if (subtitleEl) subtitleEl.textContent = `Başlatan: ${getUsernameById(thread.createdBy)}`;
+}
+
+function updateThreadIndicator(serverId, channelId, parentMessageId, threadId) {
+    const msgEl = document.querySelector(`[data-msg-id="${parentMessageId}"]`);
+    if (!msgEl) return;
+    
+    // Remove existing thread indicator
+    const existingIndicator = msgEl.querySelector(".thread-indicator");
+    if (existingIndicator) existingIndicator.remove();
+    
+    // Add thread indicator
+    const indicator = document.createElement("div");
+    indicator.className = "thread-indicator";
+    indicator.innerHTML = `💬 ${getThreadMessageCount(serverId, threadId)} yanıt`;
+    indicator.onclick = () => openThreadView(serverId, threadId);
+    
+    msgEl.appendChild(indicator);
+}
+
+function getThreadMessageCount(serverId, threadId) {
+    const server = state.servers.find(s => s.id === serverId);
+    return server?.threads?.[threadId]?.messages?.length || 0;
+}
+
+function sendThreadMessage() {
+    if (!state.activeThreadId) return;
+    
+    const input = document.getElementById("thread-input");
+    const text = input.value.trim();
+    if (!text) return;
+    
+    addThreadMessage(state.activeServerId, state.activeThreadId, text);
+    input.value = "";
+    input.style.height = "auto";
+}
+
+function closeThreadView() {
+    document.getElementById("thread-view").classList.add("hidden");
+    document.getElementById("chat-view").classList.remove("hidden");
+    state.activeThreadId = null;
+}
+
+function toggleThreadArchive() {
+    if (!state.activeThreadId) return;
+    
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server || !server.threads[state.activeThreadId]) return;
+    
+    const thread = server.threads[state.activeThreadId];
+    thread.archived = !thread.archived;
+    
+    const btn = document.querySelector(".thread-archive-btn");
+    if (btn) {
+        btn.textContent = thread.archived ? "📂 Arşivden Çıkar" : "📁 Arşivle";
+    }
+    
+    saveThreadsToStorage(state.activeServerId);
+    toast(thread.archived ? "Thread arşivlendi" : "Thread arşivden çıkarıldı", "info");
+}
+
+function saveThreadsToStorage(serverId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server || !server.threads) return;
+    
+    localStorage.setItem(`scord_threads_${serverId}`, JSON.stringify(server.threads));
+}
+
+function loadThreadsFromStorage(serverId) {
+    try {
+        const saved = localStorage.getItem(`scord_threads_${serverId}`);
+        if (!saved) return;
+        
+        const server = state.servers.find(s => s.id === serverId);
+        if (!server) return;
+        
+        server.threads = JSON.parse(saved);
+    } catch (e) {
+        console.warn("Failed to load threads from storage:", e);
+    }
+}
+
+function findMessageById(serverId, channelId, messageId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return null;
+    
+    const cid = server ? canonicalChannelIdForChat(server, channelId) : channelId;
+    const messages = server?.messages?.[cid] || [];
+    return messages.find(m => m.id === messageId);
+}
+
+function getUsernameById(peerId) {
+    // Search across all servers for the username
+    for (const server of state.servers) {
+        const member = server.members?.find(m => m.peer_id === peerId);
+        if (member) return member.username;
+    }
+    return "Bilinmeyen";
+}
+
+function loadActivitiesFromStorage() {
+    try {
+        const savedGame = localStorage.getItem("scord_game_activity");
+        if (savedGame) state.gameActivity = JSON.parse(savedGame);
+        
+        const savedSpotify = localStorage.getItem("scord_spotify_activity");
+        if (savedSpotify) state.spotifyActivity = JSON.parse(savedSpotify);
+    } catch (e) {
+        console.warn("Failed to load activities from storage:", e);
+    }
+}
+
+function broadcastActivityUpdate() {
+    if (state.mesh && state.mesh.broadcast) {
+        state.mesh.broadcast({
+            type: "activity_update",
+            gameActivity: state.gameActivity,
+            spotifyActivity: state.spotifyActivity,
+            timestamp: Date.now()
+        });
+    }
+}
+
+function handleActivityUpdate(data) {
+    const { from, gameActivity, spotifyActivity, timestamp } = data;
+    
+    // Update member info across all servers
+    state.servers.forEach(server => {
+        const member = server.members?.find(m => m.peer_id === from);
+        if (member) {
+            member.gameActivity = gameActivity;
+            member.spotifyActivity = spotifyActivity;
+            member.lastActivityUpdate = timestamp;
+        }
+    });
+    
+    // Update UI if member is visible
+    updateMemberList();
+}
+
+function getActivityDisplay(member) {
+    const activities = [];
+    
+    if (member.gameActivity) {
+        activities.push({
+            type: "playing",
+            icon: member.gameActivity.icon,
+            name: member.gameActivity.game,
+            color: member.gameActivity.color
+        });
+    }
+    
+    if (member.spotifyActivity) {
+        activities.push({
+            type: "listening",
+            icon: member.spotifyActivity.icon,
+            name: `${member.spotifyActivity.song} - ${member.spotifyActivity.artist}`,
+            details: member.spotifyActivity.album,
+            color: member.spotifyActivity.color
+        });
+    }
+    
+    return activities;
+}
+
+function showActivityPicker() {
+    const modalContent = `
+        <div class="activity-picker">
+            <div class="activity-picker-header">Aktivite Ayarla</div>
+            
+            <div class="activity-section">
+                <div class="activity-section-title">🎮 Oyun Aktivitesi</div>
+                <div class="activity-input-group">
+                    <input type="text" id="game-name-input" placeholder="Oyun adı..." maxlength="50" 
+                           value="${state.gameActivity?.game || ""}">
+                    <button type="button" class="activity-btn" id="set-game-btn">Ayarla</button>
+                    ${state.gameActivity ? `<button type="button" class="activity-btn danger" id="clear-game-btn">Temizle</button>` : ""}
+                </div>
+            </div>
+            
+            <div class="activity-section">
+                <div class="activity-section-title">🎵 Spotify Aktivitesi</div>
+                <div class="activity-input-group">
+                    <input type="text" id="song-name-input" placeholder="Şarkı adı..." maxlength="50" 
+                           value="${state.spotifyActivity?.song || ""}">
+                    <input type="text" id="artist-name-input" placeholder="Sanatçı..." maxlength="30" 
+                           value="${state.spotifyActivity?.artist || ""}">
+                    <input type="text" id="album-name-input" placeholder="Albüm..." maxlength="30" 
+                           value="${state.spotifyActivity?.album || ""}">
+                    <button type="button" class="activity-btn" id="set-spotify-btn">Ayarla</button>
+                    ${state.spotifyActivity ? `<button type="button" class="activity-btn danger" id="clear-spotify-btn">Temizle</button>` : ""}
+                </div>
+            </div>
+            
+            <div class="activity-section">
+                <div class="activity-section-title">Hızlı Aktiviteler</div>
+                <div class="quick-activities">
+                    <button type="button" class="quick-activity-btn" data-activity="working">💻 Çalışıyor</button>
+                    <button type="button" class="quick-activity-btn" data-activity="studying">📚 Öğreniyor</button>
+                    <button type="button" class="quick-activity-btn" data-activity="watching">📺 İzliyor</button>
+                    <button type="button" class="quick-activity-btn" data-activity="clear">❌ Tümünü Temizle</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showModal("Aktivite Ayarları", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">İptal</button>
+        <button class="btn-primary" onclick="hideModal()">Tamam</button>
+    `);
+    
+    // Add event listeners
+    setTimeout(() => {
+        const setGameBtn = document.getElementById('set-game-btn');
+        const clearGameBtn = document.getElementById('clear-game-btn');
+        const setSpotifyBtn = document.getElementById('set-spotify-btn');
+        const clearSpotifyBtn = document.getElementById('clear-spotify-btn');
+        const quickActivityBtns = document.querySelectorAll('.quick-activity-btn');
+        
+        if (setGameBtn) {
+            setGameBtn.addEventListener('click', () => {
+                const gameInput = document.getElementById('game-name-input');
+                if (gameInput && gameInput.value.trim()) {
+                    setGameActivity(gameInput.value.trim());
+                    toast("Oyun aktivitesi ayarlandı!", "success");
+                }
+            });
+        }
+        
+        if (clearGameBtn) {
+            clearGameBtn.addEventListener('click', () => {
+                clearActivity('game');
+                toast("Oyun aktivitesi temizlendi!", "info");
+            });
+        }
+        
+        if (setSpotifyBtn) {
+            setSpotifyBtn.addEventListener('click', () => {
+                const songInput = document.getElementById('song-name-input');
+                const artistInput = document.getElementById('artist-name-input');
+                const albumInput = document.getElementById('album-name-input');
+                
+                if (songInput && artistInput && songInput.value.trim() && artistInput.value.trim()) {
+                    setSpotifyActivity(
+                        songInput.value.trim(),
+                        artistInput.value.trim(),
+                        albumInput?.value.trim() || ""
+                    );
+                    toast("Spotify aktivitesi ayarlandı!", "success");
+                }
+            });
+        }
+        
+        if (clearSpotifyBtn) {
+            clearSpotifyBtn.addEventListener('click', () => {
+                clearActivity('spotify');
+                toast("Spotify aktivitesi temizlendi!", "info");
+            });
+        }
+        
+        quickActivityBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const activity = btn.dataset.activity;
+                if (activity === 'clear') {
+                    clearActivity('all');
+                    toast("Tüm aktiviteler temizlendi!", "info");
+                } else {
+                    const activityInfo = ACTIVITY_TYPES[activity];
+                    if (activity === 'working') {
+                        setGameActivity("Çalışıyor", "💻");
+                    } else if (activity === 'studying') {
+                        setGameActivity("Öğreniyor", "📚");
+                    } else if (activity === 'watching') {
+                        setGameActivity("İzliyor", "📺");
+                    }
+                    toast(`${activityInfo.text} olarak ayarlandı!`, "success");
+                }
+            });
+        });
+    }, 100);
 }
 
 function chMuteStorageKey(serverId) {
@@ -796,6 +2014,8 @@ function initSetup() {
         friends: localStorage.getItem("scord_friends"),
         recentDMs: localStorage.getItem("scord_recent_dms"),
     };
+    loadStatusFromStorage();
+    loadActivitiesFromStorage();
     if (saved.friends) {
         try { state.friends = JSON.parse(saved.friends); } catch (e) { }
     }
@@ -881,6 +2101,16 @@ function startApp() {
     refreshDiscovery();
     initMobileNav();
     setInterval(refreshDiscovery, SCORD_T().DISCOVERY_REFRESH_INTERVAL_MS ?? 15000);
+    
+    // Initialize status system
+    updateStatusBar();
+    startIdleDetection();
+    
+    // Add status bar click event
+    const statusBar = document.getElementById("status-bar");
+    if (statusBar) {
+        statusBar.addEventListener("click", showStatusPicker);
+    }
 }
 
 let _runtimeCfgLoaded = false;
@@ -997,79 +2227,51 @@ function showChatView(serverId, channelId) {
         console.warn("[App] showChatView: Server not found:", serverId);
         return;
     }
-    const channel = server.channels ? server.channels.find(c => c.id === channelId) : null;
+    const channel = server.channels.find(c => c.id === channelId);
     if (!channel) {
         console.warn("[App] showChatView: Channel not found:", channelId);
         return;
     }
 
-    const prevSid = state.activeServerId;
-    const prevCid = state.activeChannelId;
-    const chatVisible = document.getElementById("chat-view") && !document.getElementById("chat-view").classList.contains("hidden");
-    if (prevSid && prevCid && chatVisible && (prevSid !== serverId || prevCid !== channelId)) {
-        persistChatDraftFor(prevSid, prevCid);
-    }
-
+    const wasInVoice = !!state.voiceChannelId;
+    
     state.activeServerId = serverId;
     state.activeChannelId = channelId;
-
-    const canonCh = canonicalChannelIdForChat(server, channelId);
-    if (server._msgListOffset && canonCh) delete server._msgListOffset[canonCh];
-
-    const inp = document.getElementById("chat-input");
-    if (inp) {
-        const dk = draftStorageKey(serverId, channelId);
-        inp.value = localStorage.getItem(dk) || "";
-        inp.style.height = "auto";
-    }
-    hideNewMsgsChip();
-    wireMessagesScroll();
+    updateChannelSidebar(serverId);
+    renderMessages(serverId, channelId);
+    renderMembersPanel(serverId);
+    applyChannelBackground(serverId, channelId);
 
     document.getElementById("home-view").classList.add("hidden");
     document.getElementById("chat-view").classList.remove("hidden");
     document.getElementById("voice-view").classList.add("hidden");
 
-    // Fix: the HTML element ID for the channel title is 'active-channel-name' not 'server-name-label'
-    const channelNameEl = document.getElementById("active-channel-name");
-    if (channelNameEl) channelNameEl.textContent = `# ${channel.name}`;
-
-    document.getElementById("chat-input").placeholder = `#${channel.name} kanalına mesaj gönder`;
-    document.getElementById("sidebar-server-name").textContent = server.name;
-    updateChannelSidebar(serverId);
-
-    renderMessages(serverId, channelId);
-    applyChannelBackground(serverId, channelId);
-
-    updateMuteStates();
-    updateMembersDebounced();
-    updatePeerCountBadge(serverId);
-}
-
-function updateMuteStates() {
-    if (!state.mesh || !state.remoteMedia) return;
-    const server = state.servers.find(s => s.id === state.activeServerId);
-    const activeChannel = state.voiceChannelId;
-    Object.entries(state.remoteMedia).forEach(([peerId, videoEl]) => {
-        const tracks = videoEl.srcObject?.getAudioTracks() || [];
-        const sameChannel = activeChannel && server?.voiceMembers?.[activeChannel]?.some(m => m.peer_id === peerId);
-        tracks.forEach(t => t.enabled = !!sameChannel);
-    });
+    // Auto-focus chat input
+    setTimeout(() => document.getElementById("chat-input")?.focus(), 100);
+    
+    // If we were in voice and this is a voice channel, show voice view instead
+    if (wasInVoice && channel.type === "voice") {
+        showVoiceView(serverId, channelId);
+    }
 }
 
 function showVoiceView(serverId, channelId) {
     closeMobileNav();
     hideDMMainView(false);
+    hideVoiceCallIndicator(); // Hide indicator when in voice view
     const server = state.servers.find(s => s.id === serverId);
     const channel = server?.channels.find(c => c.id === channelId);
     if (!server || !channel) return;
 
-    if (state.activeServerId && state.activeChannelId) {
-        const prevCh = server.channels?.find(c => c.id === state.activeChannelId);
-        if (prevCh?.type === "text") persistChatDraftFor(state.activeServerId, state.activeChannelId);
+    // Preserve voice state - don't leave existing voice channel unnecessarily
+    if (state.voiceChannelId && state.voiceChannelId !== channelId) {
+        // Only switch channels if different
+        leaveVoiceChannel();
     }
-
+    
     state.activeServerId = serverId;
-    state.activeChannelId = channelId;
+    // Don't set activeChannelId for voice channels to preserve DM functionality
+    // state.activeChannelId = channelId; // Commented out to allow DM while in voice
 
     document.getElementById("home-view").classList.add("hidden");
     document.getElementById("chat-view").classList.add("hidden");
@@ -1788,6 +2990,15 @@ function appendMessageDOM(msg, grouped = false, serverId = null, opts = {}) {
     const textDiv = document.createElement("div");
     textDiv.className = "msg-text";
     textDiv.innerHTML = parseMessageText(msg.text, sid);
+    bubble.appendChild(textDiv);
+
+    // Add reactions if they exist
+    if (sid && msg.id) {
+        setTimeout(() => {
+            renderMessageReactions(sid, msg.channelId || state.activeChannelId, msg.id);
+        }, 100);
+    }
+
     textDiv.addEventListener("click", (e) => {
         const elM = e.target.closest(".mention");
         if (!elM) return;
@@ -2312,6 +3523,16 @@ function connectToRoom(roomId) {
         state.mesh = null;
     }
 
+    // Load reactions, threads, pinned messages, message history, roles, channel categories, server boosts, and custom emojis for this server
+    loadReactionsFromStorage(roomId);
+    loadThreadsFromStorage(roomId);
+    loadPinnedMessagesFromStorage(roomId);
+    loadMessageHistoryFromStorage(roomId);
+    loadRolesFromStorage(roomId);
+    loadChannelCategoriesFromStorage(roomId);
+    loadServerBoostsFromStorage(roomId);
+    loadCustomEmojisFromStorage(roomId);
+
     const wsUrl = `${WS_BASE}`;
     state.mesh = new P2PMesh(roomId, state.peerId, wsUrl, {
         onMessage: (fromPeerId, data) => handleIncomingP2P(fromPeerId, data, roomId),
@@ -2361,6 +3582,61 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         state.peerRttMs[fromPeerId] = rtt;
         state.peerLatencyMs[fromPeerId] = Math.round(rtt / 2);
         updateVoiceSessionMeta();
+        return;
+    }
+    
+    if (data.type === "status_update") {
+        handleStatusUpdate({ from: fromPeerId, ...data });
+        return;
+    }
+    
+    if (data.type === "activity_update") {
+        handleActivityUpdate({ from: fromPeerId, ...data });
+        return;
+    }
+    
+    if (data.type === "reaction_add") {
+        handleReactionAdd(data);
+        return;
+    }
+    
+    if (data.type === "reaction_remove") {
+        handleReactionRemove(data);
+        return;
+    }
+    
+    if (data.type === "thread_create") {
+        handleThreadCreate(data);
+        return;
+    }
+    
+    if (data.type === "thread_message") {
+        handleThreadMessage(data);
+        return;
+    }
+    
+    if (data.type === "msg_edit") {
+        handleMessageEdit(data);
+        return;
+    }
+    
+    if (data.type === "roles_update") {
+        handleRolesUpdate(data);
+        return;
+    }
+    
+    if (data.type === "channel_categories_update") {
+        handleChannelCategoriesUpdate(data);
+        return;
+    }
+    
+    if (data.type === "server_boost_update") {
+        handleServerBoostUpdate(data);
+        return;
+    }
+    
+    if (data.type === "custom_emojis_update") {
+        handleCustomEmojisUpdate(data);
         return;
     }
 
@@ -2969,10 +4245,24 @@ function shouldShowChatToast(msg) {
         const u = (state.username || "").trim();
         if (!u) return false;
         const t = msg.text || "";
-        const esc = u.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        return new RegExp(`(^|[^\\w#])@${esc}(?!\\w)`, "i").test(t);
+        
+        // Check for @user mention
+        const mentionRegex = new RegExp(`(^|\\s)@${escapeRegExp(u)}(?!\\w)`, "i");
+        if (mentionRegex.test(t)) return true;
+        
+        // Check for @everyone
+        if (/@everyone/i.test(t)) return true;
+        
+        // Check for @here (only if user is in voice channel)
+        if (/@here/i.test(t) && state.voiceChannelId) return true;
+        
+        return false;
     }
     return true;
+}
+
+function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function hideNewMsgsChip() {
@@ -3260,6 +4550,7 @@ function leaveVoiceChannel() {
     if (!state.mesh) return;
     const channelId = state.voiceChannelId;
     state.mesh.stopVoice();
+    hideVoiceCallIndicator();
     state.voiceChannelId = null;
 
     if (state.originalMicStream) {
@@ -4463,6 +5754,7 @@ function showMsgContextMenu(msg, x, y) {
     });
 
     addItem("↩️", "Yanıtla", () => setReplyTarget(msg));
+    addItem("💬", "Thread Başlat", () => createThread(state.activeServerId, msg.channelId || state.activeChannelId, msg.id));
     addItem("⤴️", "Mesaja git", () => scrollToChatMessage(msg.id));
     addItem("🆔", "Mesaj ID kopyala", () => {
         const id = msg.id || "";
@@ -4504,6 +5796,8 @@ function showMsgContextMenu(msg, x, y) {
     }
 
     if (isAuthor || canMod) {
+        addItem("✏️", "Mesajı Düzenle", () => startMessageEdit(msg));
+        addItem("📜", "Mesaj Geçmişi", () => showMessageHistory(state.activeServerId, msg.channelId || state.activeChannelId, msg.id));
         addItem("🗑️", "Mesajı Sil", () => deleteChatMessage(msg), true);
     }
 
@@ -4516,11 +5810,235 @@ function showMsgContextMenu(msg, x, y) {
 function deleteChatMessage(msg) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server?.messages?.[msg.channelId]) return;
+    
+    // Add to edit history before deleting
+    addMessageToHistory(server.id, msg.channelId, msg, 'delete');
+    
     server.messages[msg.channelId] = server.messages[msg.channelId].filter(m => m.id !== msg.id);
     server.pinned_messages = (server.pinned_messages || []).filter(m => m.id !== msg.id);
     meshBroadcastReliable({ type: "msg_delete", payload: { channelId: msg.channelId, msgId: msg.id } });
     renderMessages(state.activeServerId, state.activeChannelId);
     toast("Mesaj silindi.", "info");
+}
+
+// Message Edit/Delete History System
+function addMessageToHistory(serverId, channelId, message, action) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    if (!server.messageHistory) server.messageHistory = {};
+    const key = `${channelId}-${message.id}`;
+    if (!server.messageHistory[key]) server.messageHistory[key] = [];
+    
+    const historyEntry = {
+        action, // 'edit' or 'delete'
+        timestamp: Date.now(),
+        message: { ...message },
+        author: message.author,
+        authorId: message.authorId
+    };
+    
+    server.messageHistory[key].push(historyEntry);
+    saveMessageHistoryToStorage(serverId);
+}
+
+function editMessage(serverId, channelId, messageId, newText) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server?.messages?.[channelId]) return;
+    
+    const messageIndex = server.messages[channelId].findIndex(m => m.id === messageId);
+    if (messageIndex === -1) return;
+    
+    const originalMessage = server.messages[channelId][messageIndex];
+    
+    // Add to history
+    addMessageToHistory(serverId, channelId, originalMessage, 'edit');
+    
+    // Update message
+    server.messages[channelId][messageIndex] = {
+        ...originalMessage,
+        text: newText,
+        edited: true,
+        editedAt: Date.now()
+    };
+    
+    // Broadcast edit
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: "msg_edit",
+            serverId,
+            channelId,
+            messageId,
+            newText,
+            timestamp: Date.now()
+        });
+    }
+    
+    // Update UI
+    renderMessages(serverId, channelId);
+    saveMessageHistoryToStorage(serverId);
+    toast("Mesaj düzenlendi.", "info");
+}
+
+function handleMessageEdit(data) {
+    const { serverId, channelId, messageId, newText } = data;
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server?.messages?.[channelId]) return;
+    
+    const messageIndex = server.messages[channelId].findIndex(m => m.id === messageId);
+    if (messageIndex === -1) return;
+    
+    const originalMessage = server.messages[channelId][messageIndex];
+    
+    // Add to history
+    addMessageToHistory(serverId, channelId, originalMessage, 'edit');
+    
+    // Update message
+    server.messages[channelId][messageIndex] = {
+        ...originalMessage,
+        text: newText,
+        edited: true,
+        editedAt: Date.now()
+    };
+    
+    // Update UI if this channel is active
+    if (state.activeServerId === serverId && state.activeChannelId === channelId) {
+        renderMessages(serverId, channelId);
+    }
+}
+
+function showMessageHistory(serverId, channelId, messageId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server?.messageHistory) return;
+    
+    const key = `${channelId}-${messageId}`;
+    const history = server.messageHistory[key] || [];
+    if (history.length === 0) return;
+    
+    const body = document.createElement('div');
+    body.className = 'message-history-modal';
+    
+    const historyList = document.createElement('div');
+    historyList.className = 'history-list';
+    
+    history.forEach((entry, index) => {
+        const item = document.createElement('div');
+        item.className = 'history-item';
+        
+        const actionIcon = entry.action === 'edit' ? '✏️' : '🗑️';
+        const actionText = entry.action === 'edit' ? 'Düzenlendi' : 'Silindi';
+        const actionColor = entry.action === 'edit' ? '#f39c12' : '#ef4444';
+        
+        item.innerHTML = `
+            <div class="history-item-header">
+                <div class="history-action" style="color: ${actionColor}">
+                    ${actionIcon} ${actionText}
+                </div>
+                <div class="history-time">
+                    ${new Date(entry.timestamp).toLocaleString('tr-TR')}
+                </div>
+            </div>
+            <div class="history-content">
+                <div class="history-author">${entry.author}</div>
+                <div class="history-text">${parseMessageText(entry.message.text, serverId)}</div>
+            </div>
+        `;
+        
+        historyList.appendChild(item);
+    });
+    
+    body.appendChild(historyList);
+    
+    showModal(
+        `<div class="history-modal-header">
+            <div class="history-modal-title">📜 Mesaj Geçmişi</div>
+            <div class="history-modal-subtitle">${history.length} işlem</div>
+        </div>`,
+        body,
+        `<button class="btn-secondary" onclick="hideModal()">Kapat</button>`
+    );
+}
+
+function startMessageEdit(msg) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server?.messages?.[msg.channelId]) return;
+    
+    const messageIndex = server.messages[msg.channelId].findIndex(m => m.id === msg.id);
+    if (messageIndex === -1) return;
+    
+    const messageEl = document.querySelector(`[data-msg-id="${msg.id}"]`);
+    if (!messageEl) return;
+    
+    const textEl = messageEl.querySelector('.msg-text');
+    if (!textEl) return;
+    
+    // Create edit input
+    const editInput = document.createElement('textarea');
+    editInput.className = 'message-edit-input';
+    editInput.value = msg.text || '';
+    editInput.rows = 1;
+    
+    // Replace text with input
+    textEl.innerHTML = '';
+    textEl.appendChild(editInput);
+    
+    // Focus and select text
+    editInput.focus();
+    editInput.select();
+    
+    // Save on Enter, cancel on Escape
+    const saveEdit = () => {
+        const newText = editInput.value.trim();
+        if (newText && newText !== msg.text) {
+            editMessage(state.activeServerId, msg.channelId, msg.id, newText);
+        } else {
+            // Restore original text if no changes
+            textEl.innerHTML = parseMessageText(msg.text, state.activeServerId);
+        }
+    };
+    
+    const cancelEdit = () => {
+        textEl.innerHTML = parseMessageText(msg.text, state.activeServerId);
+    };
+    
+    editInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            saveEdit();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelEdit();
+        }
+    });
+    
+    editInput.addEventListener('blur', saveEdit, { once: true });
+    
+    // Auto-resize
+    editInput.addEventListener('input', () => {
+        editInput.style.height = 'auto';
+        editInput.style.height = Math.min(editInput.scrollHeight, 120) + 'px';
+    });
+}
+
+function saveMessageHistoryToStorage(serverId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server || !server.messageHistory) return;
+    
+    localStorage.setItem(`scord_message_history_${serverId}`, JSON.stringify(server.messageHistory));
+}
+
+function loadMessageHistoryFromStorage(serverId) {
+    try {
+        const saved = localStorage.getItem(`scord_message_history_${serverId}`);
+        if (!saved) return;
+        
+        const server = state.servers.find(s => s.id === serverId);
+        if (!server) return;
+        
+        server.messageHistory = JSON.parse(saved);
+    } catch (e) {
+        console.warn("Failed to load message history from storage:", e);
+    }
 }
 /* ── Moderation Actions ───────────────────────────────────── */
 function kickPeer(peerId, username) {
@@ -5278,6 +6796,7 @@ function hideDMMainView(clearActive = false) {
     document.querySelector("#home-view .home-hero")?.classList.remove("hidden");
     if (clearActive) state.activeDM = null;
     if (!state.activeServerId) renderHomeSidebar();
+    // Don't leave voice channel when just hiding DM view - preserve voice state
 }
 
 function renderDMCallStrip() {
@@ -6060,21 +7579,151 @@ function showPinnedMessages() {
     const pins = (server.pinned_messages || []).filter(m => m.channelId === state.activeChannelId);
 
     const body = document.createElement("div");
+    body.className = "pinned-messages-modal";
+    
     if (pins.length === 0) {
-        body.innerHTML = `<p style="text-align:center; color:var(--text-muted); padding:20px;">Bu kanalda sabitlenmiş mesaj yok.</p>`;
+        body.innerHTML = `
+            <div class="pinned-empty">
+                <div class="pinned-empty-icon">📌</div>
+                <div class="pinned-empty-title">Sabitlenmiş Mesaj Yok</div>
+                <div class="pinned-empty-subtitle">Bu kanalda henüz sabitlenmiş mesaj bulunmuyor.</div>
+            </div>
+        `;
     } else {
+        const pinsList = document.createElement("div");
+        pinsList.className = "pinned-list";
+        
         pins.forEach(m => {
             const item = document.createElement("div");
-            item.className = "pins-modal-item";
+            item.className = "pinned-item";
+            
+            const isAuthor = m.authorId === state.peerId;
+            const canMod = ["owner", "admin", "mod"].includes(getMyEffectiveRole(server));
+            
             item.innerHTML = `
-                <div style="font-weight:bold; font-size:12px; margin-bottom:4px; color:var(--accent-light)">${m.author} • ${m.time}</div>
-                <div style="font-size:14px;">${parseMessageText(m.text, state.activeServerId)}</div>
+                <div class="pinned-item-header">
+                    <div class="pinned-item-author">
+                        <div class="pinned-avatar" style="background: ${m.avatarColor || '#7c3aed'}; color: white;">
+                            ${m.avatarImage ? `<img src="${m.avatarImage}" alt="${m.author}" />` : (m.author || "?")[0].toUpperCase()}
+                        </div>
+                        <div class="pinned-author-info">
+                            <div class="pinned-author-name">${m.author}</div>
+                            <div class="pinned-message-time">${m.time}</div>
+                        </div>
+                    </div>
+                    <div class="pinned-item-actions">
+                        ${isAuthor || canMod ? `
+                            <button class="pinned-action-btn" onclick="unpinMessage('${m.id}')" title="Sabitlemeyi kaldır">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                                </svg>
+                            </button>
+                        ` : ''}
+                        <button class="pinned-action-btn" onclick="scrollToChatMessage('${m.id}')" title="Mesaja git">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6-6-6z"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="pinned-item-content">
+                    ${parseMessageText(m.text, state.activeServerId)}
+                </div>
+                ${m.attachment ? `
+                    <div class="pinned-item-attachment">
+                        <img src="${m.attachment}" alt="Ek" class="pinned-attachment-img" onclick="this.classList.toggle('expanded')" />
+                    </div>
+                ` : ''}
             `;
-            body.appendChild(item);
+            
+            // Add reactions if they exist
+            if (m.id && server.reactions) {
+                const key = `${m.channelId}-${m.id}`;
+                const reactions = server.reactions[key];
+                if (reactions && Object.keys(reactions).length > 0) {
+                    const reactionBar = document.createElement("div");
+                    reactionBar.className = "pinned-reactions";
+                    
+                    Object.entries(reactions).forEach(([emoji, users]) => {
+                        const pill = document.createElement("div");
+                        pill.className = "pinned-reaction-pill";
+                        pill.innerHTML = `
+                            <span class="pinned-reaction-emoji">${emoji}</span>
+                            <span class="pinned-reaction-count">${users.size}</span>
+                        `;
+                        reactionBar.appendChild(pill);
+                    });
+                    
+                    item.appendChild(reactionBar);
+                }
+            }
+            
+            pinsList.appendChild(item);
         });
+        
+        body.appendChild(pinsList);
     }
 
-    showModal("Sabitlenmiş Mesajlar", body);
+    showModal(
+        `<div class="pinned-modal-header">
+            <div class="pinned-modal-title">📌 Sabitlenmiş Mesajlar</div>
+            <div class="pinned-modal-subtitle">${pins.length} mesaj</div>
+        </div>`,
+        body,
+        `<button class="btn-secondary" onclick="hideModal()">Kapat</button>`
+    );
+}
+
+function unpinMessage(messageId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const msg = findMessageById(state.activeServerId, state.activeChannelId, messageId);
+    if (!msg) return;
+    
+    // Update local state
+    msg.isPinned = false;
+    server.pinned_messages = (server.pinned_messages || []).filter(m => m.id !== messageId);
+    
+    // Broadcast unpin
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: "msg_pin_toggle",
+            payload: { msgId: messageId, isPinned: false, msg }
+        });
+    }
+    
+    // Update UI
+    renderMessages(state.activeServerId, state.activeChannelId);
+    savePinnedMessagesToStorage(state.activeServerId);
+    toast("Mesaj sabitlemesi kaldırıldı", "info");
+    
+    // Refresh pinned modal if open
+    const modal = document.querySelector('.pinned-messages-modal');
+    if (modal) {
+        showPinnedMessages();
+    }
+}
+
+function savePinnedMessagesToStorage(serverId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server || !server.pinned_messages) return;
+    
+    localStorage.setItem(`scord_pinned_${serverId}`, JSON.stringify(server.pinned_messages));
+}
+
+function loadPinnedMessagesFromStorage(serverId) {
+    try {
+        const saved = localStorage.getItem(`scord_pinned_${serverId}`);
+        if (!saved) return;
+        
+        const server = state.servers.find(s => s.id === serverId);
+        if (!server) return;
+        
+        server.pinned_messages = JSON.parse(saved);
+    } catch (e) {
+        console.warn("Failed to load pinned messages from storage:", e);
+    }
 }
 
 function updateMuteStates() {
@@ -6826,9 +8475,15 @@ function switchToServer(serverId) {
         return;
     }
 
-    if (state.voiceChannelId) {
-        try { leaveVoiceChannel(); } catch (e) { /* noop */ }
-    }
+    // Preserve voice state when switching servers
+    const wasInVoice = !!state.voiceChannelId;
+    const previousVoiceChannelId = state.voiceChannelId;
+    const previousServerId = state.activeServerId;
+
+    // Don't leave voice channel when switching servers - allow cross-server voice
+    // if (state.voiceChannelId) {
+    //     try { leaveVoiceChannel(); } catch (e) { /* noop */ }
+    // }
 
     state.activeServerId = serverId;
     connectMesh(serverId);
@@ -7693,7 +9348,131 @@ function renderMembersSettings(server) {
     return html;
 }
 
-function renderPermissionsSettings(server) {
+// Enhanced Role System with Permissions and Colors
+function showRoleManagementModal() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const modalContent = `
+        <div class="role-management-modal">
+            <div class="role-management-header">
+                <div class="role-management-title">🎭 Rol Yönetimi</div>
+                <div class="role-management-subtitle">Rolleri düzenle, izinleri ve renkleri ayarla</div>
+            </div>
+            <div class="role-tabs">
+                <button class="role-tab active" data-tab="roles">Roller</button>
+                <button class="role-tab" data-tab="permissions">İzinler</button>
+                <button class="role-tab" data-tab="members">Üyeler</button>
+            </div>
+            <div class="role-content" id="role-content">
+                <!-- Content will be loaded dynamically -->
+            </div>
+        </div>
+    `;
+    
+    showModal("Rol Yönetimi", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+        <button class="btn-primary" onclick="saveRoleChanges()">Kaydet</button>
+    `);
+    
+    // Initialize tabs
+    initializeRoleTabs();
+    loadRolesContent();
+}
+
+function initializeRoleTabs() {
+    const tabs = document.querySelectorAll('.role-tab');
+    const content = document.getElementById('role-content');
+    
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const tabName = tab.getAttribute('data-tab');
+            switch(tabName) {
+                case 'roles':
+                    loadRolesContent();
+                    break;
+                case 'permissions':
+                    loadPermissionsContent();
+                    break;
+                case 'members':
+                    loadRoleMembersContent();
+                    break;
+            }
+        });
+    });
+}
+
+function loadRolesContent() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const content = document.getElementById('role-content');
+    const roles = server.roles || {};
+    
+    let html = '<div class="roles-list">';
+    
+    // Add default roles
+    const defaultRoles = [
+        { id: 'owner', name: 'Owner', color: '#f43f5e', icon: '👑', description: 'Sunucu sahibi - Tüm izinler' },
+        { id: 'admin', name: 'Admin', color: '#ef4444', icon: '🛡️', description: 'Yönetici - Çoğu izinler' },
+        { id: 'mod', name: 'Moderatör', color: '#f59e0b', icon: '🔨', description: 'Moderatör - Bazı izinler' },
+        { id: 'member', name: 'Üye', color: '#6b7280', icon: '👤', description: 'Standart üye - Temel izinler' }
+    ];
+    
+    defaultRoles.forEach(role => {
+        const isUsed = Object.values(roles).some(r => r.id === role.id);
+        html += `
+            <div class="role-item ${isUsed ? 'used' : ''}">
+                <div class="role-info">
+                    <div class="role-header">
+                        <div class="role-icon">${role.icon}</div>
+                        <div class="role-name">${role.name}</div>
+                        <div class="role-color" style="background: ${role.color}"></div>
+                    </div>
+                    <div class="role-description">${role.description}</div>
+                </div>
+            </div>
+        `;
+    });
+    
+    // Add custom roles
+    Object.entries(roles).forEach(([roleId, roleData]) => {
+        if (!defaultRoles.find(r => r.id === roleId)) {
+            html += `
+                <div class="role-item custom-role">
+                    <div class="role-info">
+                        <div class="role-header">
+                            <div class="role-icon">🎨</div>
+                            <div class="role-name">${roleData.name || roleId}</div>
+                            <div class="role-color" style="background: ${roleData.color || '#6b7280'}"></div>
+                        </div>
+                        <div class="role-actions">
+                            <button class="role-action-btn" onclick="editRole('${roleId}')">✏️</button>
+                            <button class="role-action-btn" onclick="deleteRole('${roleId}')">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+    });
+    
+    html += `
+        <button class="add-role-btn" onclick="createNewRole()">
+            <span class="add-role-icon">+</span>
+            <span class="add-role-text">Yeni Rol Oluştur</span>
+        </button>
+    </div>`;
+    
+    content.innerHTML = html;
+}
+
+function loadPermissionsContent() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
     const permissions = [
         { id: 'send_messages', name: 'Mesaj Gönder', icon: '💬' },
         { id: 'delete_own_messages', name: 'Kendi Mesajını Sil', icon: '🗑️' },
@@ -7701,6 +9480,226 @@ function renderPermissionsSettings(server) {
         { id: 'create_channels', name: 'Kanal Oluştur', icon: '📝' },
         { id: 'delete_channels', name: 'Kanal Sil', icon: '❌' },
         { id: 'join_voice', name: 'Sesli Kanala Katıl', icon: '🔊' },
+        { id: 'manage_roles', name: 'Rolleri Yönet', icon: '🎭' },
+        { id: 'kick_members', name: 'Üyeleri At', icon: '👢' },
+        { id: 'ban_members', name: 'Üyeleri Yasakla', icon: '🚫' }
+    ];
+    
+    const content = document.getElementById('role-content');
+    const roles = server.roles || {};
+    
+    let html = '<div class="permissions-grid">';
+    
+    permissions.forEach(perm => {
+        html += `
+            <div class="permission-item">
+                <div class="permission-info">
+                    <div class="permission-icon">${perm.icon}</div>
+                    <div class="permission-name">${perm.name}</div>
+                </div>
+                <div class="permission-roles">
+                    <div class="permission-label">Bu izne sahip olan roller:</div>
+                    <div class="permission-role-list">
+                        ${Object.entries(roles).map(([roleId, roleData]) => {
+                            const hasPermission = roleData.permissions?.includes(perm.id);
+                            return `<span class="permission-role ${hasPermission ? 'has-permission' : ''}">${roleData.name || roleId}</span>`;
+                        }).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function loadRoleMembersContent() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const content = document.getElementById('role-content');
+    const roles = server.roles || {};
+    const members = server.members || [];
+    
+    let html = '<div class="role-members-list">';
+    
+    Object.entries(roles).forEach(([roleId, roleData]) => {
+        const roleMembers = members.filter(m => server.peer_roles?.[m.peer_id] === roleId);
+        
+        html += `
+            <div class="role-group">
+                <div class="role-group-header">
+                    <div class="role-badge" style="background: ${roleData.color || '#6b7280'}">
+                        <span class="role-badge-icon">${roleData.icon || '🎭'}</span>
+                        <span class="role-badge-name">${roleData.name || roleId}</span>
+                    </div>
+                    <div class="role-member-count">${roleMembers.length} üye</div>
+                </div>
+                <div class="role-members">
+                    ${roleMembers.map(member => `
+                        <div class="role-member-item">
+                            <div class="member-avatar" style="background: ${member.avatar_color}">
+                                ${member.avatar_image ? `<img src="${member.avatar_image}" alt="${member.username}" />` : member.username[0].toUpperCase()}
+                            </div>
+                            <div class="member-info">
+                                <div class="member-name">${member.username}</div>
+                                <div class="member-status ${getMemberStatus(member.peer_id)}">${getMemberStatusText(member.peer_id)}</div>
+                            </div>
+                            <button class="member-action-btn" onclick="changeMemberRole('${member.peer_id}')">🔄</button>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function createNewRole() {
+    const roleName = prompt('Yeni rol adı:');
+    if (!roleName) return;
+    
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const roleId = 'custom_' + Date.now();
+    const roleColor = '#' + Math.floor(Math.random()*16777215).toString(16);
+    
+    if (!server.roles) server.roles = {};
+    server.roles[roleId] = {
+        name: roleName,
+        color: roleColor,
+        permissions: [],
+        icon: '🎨'
+    };
+    
+    loadRolesContent();
+    toast('Yeni rol oluşturuldu', 'success');
+}
+
+function editRole(roleId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server || !server.roles?.[roleId]) return;
+    
+    const role = server.roles[roleId];
+    const newName = prompt('Rol adını düzenle:', role.name);
+    if (!newName || newName === role.name) return;
+    
+    const newColor = prompt('Rol rengi (hex formatında):', role.color);
+    if (!newColor) return;
+    
+    role.name = newName;
+    role.color = newColor;
+    
+    loadRolesContent();
+    toast('Rol güncellendi', 'success');
+}
+
+function deleteRole(roleId) {
+    if (!confirm('Bu rolü silmek istediğinizden emin misiniz?')) return;
+    
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server || !server.roles?.[roleId]) return;
+    
+    delete server.roles[roleId];
+    
+    // Remove role from all members
+    Object.keys(server.peer_roles || {}).forEach(peerId => {
+        if (server.peer_roles[peerId] === roleId) {
+            delete server.peer_roles[peerId];
+        }
+    });
+    
+    loadRolesContent();
+    toast('Rol silindi', 'success');
+}
+
+function changeMemberRole(peerId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const member = server.members.find(m => m.peer_id === peerId);
+    if (!member) return;
+    
+    const roles = server.roles || {};
+    const roleOptions = Object.entries(roles).map(([id, data]) => `<option value="${id}">${data.name || id}</option>`).join('');
+    
+    const newRole = prompt(`Rol seçin (${member.username}):`, roleOptions);
+    if (!newRole) return;
+    
+    server.peer_roles = server.peer_roles || {};
+    server.peer_roles[peerId] = newRole;
+    
+    loadRoleMembersContent();
+    updateMembersPanel(state.activeServerId);
+    toast(`${member.username} rolü güncellendi`, 'success');
+}
+
+function getMemberStatus(peerId) {
+    // This would integrate with the status system
+    return 'online'; // Placeholder
+}
+
+function getMemberStatusText(peerId) {
+    // This would integrate with the status system
+    return '🟢 Çevrimiçi'; // Placeholder
+}
+
+function saveRoleChanges() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    // Save roles to server state and potentially to backend
+    localStorage.setItem(`scord_roles_${server.id}`, JSON.stringify(server.roles));
+    
+    // Broadcast role changes to other members
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: 'roles_update',
+            serverId: server.id,
+            roles: server.roles,
+            peer_roles: server.peer_roles
+        });
+    }
+    
+    toast('Rol değişiklikleri kaydedildi', 'success');
+}
+
+function handleRolesUpdate(data) {
+    const { serverId, roles, peer_roles } = data;
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    server.roles = roles || {};
+    server.peer_roles = peer_roles || {};
+    
+    // Update UI if this server is active
+    if (state.activeServerId === serverId) {
+        updateMembersPanel(serverId);
+        loadRolesContent();
+    }
+}
+
+function loadRolesFromStorage(serverId) {
+    try {
+        const saved = localStorage.getItem(`scord_roles_${serverId}`);
+        if (!saved) return;
+        
+        const server = state.servers.find(s => s.id === serverId);
+        if (!server) return;
+        
+        server.roles = JSON.parse(saved);
+    } catch (e) {
+        console.warn("Failed to load roles from storage:", e);
+    }
+}
+
+// Add role management to server settings
+function renderPermissionsSettings(server) {
+    const permissions = [
         { id: 'kick_members', name: 'Üye At', icon: '🚪' },
         { id: 'mute_members', name: 'Sustur', icon: '🔇' },
         { id: 'manage_roles', name: 'Rol Yönetimi', icon: '🛡️' },
@@ -8500,6 +10499,6978 @@ console.log("[Shercord V21] Authoritative voice/music state, permissions, voice 
 
 function channelCategoryLabel(ch, fallback) {
     return (ch.category || fallback || (ch.type === "voice" ? "SES KANALLARI" : "METIN KANALLARI")).toUpperCase();
+}
+
+// Enhanced Channel Categories System
+function showChannelCategoriesModal() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const modalContent = `
+        <div class="channel-categories-modal">
+            <div class="categories-header">
+                <div class="categories-title">📁 Kanal Kategorileri</div>
+                <div class="categories-subtitle">Kanalları düzenle ve kategorize et</div>
+            </div>
+            <div class="categories-tabs">
+                <button class="categories-tab active" data-tab="categories">Kategoriler</button>
+                <button class="categories-tab" data-tab="channels">Kanallar</button>
+                <button class="categories-tab" data-tab="permissions">İzinler</button>
+            </div>
+            <div class="categories-content" id="categories-content">
+                <!-- Content will be loaded dynamically -->
+            </div>
+        </div>
+    `;
+    
+    showModal("Kanal Kategorileri", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+        <button class="btn-primary" onclick="saveChannelCategories()">Kaydet</button>
+    `);
+    
+    // Initialize tabs
+    initializeCategoriesTabs();
+    loadCategoriesContent();
+}
+
+function initializeCategoriesTabs() {
+    const tabs = document.querySelectorAll('.categories-tab');
+    const content = document.getElementById('categories-content');
+    
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const tabName = tab.getAttribute('data-tab');
+            switch(tabName) {
+                case 'categories':
+                    loadCategoriesContent();
+                    break;
+                case 'channels':
+                    loadChannelsContent();
+                    break;
+                case 'permissions':
+                    loadCategoryPermissionsContent();
+                    break;
+            }
+        });
+    });
+}
+
+function loadCategoriesContent() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const content = document.getElementById('categories-content');
+    const channels = server.channels || [];
+    
+    // Group channels by category
+    const categories = new Map();
+    const uncategorized = [];
+    
+    channels.forEach(ch => {
+        if (ch.category) {
+            if (!categories.has(ch.category)) categories.set(ch.category, []);
+            categories.get(ch.category).push(ch);
+        } else {
+            uncategorized.push(ch);
+        }
+    });
+    
+    let html = '<div class="categories-list">';
+    
+    // Add categories
+    categories.forEach((categoryChannels, categoryName) => {
+        html += `
+            <div class="category-item">
+                <div class="category-header">
+                    <div class="category-info">
+                        <div class="category-name">${categoryName}</div>
+                        <div class="category-count">${categoryChannels.length} kanal</div>
+                    </div>
+                    <div class="category-actions">
+                        <button class="category-action-btn" onclick="editCategory('${categoryName}')">✏️</button>
+                        <button class="category-action-btn" onclick="deleteCategory('${categoryName}')">🗑️</button>
+                    </div>
+                </div>
+                <div class="category-channels">
+                    ${categoryChannels.map(ch => `
+                        <div class="category-channel">
+                            <div class="channel-icon">${ch.type === 'voice' ? '🔊' : '💬'}</div>
+                            <div class="channel-name">${ch.name}</div>
+                            <button class="channel-remove-btn" onclick="removeChannelFromCategory('${ch.id}')">❌</button>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    });
+    
+    // Add uncategorized channels
+    if (uncategorized.length > 0) {
+        html += `
+            <div class="category-item uncategorized">
+                <div class="category-header">
+                    <div class="category-info">
+                        <div class="category-name">Kategorisiz</div>
+                        <div class="category-count">${uncategorized.length} kanal</div>
+                    </div>
+                </div>
+                <div class="category-channels">
+                    ${uncategorized.map(ch => `
+                        <div class="category-channel">
+                            <div class="channel-icon">${ch.type === 'voice' ? '🔊' : '💬'}</div>
+                            <div class="channel-name">${ch.name}</div>
+                            <button class="channel-add-btn" onclick="addChannelToCategory('${ch.id}')">➕</button>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+    
+    html += `
+        <button class="add-category-btn" onclick="createNewCategory()">
+            <span class="add-category-icon">+</span>
+            <span class="add-category-text">Yeni Kategori Oluştur</span>
+        </button>
+    </div>`;
+    
+    content.innerHTML = html;
+}
+
+function loadChannelsContent() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const content = document.getElementById('categories-content');
+    const channels = server.channels || [];
+    
+    let html = '<div class="channels-list">';
+    
+    channels.forEach(ch => {
+        html += `
+            <div class="channel-config-item">
+                <div class="channel-config-info">
+                    <div class="channel-config-header">
+                        <div class="channel-icon">${ch.type === 'voice' ? '🔊' : '💬'}</div>
+                        <div class="channel-name">${ch.name}</div>
+                        <div class="channel-type">${ch.type === 'voice' ? 'Sesli' : 'Metin'}</div>
+                    </div>
+                    <div class="channel-category">Kategori: ${ch.category || 'Yok'}</div>
+                </div>
+                <div class="channel-config-actions">
+                    <button class="channel-config-btn" onclick="moveChannelToCategory('${ch.id}')">📁</button>
+                    <button class="channel-config-btn" onclick="editChannelSettings('${ch.id}')">⚙️</button>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function loadCategoryPermissionsContent() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const content = document.getElementById('categories-content');
+    const roles = server.roles || {};
+    
+    let html = '<div class="category-permissions-list">';
+    
+    const permissions = [
+        { id: 'view_category', name: 'Kategoriyi Gör', icon: '👁️' },
+        { id: 'manage_category', name: 'Kategoriyi Yönet', icon: '⚙️' },
+        { id: 'create_channels', name: 'Kanal Oluştur', icon: '➕' },
+        { id: 'delete_channels', name: 'Kanal Sil', icon: '❌' },
+        { id: 'move_channels', name: 'Kanal Taşı', icon: '🔄' }
+    ];
+    
+    Object.entries(roles).forEach(([roleId, roleData]) => {
+        html += `
+            <div class="role-permission-item">
+                <div class="role-permission-header">
+                    <div class="role-badge" style="background: ${roleData.color || '#6b7280'}">
+                        <span class="role-badge-icon">${roleData.icon || '🎭'}</span>
+                        <span class="role-badge-name">${roleData.name || roleId}</span>
+                    </div>
+                    <div class="role-permission-actions">
+                        <button class="permission-toggle-btn" onclick="toggleRoleCategoryPermissions('${roleId}')">⚙️</button>
+                    </div>
+                </div>
+                <div class="role-permissions">
+                    ${permissions.map(perm => `
+                        <div class="permission-checkbox">
+                            <input type="checkbox" id="perm-${roleId}-${perm.id}" 
+                                   ${roleData.categoryPermissions?.includes(perm.id) ? 'checked' : ''} 
+                                   onchange="updateRoleCategoryPermission('${roleId}', '${perm.id}', this.checked)">
+                            <label for="perm-${roleId}-${perm.id}">
+                                <span class="permission-icon">${perm.icon}</span>
+                                <span class="permission-name">${perm.name}</span>
+                            </label>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function createNewCategory() {
+    const categoryName = prompt('Yeni kategori adı:');
+    if (!categoryName) return;
+    
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    if (!server.channelCategories) server.channelCategories = {};
+    const categoryId = 'cat_' + Date.now();
+    
+    server.channelCategories[categoryId] = {
+        name: categoryName,
+        description: '',
+        color: '#' + Math.floor(Math.random()*16777215).toString(16),
+        permissions: []
+    };
+    
+    loadCategoriesContent();
+    toast('Yeni kategori oluşturuldu', 'success');
+}
+
+function editCategory(categoryId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server?.channelCategories?.[categoryId]) return;
+    
+    const category = server.channelCategories[categoryId];
+    const newName = prompt('Kategori adını düzenle:', category.name);
+    if (!newName || newName === category.name) return;
+    
+    const newColor = prompt('Kategori rengi (hex formatında):', category.color);
+    if (!newColor) return;
+    
+    category.name = newName;
+    category.color = newColor;
+    
+    loadCategoriesContent();
+    toast('Kategori güncellendi', 'success');
+}
+
+function deleteCategory(categoryId) {
+    if (!confirm('Bu kategoriyi silmek istediğinizden emin misiniz?')) return;
+    
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server?.channelCategories?.[categoryId]) return;
+    
+    // Move channels to uncategorized
+    const category = server.channelCategories[categoryId];
+    server.channels?.forEach(ch => {
+        if (ch.category === categoryId) {
+            delete ch.category;
+        }
+    });
+    
+    delete server.channelCategories[categoryId];
+    
+    loadCategoriesContent();
+    toast('Kategori silindi', 'success');
+}
+
+function addChannelToCategory(channelId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const categories = Object.keys(server.channelCategories || {});
+    if (categories.length === 0) return;
+    
+    const categoryOptions = categories.map(id => `<option value="${id}">${server.channelCategories[id].name}</option>`).join('');
+    const selectedCategory = prompt('Kategori seçin:', categoryOptions);
+    if (!selectedCategory) return;
+    
+    const channel = server.channels.find(ch => ch.id === channelId);
+    if (channel) {
+        channel.category = selectedCategory;
+        loadCategoriesContent();
+        updateChannelSidebar(state.activeServerId);
+        toast('Kanal kategoriye eklendi', 'success');
+    }
+}
+
+function removeChannelFromCategory(channelId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const channel = server.channels.find(ch => ch.id === channelId);
+    if (channel) {
+        delete channel.category;
+        loadCategoriesContent();
+        updateChannelSidebar(state.activeServerId);
+        toast('Kanal kategoriden çıkarıldı', 'success');
+    }
+}
+
+function moveChannelToCategory(channelId) {
+    addChannelToCategory(channelId);
+}
+
+function editChannelSettings(channelId) {
+    // This would open channel-specific settings
+    toast('Kanal ayarları yakında gelecek', 'info');
+}
+
+function toggleRoleCategoryPermissions(roleId) {
+    // This would open a detailed permission editor for the role
+    toast('Rol izinleri yakında gelecek', 'info');
+}
+
+function updateRoleCategoryPermission(roleId, permissionId, hasPermission) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server?.roles?.[roleId]) return;
+    
+    const role = server.roles[roleId];
+    if (!role.categoryPermissions) role.categoryPermissions = [];
+    
+    if (hasPermission) {
+        role.categoryPermissions.push(permissionId);
+    } else {
+        role.categoryPermissions = role.categoryPermissions.filter(p => p !== permissionId);
+    }
+}
+
+function saveChannelCategories() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    // Save categories to server state and localStorage
+    localStorage.setItem(`scord_channel_categories_${server.id}`, JSON.stringify(server.channelCategories));
+    
+    // Broadcast category changes to other members
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: 'channel_categories_update',
+            serverId: server.id,
+            categories: server.channelCategories,
+            channels: server.channels
+        });
+    }
+    
+    // Update UI
+    updateChannelSidebar(server.id);
+    toast('Kanal kategorileri kaydedildi', 'success');
+}
+
+function handleChannelCategoriesUpdate(data) {
+    const { serverId, categories, channels } = data;
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    server.channelCategories = categories || {};
+    server.channels = channels || server.channels;
+    
+    // Update UI if this server is active
+    if (state.activeServerId === serverId) {
+        updateChannelSidebar(serverId);
+        loadCategoriesContent();
+    }
+}
+
+function loadChannelCategoriesFromStorage(serverId) {
+    try {
+        const saved = localStorage.getItem(`scord_channel_categories_${serverId}`);
+        if (!saved) return;
+        
+        const server = state.servers.find(s => s.id === serverId);
+        if (!server) return;
+        
+        server.channelCategories = JSON.parse(saved);
+    } catch (e) {
+        console.warn("Failed to load channel categories from storage:", e);
+    }
+}
+
+// Server Boost System
+function showServerBoostModal() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const currentBoosts = server.boosts || 0;
+    const maxBoosts = 10;
+    const boostLevel = Math.min(Math.floor(currentBoosts / 2), 5);
+    const boostProgress = (currentBoosts % 2) * 50;
+    
+    const modalContent = `
+        <div class="server-boost-modal">
+            <div class="boost-header">
+                <div class="boost-title">⚡ Sunucu Boost'la</div>
+                <div class="boost-subtitle">Sunucunu geliştir ve özel özellikler kazan</div>
+            </div>
+            <div class="boost-current">
+                <div class="boost-level">
+                    <div class="boost-level-number">Seviye ${boostLevel}</div>
+                    <div class="boost-level-progress">
+                        <div class="boost-progress-bar" style="width: ${boostProgress}%"></div>
+                    </div>
+                </div>
+                <div class="boost-info">
+                    <div class="boost-count">${currentBoosts} Boost</div>
+                    <div class="boost-next">${2 - (currentBoosts % 2)} boost sonraki seviye</div>
+                </div>
+            </div>
+            <div class="boost-benefits">
+                <div class="benefits-title">🎁 Mevcut Özellikler</div>
+                <div class="benefits-list">
+                    ${getBoostBenefits(boostLevel)}
+                </div>
+            </div>
+            <div class="boost-packages">
+                <div class="packages-title">💎 Boost Paketleri</div>
+                <div class="packages-grid">
+                    ${getBoostPackages(currentBoosts)}
+                </div>
+            </div>
+            <div class="boost-history">
+                <div class="history-title">📜 Boost Geçmişi</div>
+                <div class="history-list">
+                    ${getBoostHistory(server)}
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showModal("Sunucu Boost'la", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+function getBoostBenefits(level) {
+    const benefits = {
+        0: [
+            { icon: '📝', name: 'Temel kanallar', unlocked: true },
+            { icon: '👥', name: '100 üye limiti', unlocked: true },
+            { icon: '💬', name: 'Metin kanalları', unlocked: true }
+        ],
+        1: [
+            { icon: '📝', name: 'Temel kanallar', unlocked: true },
+            { icon: '👥', name: '250 üye limiti', unlocked: true },
+            { icon: '💬', name: 'Metin kanalları', unlocked: true },
+            { icon: '🔊', name: 'Sesli kanallar', unlocked: true },
+            { icon: '📁', name: 'Kanal kategorileri', unlocked: true }
+        ],
+        2: [
+            { icon: '📝', name: 'Temel kanallar', unlocked: true },
+            { icon: '👥', name: '500 üye limiti', unlocked: true },
+            { icon: '💬', name: 'Metin kanalları', unlocked: true },
+            { icon: '🔊', name: 'Sesli kanallar', unlocked: true },
+            { icon: '📁', name: 'Kanal kategorileri', unlocked: true },
+            { icon: '🎭', name: 'Özel roller', unlocked: true },
+            { icon: '🔇', name: 'Üye susturma', unlocked: true }
+        ],
+        3: [
+            { icon: '📝', name: 'Sınırsız kanallar', unlocked: true },
+            { icon: '👥', name: '750 üye limiti', unlocked: true },
+            { icon: '💬', name: 'Metin kanalları', unlocked: true },
+            { icon: '🔊', name: 'Sesli kanallar', unlocked: true },
+            { icon: '📁', name: 'Kanal kategorileri', unlocked: true },
+            { icon: '🎭', name: 'Özel roller', unlocked: true },
+            { icon: '🔇', name: 'Üye susturma', unlocked: true },
+            { icon: '🖥️', name: 'Ekran paylaşımı', unlocked: true },
+            { icon: '📹', name: 'Canlı yayın', unlocked: true }
+        ],
+        4: [
+            { icon: '📝', name: 'Sınırsız kanallar', unlocked: true },
+            { icon: '👥', name: '1000 üye limiti', unlocked: true },
+            { icon: '💬', name: 'Metin kanalları', unlocked: true },
+            { icon: '🔊', name: 'Sesli kanallar', unlocked: true },
+            { icon: '📁', name: 'Kanal kategorileri', unlocked: true },
+            { icon: '🎭', name: 'Özel roller', unlocked: true },
+            { icon: '🔇', name: 'Üye susturma', unlocked: true },
+            { icon: '🖥️', name: 'Ekran paylaşımı', unlocked: true },
+            { icon: '📹', name: 'Canlı yayın', unlocked: true },
+            { icon: '🎨', name: 'Özel emojiler', unlocked: true },
+            { icon: '🚫', name: 'Üye yasaklama', unlocked: true }
+        ],
+        5: [
+            { icon: '📝', name: 'Sınırsız kanallar', unlocked: true },
+            { icon: '👥', name: 'Sınırsız üye limiti', unlocked: true },
+            { icon: '💬', name: 'Metin kanalları', unlocked: true },
+            { icon: '🔊', name: 'Sesli kanallar', unlocked: true },
+            { icon: '📁', name: 'Kanal kategorileri', unlocked: true },
+            { icon: '🎭', name: 'Özel roller', unlocked: true },
+            { icon: '🔇', name: 'Üye susturma', unlocked: true },
+            { icon: '🖥️', name: 'Ekran paylaşımı', unlocked: true },
+            { icon: '📹', name: 'Canlı yayın', unlocked: true },
+            { icon: '🎨', name: 'Özel emojiler', unlocked: true },
+            { icon: '🚫', name: 'Üye yasaklama', unlocked: true },
+            { icon: '🏆', name: 'Sunucu rozeti', unlocked: true },
+            { icon: '📊', name: 'Sunucu istatistikleri', unlocked: true },
+            { icon: '🌟', name: 'Özel sunucu URL', unlocked: true }
+        ]
+    };
+    
+    const currentBenefits = benefits[level] || benefits[0];
+    return currentBenefits.map(benefit => `
+        <div class="benefit-item ${benefit.unlocked ? 'unlocked' : 'locked'}">
+            <div class="benefit-icon">${benefit.icon}</div>
+            <div class="benefit-name">${benefit.name}</div>
+            <div class="benefit-status">${benefit.unlocked ? '✅' : '🔒'}</div>
+        </div>
+    `).join('');
+}
+
+function getBoostPackages(currentBoosts) {
+    const packages = [
+        { id: 'boost_1', name: '1 Boost', price: '₺29.99', boosts: 1, color: '#8b5cf6' },
+        { id: 'boost_3', name: '3 Boost', price: '₺79.99', boosts: 3, color: '#3b82f6', popular: true },
+        { id: 'boost_5', name: '5 Boost', price: '₺129.99', boosts: 5, color: '#1e40af', best: true }
+    ];
+    
+    return packages.map(pkg => `
+        <div class="package-item ${pkg.popular ? 'popular' : ''} ${pkg.best ? 'best' : ''}">
+            ${pkg.popular ? '<div class="package-badge popular">POPÜLER</div>' : ''}
+            ${pkg.best ? '<div class="package-badge best">EN İYİ</div>' : ''}
+            <div class="package-header">
+                <div class="package-name">${pkg.name}</div>
+                <div class="package-price">${pkg.price}</div>
+            </div>
+            <div class="package-boosts">${pkg.boosts} Boost</div>
+            <button class="package-btn" style="background: ${pkg.color}" onclick="purchaseBoost('${pkg.id}', ${pkg.boosts})">
+                ${currentBoosts >= pkg.boosts ? 'Zaten Sahip' : 'Satın Al'}
+            </button>
+        </div>
+    `).join('');
+}
+
+function getBoostHistory(server) {
+    const history = server.boostHistory || [];
+    
+    if (history.length === 0) {
+        return '<div class="history-empty">Henüz boost geçmişi yok.</div>';
+    }
+    
+    return history.slice(0, 10).map(entry => `
+        <div class="history-item">
+            <div class="history-info">
+                <div class="history-action">${entry.action}</div>
+                <div class="history-date">${new Date(entry.timestamp).toLocaleDateString('tr-TR')}</div>
+            </div>
+            <div class="history-details">${entry.details}</div>
+        </div>
+    `).join('');
+}
+
+function purchaseBoost(packageId, boostCount) {
+    // This would integrate with payment system
+    toast('Boost satın alma yakında gelecek', 'info');
+    
+    // Simulate boost purchase for demo
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    if (!server.boosts) server.boosts = 0;
+    server.boosts += boostCount;
+    
+    if (!server.boostHistory) server.boostHistory = [];
+    server.boostHistory.push({
+        action: `${boostCount} Boost satın alındı`,
+        details: `${packageId} paketi`,
+        timestamp: Date.now()
+    });
+    
+    saveServerBoostsToStorage(state.activeServerId);
+    showServerBoostModal();
+    toast(`${boostCount} boost başarıyla eklendi!`, 'success');
+}
+
+function saveServerBoostsToStorage(serverId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    localStorage.setItem(`scord_server_boosts_${serverId}`, JSON.stringify({
+        boosts: server.boosts || 0,
+        boostHistory: server.boostHistory || []
+    }));
+}
+
+function loadServerBoostsFromStorage(serverId) {
+    try {
+        const saved = localStorage.getItem(`scord_server_boosts_${serverId}`);
+        if (!saved) return;
+        
+        const server = state.servers.find(s => s.id === serverId);
+        if (!server) return;
+        
+        const boostData = JSON.parse(saved);
+        server.boosts = boostData.boosts || 0;
+        server.boostHistory = boostData.boostHistory || [];
+    } catch (e) {
+        console.warn("Failed to load server boosts from storage:", e);
+    }
+}
+
+function handleServerBoostUpdate(data) {
+    const { serverId, boosts, boostHistory } = data;
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    server.boosts = boosts || 0;
+    server.boostHistory = boostHistory || [];
+    
+    // Update UI if this server is active
+    if (state.activeServerId === serverId) {
+        // Update boost display in server settings
+        updateServerBoostDisplay(server);
+    }
+}
+
+function updateServerBoostDisplay(server) {
+    const currentBoosts = server.boosts || 0;
+    const boostLevel = Math.min(Math.floor(currentBoosts / 2), 5);
+    
+    // Update boost badge in server sidebar
+    const serverItem = document.querySelector(`[data-server-id="${server.id}"]`);
+    if (serverItem) {
+        let boostBadge = serverItem.querySelector('.server-boost-badge');
+        if (!boostBadge) {
+            boostBadge = document.createElement('div');
+            boostBadge.className = 'server-boost-badge';
+            boostBadge.innerHTML = `⚡ ${boostLevel}`;
+            serverItem.appendChild(boostBadge);
+        } else {
+            boostBadge.innerHTML = `⚡ ${boostLevel}`;
+        }
+    }
+}
+
+// Custom Emoji System
+function showCustomEmojiModal() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const modalContent = `
+        <div class="custom-emoji-modal">
+            <div class="emoji-header">
+                <div class="emoji-title">🎨 Özel Emojiler</div>
+                <div class="emoji-subtitle">Sunucu için özel emojiler oluştur ve yönet</div>
+            </div>
+            <div class="emoji-tabs">
+                <button class="emoji-tab active" data-tab="emojis">Emojiler</button>
+                <button class="emoji-tab" data-tab="upload">Yükle</button>
+                <button class="emoji-tab" data-tab="manage">Yönet</button>
+            </div>
+            <div class="emoji-content" id="emoji-content">
+                <!-- Content will be loaded dynamically -->
+            </div>
+        </div>
+    `;
+    
+    showModal("Özel Emojiler", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+        <button class="btn-primary" onclick="saveCustomEmojis()">Kaydet</button>
+    `);
+    
+    // Initialize tabs
+    initializeEmojiTabs();
+    loadEmojisContent();
+}
+
+function initializeEmojiTabs() {
+    const tabs = document.querySelectorAll('.emoji-tab');
+    const content = document.getElementById('emoji-content');
+    
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const tabName = tab.getAttribute('data-tab');
+            switch(tabName) {
+                case 'emojis':
+                    loadEmojisContent();
+                    break;
+                case 'upload':
+                    loadUploadContent();
+                    break;
+                case 'manage':
+                    loadManageContent();
+                    break;
+            }
+        });
+    });
+}
+
+function loadEmojisContent() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const content = document.getElementById('emoji-content');
+    const customEmojis = server.customEmojis || [];
+    const defaultEmojis = EMOJIS.slice(0, 48); // Show first 48 default emojis
+    
+    let html = '<div class="emoji-grid">';
+    
+    // Add custom emojis first
+    customEmojis.forEach(emoji => {
+        html += `
+            <div class="emoji-item custom-emoji" onclick="insertEmoji('${emoji.url}', '${emoji.name}')">
+                <div class="emoji-preview">
+                    <img src="${emoji.url}" alt="${emoji.name}" />
+                </div>
+                <div class="emoji-name">${emoji.name}</div>
+            </div>
+        `;
+    });
+    
+    // Add default emojis
+    defaultEmojis.forEach(emoji => {
+        html += `
+            <div class="emoji-item" onclick="insertEmoji('${emoji}', '${emoji}')">
+                <div class="emoji-preview">
+                    <span class="emoji-char">${emoji}</span>
+                </div>
+                <div class="emoji-name">:${emoji}:</div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function loadUploadContent() {
+    const content = document.getElementById('emoji-content');
+    
+    const html = `
+        <div class="emoji-upload">
+            <div class="upload-area" id="emoji-upload-area">
+                <div class="upload-icon">📤</div>
+                <div class="upload-text">Emoji dosyasını buraya sürükle veya tıkla</div>
+                <input type="file" id="emoji-file-input" accept="image/*" multiple onchange="handleEmojiFileSelect(event)" />
+            </div>
+            <div class="upload-info">
+                <div class="info-item">
+                    <div class="info-icon">ℹ️</div>
+                    <div class="info-text">Desteklenen formatlar: PNG, GIF, WebP</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-icon">📏</div>
+                    <div class="info-text">Maksimum boyut: 256x256 piksel</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-icon">📦</div>
+                    <div class="info-text">Maksimum dosya boyutu: 512KB</div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    content.innerHTML = html;
+    
+    // Setup drag and drop
+    setupEmojiDragAndDrop();
+}
+
+function loadManageContent() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const content = document.getElementById('emoji-content');
+    const customEmojis = server.customEmojis || [];
+    
+    let html = '<div class="emoji-manage-list">';
+    
+    customEmojis.forEach((emoji, index) => {
+        html += `
+            <div class="emoji-manage-item">
+                <div class="emoji-manage-preview">
+                    <img src="${emoji.url}" alt="${emoji.name}" />
+                </div>
+                <div class="emoji-manage-info">
+                    <div class="emoji-manage-name">${emoji.name}</div>
+                    <div class="emoji-manage-date">${new Date(emoji.createdAt).toLocaleDateString('tr-TR')}</div>
+                </div>
+                <div class="emoji-manage-actions">
+                    <button class="emoji-action-btn" onclick="editCustomEmoji(${index})">✏️</button>
+                    <button class="emoji-action-btn" onclick="deleteCustomEmoji(${index})">🗑️</button>
+                </div>
+            </div>
+        `;
+    });
+    
+    if (customEmojis.length === 0) {
+        html += '<div class="emoji-empty">Henüz özel emoji yok.</div>';
+    }
+    
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function handleEmojiFileSelect(event) {
+    const files = event.target.files;
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    if (!server.customEmojis) server.customEmojis = [];
+    
+    Array.from(files).forEach(file => {
+        if (file.size > 512 * 1024) { // 512KB limit
+            toast(`${file.name} dosyası çok büyük (maks: 512KB)`, 'error');
+            return;
+        }
+        
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const emojiName = prompt(`Emoji adı (${file.name}):`, file.name.split('.')[0]);
+            if (!emojiName) return;
+            
+            // Convert to base64 for storage
+            const base64 = e.target.result;
+            const emoji = {
+                name: emojiName,
+                url: base64,
+                createdAt: Date.now()
+            };
+            
+            server.customEmojis.push(emoji);
+            toast(`${emojiName} emoji eklendi`, 'success');
+        };
+        
+        reader.readAsDataURL(file);
+    });
+    
+    // Clear file input
+    event.target.value = '';
+}
+
+function setupEmojiDragAndDrop() {
+    const uploadArea = document.getElementById('emoji-upload-area');
+    if (!uploadArea) return;
+    
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.classList.add('drag-over');
+    });
+    
+    uploadArea.addEventListener('dragleave', () => {
+        uploadArea.classList.remove('drag-over');
+    });
+    
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove('drag-over');
+        
+        const files = e.dataTransfer.files;
+        const fakeEvent = { target: { files } };
+        handleEmojiFileSelect(fakeEvent);
+    });
+    
+    uploadArea.addEventListener('click', () => {
+        document.getElementById('emoji-file-input').click();
+    });
+}
+
+function insertEmoji(emoji, name) {
+    const messageInput = document.getElementById('message-input');
+    if (!messageInput) return;
+    
+    const cursorPos = messageInput.selectionStart;
+    const textBefore = messageInput.value.substring(0, cursorPos);
+    const textAfter = messageInput.value.substring(cursorPos);
+    
+    messageInput.value = textBefore + emoji + textAfter;
+    messageInput.focus();
+    messageInput.setSelectionRange(cursorPos + emoji.length, cursorPos + emoji.length);
+}
+
+function editCustomEmoji(index) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server?.customEmojis?.[index]) return;
+    
+    const emoji = server.customEmojis[index];
+    const newName = prompt('Emoji adını düzenle:', emoji.name);
+    if (!newName || newName === emoji.name) return;
+    
+    emoji.name = newName;
+    loadManageContent();
+    toast('Emoji güncellendi', 'success');
+}
+
+function deleteCustomEmoji(index) {
+    if (!confirm('Bu emojiyi silmek istediğinizden emin misiniz?')) return;
+    
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server?.customEmojis?.[index]) return;
+    
+    const emoji = server.customEmojis[index];
+    server.customEmojis.splice(index, 1);
+    
+    loadManageContent();
+    toast(`${emoji.name} emoji silindi`, 'success');
+}
+
+function saveCustomEmojis() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    // Save custom emojis to server state and localStorage
+    localStorage.setItem(`scord_custom_emojis_${server.id}`, JSON.stringify(server.customEmojis || []));
+    
+    // Broadcast emoji changes to other members
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: 'custom_emojis_update',
+            serverId: server.id,
+            customEmojis: server.customEmojis
+        });
+    }
+    
+    toast('Özel emojiler kaydedildi', 'success');
+}
+
+function handleCustomEmojisUpdate(data) {
+    const { serverId, customEmojis } = data;
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    server.customEmojis = customEmojis || [];
+    
+    // Update UI if this server is active
+    if (state.activeServerId === serverId) {
+        loadEmojisContent();
+    }
+}
+
+function loadCustomEmojisFromStorage(serverId) {
+    try {
+        const saved = localStorage.getItem(`scord_custom_emojis_${serverId}`);
+        if (!saved) return;
+        
+        const server = state.servers.find(s => s.id === serverId);
+        if (!server) return;
+        
+        server.customEmojis = JSON.parse(saved);
+    } catch (e) {
+        console.warn("Failed to load custom emojis from storage:", e);
+    }
+}
+
+// Enhanced Dark/Light Theme System
+function showThemeSettingsModal() {
+    const modalContent = `
+        <div class="theme-settings-modal">
+            <div class="theme-header">
+                <div class="theme-title">🎨 Tema Ayarları</div>
+                <div class="theme-subtitle">Uygulama görünümünü kişiselleştir</div>
+            </div>
+            <div class="theme-tabs">
+                <button class="theme-tab active" data-tab="presets">Hazır Temalar</button>
+                <button class="theme-tab" data-tab="colors">Renkler</button>
+                <button class="theme-tab" data-tab="advanced">Gelişmiş</button>
+            </div>
+            <div class="theme-content" id="theme-content">
+                <!-- Content will be loaded dynamically -->
+            </div>
+        </div>
+    `;
+    
+    showModal("Tema Ayarları", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">İptal</button>
+        <button class="btn-primary" onclick="saveThemeSettings()">Kaydet</button>
+    `);
+    
+    // Initialize tabs
+    initializeThemeTabs();
+    loadThemePresetsContent();
+}
+
+function initializeThemeTabs() {
+    const tabs = document.querySelectorAll('.theme-tab');
+    const content = document.getElementById('theme-content');
+    
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const tabName = tab.getAttribute('data-tab');
+            switch(tabName) {
+                case 'presets':
+                    loadThemePresetsContent();
+                    break;
+                case 'colors':
+                    loadThemeColorsContent();
+                    break;
+                case 'advanced':
+                    loadThemeAdvancedContent();
+                    break;
+            }
+        });
+    });
+}
+
+function loadThemePresetsContent() {
+    const content = document.getElementById('theme-content');
+    const currentTheme = state.theme || 'sapphire';
+    
+    const themes = [
+        { id: 'sapphire', name: 'Safir', icon: '💎', colors: ['#0f172a', '#1e293b', '#334155', '#64748b', '#94a3b8', '#cbd5e1', '#f1f5f9'] },
+        { id: 'emerald', name: 'Zümrüt', icon: '💚', colors: ['#064e3b', '#047857', '#059669', '#10b981', '#34d399', '#6ee7b7', '#a7f3d0'] },
+        { id: 'ruby', name: 'Yakut', icon: '❤️', colors: ['#7f1d1d', '#991b1b', '#b91c1c', '#dc2626', '#ef4444', '#f87171', '#fca5a5'] },
+        { id: 'gold', name: 'Altın', icon: '⭐', colors: ['#451a03', '#78350f', '#92400e', '#b45309', '#d97706', '#fbbf24', '#fcd34d'] },
+        { id: 'dark', name: 'Koyu', icon: '🌙', colors: ['#000000', '#1a1a1a', '#2d2d2d', '#404040', '#595959', '#737373', '#adadad'] },
+        { id: 'light', name: 'Açık', icon: '☀️', colors: ['#ffffff', '#f5f5f5', '#e5e5e5', '#d4d4d4', '#a3a3a3', '#737373', '#525252'] },
+        { id: 'auto', name: 'Otomatik', icon: '🔄', colors: ['#ffffff', '#f5f5f5', '#e5e5e5', '#d4d4d4', '#a3a3a3', '#737373', '#525252'] }
+    ];
+    
+    let html = '<div class="theme-presets-grid">';
+    
+    themes.forEach(theme => {
+        const isActive = currentTheme === theme.id;
+        html += `
+            <div class="theme-preset ${isActive ? 'active' : ''}" onclick="selectTheme('${theme.id}')">
+                <div class="theme-preset-header">
+                    <div class="theme-preset-icon">${theme.icon}</div>
+                    <div class="theme-preset-name">${theme.name}</div>
+                    ${isActive ? '<div class="theme-preset-badge">✅</div>' : ''}
+                </div>
+                <div class="theme-preset-colors">
+                    ${theme.colors.map(color => `
+                        <div class="color-swatch" style="background: ${color}"></div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function loadThemeColorsContent() {
+    const content = document.getElementById('theme-content');
+    
+    const currentColors = getThemeColors();
+    
+    const html = `
+        <div class="theme-colors">
+            <div class="color-group">
+                <div class="color-group-title">Ana Renkler</div>
+                <div class="color-items">
+                    <div class="color-item">
+                        <label>Arka Plan</label>
+                        <input type="color" id="bg-primary" value="${currentColors.bgPrimary}" onchange="updateThemeColor('bgPrimary', this.value)">
+                    </div>
+                    <div class="color-item">
+                        <label>Yüzey</label>
+                        <input type="color" id="bg-surface" value="${currentColors.bgSurface}" onchange="updateThemeColor('bgSurface', this.value)">
+                    </div>
+                    <div class="color-item">
+                        <label>Vurgu</label>
+                        <input type="color" id="bg-highlight" value="${currentColors.bgHighlight}" onchange="updateThemeColor('bgHighlight', this.value)">
+                    </div>
+                </div>
+            </div>
+            <div class="color-group">
+                <div class="color-group-title">Metin Renkleri</div>
+                <div class="color-items">
+                    <div class="color-item">
+                        <label>Birincil</label>
+                        <input type="color" id="text-primary" value="${currentColors.textPrimary}" onchange="updateThemeColor('textPrimary', this.value)">
+                    </div>
+                    <div class="color-item">
+                        <label>İkincil</label>
+                        <input type="color" id="text-secondary" value="${currentColors.textSecondary}" onchange="updateThemeColor('textSecondary', this.value)">
+                    </div>
+                    <div class="color-item">
+                        <label>Soluk</label>
+                        <input type="color" id="text-muted" value="${currentColors.textMuted}" onchange="updateThemeColor('textMuted', this.value)">
+                    </div>
+                </div>
+            </div>
+            <div class="color-group">
+                <div class="color-group-title">Aksan Renkleri</div>
+                <div class="color-items">
+                    <div class="color-item">
+                        <label>Aksan</label>
+                        <input type="color" id="accent" value="${currentColors.accent}" onchange="updateThemeColor('accent', this.value)">
+                    </div>
+                    <div class="color-item">
+                        <label>Aksan Açık</label>
+                        <input type="color" id="accent-light" value="${currentColors.accentLight}" onchange="updateThemeColor('accentLight', this.value)">
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    content.innerHTML = html;
+}
+
+function loadThemeAdvancedContent() {
+    const content = document.getElementById('theme-content');
+    
+    const html = `
+        <div class="theme-advanced">
+            <div class="advanced-group">
+                <div class="advanced-title">Mesaj Yoğunluğu</div>
+                <div class="advanced-options">
+                    <label class="advanced-option">
+                        <input type="radio" name="messageDensity" value="comfortable" ${state.settings?.messageDensity === 'comfortable' ? 'checked' : ''} onchange="updateMessageDensity(this.value)">
+                        <span>Rahat</span>
+                    </label>
+                    <label class="advanced-option">
+                        <input type="radio" name="messageDensity" value="cozy" ${state.settings?.messageDensity === 'cozy' ? 'checked' : ''} onchange="updateMessageDensity(this.value)">
+                        <span>Konfor</span>
+                    </label>
+                    <label class="advanced-option">
+                        <input type="radio" name="messageDensity" value="compact" ${state.settings?.messageDensity === 'compact' ? 'checked' : ''} onchange="updateMessageDensity(this.value)">
+                        <span>Sıkışık</span>
+                    </label>
+                </div>
+            </div>
+            <div class="advanced-group">
+                <div class="advanced-title">Emoji Boyutu</div>
+                <div class="advanced-options">
+                    <label class="advanced-option">
+                        <input type="radio" name="emojiSize" value="small" ${state.settings?.emojiSize === 'small' ? 'checked' : ''} onchange="updateEmojiSize(this.value)">
+                        <span>Küçük</span>
+                    </label>
+                    <label class="advanced-option">
+                        <input type="radio" name="emojiSize" value="medium" ${state.settings?.emojiSize === 'medium' ? 'checked' : ''} onchange="updateEmojiSize(this.value)">
+                        <span>Orta</span>
+                    </label>
+                    <label class="advanced-option">
+                        <input type="radio" name="emojiSize" value="large" ${state.settings?.emojiSize === 'large' ? 'checked' : ''} onchange="updateEmojiSize(this.value)">
+                        <span>Büyük</span>
+                    </label>
+                </div>
+            </div>
+            <div class="advanced-group">
+                <div class="advanced-title">Animasyonlar</div>
+                <div class="advanced-options">
+                    <label class="switch">
+                        <input type="checkbox" ${state.settings?.animations !== false ? 'checked' : ''} onchange="updateAnimations(this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                    <span>Animasyonları etkinleştir</span>
+                </div>
+            </div>
+            <div class="advanced-group">
+                <div class="advanced-title">Otomatik Tema</div>
+                <div class="advanced-options">
+                    <label class="switch">
+                        <input type="checkbox" ${state.settings?.theme === 'auto' ? 'checked' : ''} onchange="updateAutoTheme(this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                    <span>Sisteme göre otomatik değiştir</span>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    content.innerHTML = html;
+}
+
+function getThemeColors() {
+    const style = getComputedStyle(document.documentElement);
+    return {
+        bgPrimary: style.getPropertyValue('--bg-primary').trim(),
+        bgSurface: style.getPropertyValue('--bg-surface').trim(),
+        bgHighlight: style.getPropertyValue('--bg-highlight').trim(),
+        textPrimary: style.getPropertyValue('--text-primary').trim(),
+        textSecondary: style.getPropertyValue('--text-secondary').trim(),
+        textMuted: style.getPropertyValue('--text-muted').trim(),
+        accent: style.getPropertyValue('--accent').trim(),
+        accentLight: style.getPropertyValue('--accent-light').trim()
+    };
+}
+
+function selectTheme(themeId) {
+    state.theme = themeId;
+    applyTheme(themeId);
+    
+    // Update UI
+    loadThemePresetsContent();
+    
+    // Save to localStorage
+    localStorage.setItem('scord_theme', themeId);
+    
+    toast(`${themeId} teması uygulandı`, 'success');
+}
+
+function applyTheme(themeId) {
+    const themes = {
+        'sapphire': {
+            '--bg-primary': '#0f172a',
+            '--bg-surface': '#1e293b',
+            '--bg-elevated': '#334155',
+            '--bg-highlight': '#475569',
+            '--text-primary': '#f8fafc',
+            '--text-secondary': '#e2e8f0',
+            '--text-muted': '#94a3b8',
+            '--accent': '#3b82f6',
+            '--accent-light': '#60a5fa',
+            '--border': '#475569'
+        },
+        'emerald': {
+            '--bg-primary': '#064e3b',
+            '--bg-surface': '#047857',
+            '--bg-elevated': '#059669',
+            '--bg-highlight': '#10b981',
+            '--text-primary': '#ecfdf5',
+            '--text-secondary': '#d1fae5',
+            '--text-muted': '#6ee7b7',
+            '--accent': '#10b981',
+            '--accent-light': '#34d399',
+            '--border': '#10b981'
+        },
+        'ruby': {
+            '--bg-primary': '#7f1d1d',
+            '--bg-surface': '#991b1b',
+            '--bg-elevated': '#b91c1c',
+            '--bg-highlight': '#dc2626',
+            '--text-primary': '#fef2f2',
+            '--text-secondary': '#fecaca',
+            '--text-muted': '#fca5a5',
+            '--accent': '#dc2626',
+            '--accent-light': '#ef4444',
+            '--border': '#dc2626'
+        },
+        'gold': {
+            '--bg-primary': '#451a03',
+            '--bg-surface': '#78350f',
+            '--bg-elevated': '#92400e',
+            '--bg-highlight': '#b45309',
+            '--text-primary': '#fef3c7',
+            '--text-secondary': '#fed7aa',
+            '--text-muted': '#fcd34d',
+            '--accent': '#d97706',
+            '--accent-light': '#fbbf24',
+            '--border': '#b45309'
+        },
+        'dark': {
+            '--bg-primary': '#000000',
+            '--bg-surface': '#1a1a1a',
+            '--bg-elevated': '#2d2d2d',
+            '--bg-highlight': '#404040',
+            '--text-primary': '#ffffff',
+            '--text-secondary': '#e5e5e5',
+            '--text-muted': '#a3a3a3',
+            '--accent': '#6366f1',
+            '--accent-light': '#818cf8',
+            '--border': '#404040'
+        },
+        'light': {
+            '--bg-primary': '#ffffff',
+            '--bg-surface': '#f5f5f5',
+            '--bg-elevated': '#e5e5e5',
+            '--bg-highlight': '#d4d4d4',
+            '--text-primary': '#000000',
+            '--text-secondary': '#171717',
+            '--text-muted': '#737373',
+            '--accent': '#3b82f6',
+            '--accent-light': '#60a5fa',
+            '--border': '#d4d4d4'
+        }
+    };
+    
+    const theme = themes[themeId];
+    if (!theme) return;
+    
+    // Apply theme colors
+    Object.entries(theme).forEach(([property, value]) => {
+        document.documentElement.style.setProperty(property, value);
+    });
+    
+    // Update document class
+    document.documentElement.className = themeId;
+}
+
+function updateThemeColor(property, value) {
+    const cssProperty = `--${property.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
+    document.documentElement.style.setProperty(cssProperty, value);
+    
+    // Save custom theme
+    saveCustomTheme();
+}
+
+function updateMessageDensity(density) {
+    if (!state.settings) state.settings = {};
+    state.settings.messageDensity = density;
+    localStorage.setItem('scord_message_density', density);
+    
+    // Update UI classes
+    document.body.className = document.body.className.replace(/message-density-\w+/g, '');
+    document.body.classList.add(`message-density-${density}`);
+    
+    toast(`Mesaj yoğunluğu: ${density}`, 'success');
+}
+
+function updateEmojiSize(size) {
+    if (!state.settings) state.settings = {};
+    state.settings.emojiSize = size;
+    localStorage.setItem('scord_emoji_size', size);
+    
+    // Update UI classes
+    document.body.className = document.body.className.replace(/emoji-size-\w+/g, '');
+    document.body.classList.add(`emoji-size-${size}`);
+    
+    toast(`Emoji boyutu: ${size}`, 'success');
+}
+
+function updateAnimations(enabled) {
+    if (!state.settings) state.settings = {};
+    state.settings.animations = enabled;
+    localStorage.setItem('scord_animations', enabled);
+    
+    // Update UI classes
+    if (enabled) {
+        document.body.classList.remove('no-animations');
+    } else {
+        document.body.classList.add('no-animations');
+    }
+    
+    toast(`Animasyonlar: ${enabled ? 'etkin' : 'devre dışı'}`, 'success');
+}
+
+function updateAutoTheme(enabled) {
+    if (!state.settings) state.settings = {};
+    state.settings.theme = enabled ? 'auto' : 'dark';
+    localStorage.setItem('scord_theme', enabled ? 'auto' : 'dark');
+    
+    if (enabled) {
+        setupAutoTheme();
+    } else {
+        removeAutoTheme();
+    }
+    
+    toast(`Otomatik tema: ${enabled ? 'etkin' : 'devre dışı'}`, 'success');
+}
+
+function setupAutoTheme() {
+    const hour = new Date().getHours();
+    const isDark = hour < 6 || hour >= 18;
+    
+    if (isDark) {
+        applyTheme('dark');
+    } else {
+        applyTheme('light');
+    }
+    
+    // Update every minute
+    state.autoThemeInterval = setInterval(() => {
+        const currentHour = new Date().getHours();
+        const shouldBeDark = currentHour < 6 || currentHour >= 18;
+        const isCurrentlyDark = document.documentElement.classList.contains('dark');
+        
+        if (shouldBeDark !== isCurrentlyDark) {
+            if (shouldBeDark) {
+                applyTheme('dark');
+            } else {
+                applyTheme('light');
+            }
+        }
+    }, 60000);
+}
+
+function removeAutoTheme() {
+    if (state.autoThemeInterval) {
+        clearInterval(state.autoThemeInterval);
+        state.autoThemeInterval = null;
+    }
+}
+
+function saveCustomTheme() {
+    const customTheme = getThemeColors();
+    localStorage.setItem('scord_custom_theme', JSON.stringify(customTheme));
+    toast('Özel tema kaydedildi', 'success');
+}
+
+function loadCustomTheme() {
+    try {
+        const saved = localStorage.getItem('scord_custom_theme');
+        if (!saved) return;
+        
+        const customTheme = JSON.parse(saved);
+        Object.entries(customTheme).forEach(([property, value]) => {
+            document.documentElement.style.setProperty(property, value);
+        });
+    } catch (e) {
+        console.warn("Failed to load custom theme:", e);
+    }
+}
+
+function saveThemeSettings() {
+    // Save all theme settings
+    saveCustomTheme();
+    
+    // Save settings
+    localStorage.setItem('scord_settings', JSON.stringify(state.settings || {}));
+    
+    toast('Tema ayarları kaydedildi', 'success');
+    hideModal();
+}
+
+// Enhanced Notification System with Push Support
+function showNotificationSettingsModal() {
+    const modalContent = `
+        <div class="notification-settings-modal">
+            <div class="notification-header">
+                <div class="notification-title">🔔 Bildirim Ayarları</div>
+                <div class="notification-subtitle">Bildirimleri kişiselleştir ve yönet</div>
+            </div>
+            <div class="notification-tabs">
+                <button class="notification-tab active" data-tab="general">Genel</button>
+                <button class="notification-tab" data-tab="desktop">Masaüstü</button>
+                <button class="notification-tab" data-tab="push">Push</button>
+            </div>
+            <div class="notification-content" id="notification-content">
+                <!-- Content will be loaded dynamically -->
+            </div>
+        </div>
+    `;
+    
+    showModal("Bildirim Ayarları", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">İptal</button>
+        <button class="btn-primary" onclick="saveNotificationSettings()">Kaydet</button>
+    `);
+    
+    // Initialize tabs
+    initializeNotificationTabs();
+    loadNotificationGeneralContent();
+}
+
+function initializeNotificationTabs() {
+    const tabs = document.querySelectorAll('.notification-tab');
+    const content = document.getElementById('notification-content');
+    
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const tabName = tab.getAttribute('data-tab');
+            switch(tabName) {
+                case 'general':
+                    loadNotificationGeneralContent();
+                    break;
+                case 'desktop':
+                    loadNotificationDesktopContent();
+                    break;
+                case 'push':
+                    loadNotificationPushContent();
+                    break;
+            }
+        });
+    });
+}
+
+function loadNotificationGeneralContent() {
+    const content = document.getElementById('notification-content');
+    const settings = state.notifSettings || {};
+    
+    const html = `
+        <div class="notification-general">
+            <div class="notification-group">
+                <div class="notification-group-title">Mesaj Bildirimleri</div>
+                <div class="notification-options">
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.chat !== false ? 'checked' : ''} onchange="updateNotificationSetting('chat', this.checked)">
+                        <span>Sohbet mesajları için bildirim göster</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.dm !== false ? 'checked' : ''} onchange="updateNotificationSetting('dm', this.checked)">
+                        <span>Özel mesajlar için bildirim göster</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.mentions !== false ? 'checked' : ''} onchange="updateNotificationSetting('mentions', this.checked)">
+                        <span>Bahsetmeler (@user) için bildirim göster</span>
+                    </label>
+                </div>
+            </div>
+            <div class="notification-group">
+                <div class="notification-group-title">Sunucu Bildirimleri</div>
+                <div class="notification-options">
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.join !== false ? 'checked' : ''} onchange="updateNotificationSetting('join', this.checked)">
+                        <span>Üye katıldığında bildirim göster</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.leave !== false ? 'checked' : ''} onchange="updateNotificationSetting('leave', this.checked)">
+                        <span>Üye ayrıldığında bildirim göster</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.voice !== false ? 'checked' : ''} onchange="updateNotificationSetting('voice', this.checked)">
+                        <span>Sesli kanala katıldığında bildirim göster</span>
+                    </label>
+                </div>
+            </div>
+            <div class="notification-group">
+                <div class="notification-group-title">Bildirim Seviyesi</div>
+                <div class="notification-options">
+                    <label class="notification-option">
+                        <input type="radio" name="chatLevel" value="all" ${settings.chatLevel === 'all' ? 'checked' : ''} onchange="updateNotificationSetting('chatLevel', this.value)">
+                        <span>Tüm mesajlar</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="radio" name="chatLevel" value="mentions" ${settings.chatLevel === 'mentions' ? 'checked' : ''} onchange="updateNotificationSetting('chatLevel', this.value)">
+                        <span>Sadece bahsetmeler</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="radio" name="chatLevel" value="none" ${settings.chatLevel === 'none' ? 'checked' : ''} onchange="updateNotificationSetting('chatLevel', this.value)">
+                        <span>Hiçbiri</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    content.innerHTML = html;
+}
+
+function loadNotificationDesktopContent() {
+    const content = document.getElementById('notification-content');
+    const settings = state.notifSettings || {};
+    
+    const html = `
+        <div class="notification-desktop">
+            <div class="notification-group">
+                <div class="notification-group-title">Masaüstü Bildirimleri</div>
+                <div class="notification-options">
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.desktop !== false ? 'checked' : ''} onchange="updateNotificationSetting('desktop', this.checked)">
+                        <span>Masaüstü bildirimlerini etkinleştir</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.sound !== false ? 'checked' : ''} onchange="updateNotificationSetting('sound', this.checked)">
+                        <span>Bildirim seslerini etkinleştir</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.badge !== false ? 'checked' : ''} onchange="updateNotificationSetting('badge', this.checked)">
+                        <span>Favicon rozetini göster</span>
+                    </label>
+                </div>
+            </div>
+            <div class="notification-group">
+                <div class="notification-group-title">Bildirim Konumu</div>
+                <div class="notification-options">
+                    <label class="notification-option">
+                        <input type="radio" name="position" value="top-right" ${settings.position === 'top-right' ? 'checked' : ''} onchange="updateNotificationSetting('position', this.value)">
+                        <span>Sağ üst</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="radio" name="position" value="top-left" ${settings.position === 'top-left' ? 'checked' : ''} onchange="updateNotificationSetting('position', this.value)">
+                        <span>Sol üst</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="radio" name="position" value="bottom-right" ${settings.position === 'bottom-right' ? 'checked' : ''} onchange="updateNotificationSetting('position', this.value)">
+                        <span>Sağ alt</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="radio" name="position" value="bottom-left" ${settings.position === 'bottom-left' ? 'checked' : ''} onchange="updateNotificationSetting('position', this.value)">
+                        <span>Sol alt</span>
+                    </label>
+                </div>
+            </div>
+            <div class="notification-group">
+                <div class="notification-group-title">Ses Ayarları</div>
+                <div class="notification-options">
+                    <div class="notification-option">
+                        <label>Bildirim Sesi:</label>
+                        <select id="notification-sound-select" onchange="updateNotificationSetting('notificationSound', this.value)">
+                            <option value="default" ${settings.notificationSound === 'default' ? 'selected' : ''}>Varsayılan</option>
+                            <option value="ding" ${settings.notificationSound === 'ding' ? 'selected' : ''}>Ding</option>
+                            <option value="pop" ${settings.notificationSound === 'pop' ? 'selected' : ''}>Pop</option>
+                            <option value="chime" ${settings.notificationSound === 'chime' ? 'selected' : ''}>Chime</option>
+                            <option value="none" ${settings.notificationSound === 'none' ? 'selected' : ''}>Sessiz</option>
+                        </select>
+                    </div>
+                    <div class="notification-option">
+                        <label>Ses Seviyesi:</label>
+                        <input type="range" id="notification-volume" min="0" max="100" value="${settings.volume || 50}" onchange="updateNotificationSetting('volume', this.value)">
+                        <span id="volume-value">${settings.volume || 50}%</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    content.innerHTML = html;
+    
+    // Update volume display
+    const volumeSlider = document.getElementById('notification-volume');
+    const volumeValue = document.getElementById('volume-value');
+    if (volumeSlider && volumeValue) {
+        volumeSlider.addEventListener('input', () => {
+            volumeValue.textContent = volumeSlider.value + '%';
+        });
+    }
+}
+
+function loadNotificationPushContent() {
+    const content = document.getElementById('notification-content');
+    const settings = state.notifSettings || {};
+    const pushSupported = 'Notification' in window && 'serviceWorker' in navigator;
+    const pushEnabled = settings.pushEnabled || false;
+    
+    const html = `
+        <div class="notification-push">
+            <div class="notification-group">
+                <div class="notification-group-title">Push Bildirimleri</div>
+                <div class="notification-options">
+                    <label class="notification-option">
+                        <input type="checkbox" ${pushEnabled ? 'checked' : ''} ${!pushSupported ? 'disabled' : ''} onchange="togglePushNotifications(this.checked)">
+                        <span>Push bildirimlerini etkinleştir</span>
+                        ${!pushSupported ? '<small class="text-muted">(Tarayıcı desteklenmiyor)</small>' : ''}
+                    </label>
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.pushMobile !== false ? 'checked' : ''} ${!pushEnabled ? 'disabled' : ''} onchange="updateNotificationSetting('pushMobile', this.checked)">
+                        <span>Mobil cihazlara bildirim gönder</span>
+                    </label>
+                    <label class="notification-option">
+                        <input type="checkbox" ${settings.pushEmail !== false ? 'checked' : ''} ${!pushEnabled ? 'disabled' : ''} onchange="updateNotificationSetting('pushEmail', this.checked)">
+                        <span>E-posta bildirimleri gönder</span>
+                    </label>
+                </div>
+            </div>
+            ${pushEnabled ? `
+                <div class="notification-group">
+                    <div class="notification-group-title">Push Bildirim Ayarları</div>
+                    <div class="notification-options">
+                        <div class="notification-option">
+                            <label>E-posta Adresi:</label>
+                            <input type="email" id="push-email" placeholder="ornek@email.com" value="${settings.pushEmail || ''}" onchange="updateNotificationSetting('pushEmailAddress', this.value)">
+                        </div>
+                        <div class="notification-option">
+                            <label>Mobil Cihaz ID:</label>
+                            <input type="text" id="push-device-id" placeholder="Cihaz ID" value="${settings.pushDeviceId || ''}" onchange="updateNotificationSetting('pushDeviceId', this.value)">
+                        </div>
+                    </div>
+                </div>
+            ` : ''}
+            <div class="notification-group">
+                <div class="notification-group-title">Test Bildirimi</div>
+                <div class="notification-options">
+                    <button class="btn-secondary" onclick="sendTestNotification()">Test Bildirimi Gönder</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    content.innerHTML = html;
+}
+
+function updateNotificationSetting(key, value) {
+    if (!state.notifSettings) state.notifSettings = {};
+    state.notifSettings[key] = value;
+    
+    // Save to localStorage
+    localStorage.setItem('scord_notif_settings', JSON.stringify(state.notifSettings));
+    
+    // Apply settings immediately
+    if (key === 'desktop') {
+        if (value) {
+            requestNotificationPermission();
+        }
+    }
+    
+    if (key === 'sound') {
+        state.settings.soundEnabled = value;
+        localStorage.setItem('scord_sound_enabled', value);
+    }
+    
+    if (key === 'volume') {
+        updateNotificationVolume(value);
+    }
+}
+
+function requestNotificationPermission() {
+    if ('Notification' in window) {
+        Notification.requestPermission().then(permission => {
+            if (permission === 'granted') {
+                toast('Bildirim izni verildi', 'success');
+            } else if (permission === 'denied') {
+                toast('Bildirim izni reddedildi', 'error');
+            }
+        });
+    }
+}
+
+function togglePushNotifications(enabled) {
+    if (!enabled) {
+        // Disable push notifications
+        updateNotificationSetting('pushEnabled', false);
+        if (state.pushSubscription) {
+            state.pushSubscription.unsubscribe();
+            state.pushSubscription = null;
+        }
+        toast('Push bildirimleri devre dışı bırakıldı', 'info');
+        return;
+    }
+    
+    // Enable push notifications
+    if ('serviceWorker' in navigator && 'PushManager' in window) {
+        navigator.serviceWorker.ready.then(registration => {
+            return registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array('YOUR_VAPID_PUBLIC_KEY')
+            });
+        }).then(subscription => {
+            state.pushSubscription = subscription;
+            updateNotificationSetting('pushEnabled', true);
+            updateNotificationSetting('pushEndpoint', subscription.endpoint);
+            toast('Push bildirimleri etkinleştirildi', 'success');
+        }).catch(error => {
+            console.error('Push subscription error:', error);
+            toast('Push bildirimleri etkinleştirilemedi', 'error');
+        });
+    } else {
+        toast('Tarayıcı push bildirimlerini desteklemiyor', 'error');
+    }
+}
+
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    
+    for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+    }
+    
+    return outputArray;
+}
+
+function sendTestNotification() {
+    const settings = state.notifSettings || {};
+    
+    // Send desktop notification
+    if (settings.desktop !== false && 'Notification' in window && Notification.permission === 'granted') {
+        new Notification('SCORD - Test Bildirimi', {
+            body: 'Bu bir test bildirimidir!',
+            icon: '/favicon.ico',
+            badge: '/favicon.ico',
+            tag: 'test-notification'
+        });
+    }
+    
+    // Send push notification
+    if (settings.pushEnabled && state.pushSubscription) {
+        fetch('/api/push/test', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                subscription: state.pushSubscription,
+                title: 'SCORD - Test Bildirimi',
+                body: 'Bu bir test bildirimidir!'
+            })
+        }).catch(error => {
+            console.error('Push notification error:', error);
+        });
+    }
+    
+    // Play notification sound
+    if (settings.sound !== false) {
+        playNotificationSound(settings.notificationSound || 'default', settings.volume || 50);
+    }
+    
+    toast('Test bildirimi gönderildi', 'success');
+}
+
+function playNotificationSound(soundType, volume = 50) {
+    if (!state.settings?.soundEnabled) return;
+    
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    
+    // Set sound based on type
+    switch (soundType) {
+        case 'ding':
+            oscillator.frequency.value = 800;
+            oscillator.type = 'sine';
+            break;
+        case 'pop':
+            oscillator.frequency.value = 600;
+            oscillator.type = 'square';
+            break;
+        case 'chime':
+            oscillator.frequency.value = 1000;
+            oscillator.type = 'triangle';
+            break;
+        default:
+            oscillator.frequency.value = 440;
+            oscillator.type = 'sine';
+    }
+    
+    gainNode.gain.value = volume / 100;
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + 0.2);
+}
+
+function updateNotificationVolume(volume) {
+    state.settings.notificationVolume = volume;
+    localStorage.setItem('scord_notification_volume', volume);
+}
+
+function createNotification(title, body, options = {}) {
+    const settings = state.notifSettings || {};
+    
+    // Check if notifications are enabled
+    if (settings.desktop === false) return;
+    
+    // Check notification level
+    if (settings.chatLevel === 'none') return;
+    if (settings.chatLevel === 'mentions' && !options.isMention) return;
+    
+    // Create desktop notification
+    if ('Notification' in window && Notification.permission === 'granted') {
+        const notification = new Notification(title, {
+            body,
+            icon: options.icon || '/favicon.ico',
+            badge: options.badge || '/favicon.ico',
+            tag: options.tag || 'default',
+            requireInteraction: options.requireInteraction || false,
+            silent: settings.sound === false
+        });
+        
+        // Auto close after 5 seconds
+        setTimeout(() => notification.close(), 5000);
+        
+        // Handle click
+        notification.onclick = () => {
+            window.focus();
+            notification.close();
+            if (options.onClick) options.onClick();
+        };
+    }
+    
+    // Play sound
+    if (settings.sound !== false) {
+        playNotificationSound(settings.notificationSound || 'default', settings.volume || 50);
+    }
+    
+    // Update badge
+    if (settings.badge !== false) {
+        updateBadge();
+    }
+}
+
+function updateBadge() {
+    // Update favicon with notification count
+    const badge = document.querySelector('.favicon-badge');
+    if (badge) {
+        badge.style.display = 'block';
+    }
+}
+
+function clearBadge() {
+    // Clear favicon badge
+    const badge = document.querySelector('.favicon-badge');
+    if (badge) {
+        badge.style.display = 'none';
+    }
+}
+
+function saveNotificationSettings() {
+    // Save notification settings
+    localStorage.setItem('scord_notif_settings', JSON.stringify(state.notifSettings || {}));
+    
+    toast('Bildirim ayarları kaydedildi', 'success');
+    hideModal();
+}
+
+function loadNotificationSettings() {
+    try {
+        const saved = localStorage.getItem('scord_notif_settings');
+        if (saved) {
+            state.notifSettings = JSON.parse(saved);
+        }
+    } catch (e) {
+        console.warn("Failed to load notification settings:", e);
+    }
+}
+
+// Enhanced Keyboard Shortcuts System
+function initializeKeyboardShortcuts() {
+    const shortcuts = {
+        // Navigation shortcuts
+        'Ctrl+K': showQuickSwitcher,
+        'Ctrl+N': showCreateModal,
+        'Ctrl+Shift+N': createNewServer,
+        'Ctrl+Shift+C': createNewChannel,
+        'Ctrl+Shift+R': createNewRole,
+        'Ctrl+Shift+E': showCustomEmojiModal,
+        'Ctrl+Shift+T': showThemeSettingsModal,
+        'Ctrl+Shift+N': showNotificationSettingsModal,
+        
+        // Message shortcuts
+        'Ctrl+Enter': sendMessage,
+        'Shift+Enter': addNewLineToMessage,
+        'Ctrl+Shift+Enter': sendFormattedMessage,
+        'Ctrl+I': toggleItalic,
+        'Ctrl+B': toggleBold,
+        'Ctrl+U': toggleUnderline,
+        'Ctrl+Shift+S': toggleStrikethrough,
+        'Ctrl+E': toggleCode,
+        'Ctrl+Shift+E': toggleCodeBlock,
+        
+        // Search shortcuts
+        'Ctrl+F': focusSearchInput,
+        'Ctrl+Shift+F': searchInCurrentChannel,
+        'Ctrl+G': goToMessage,
+        'Ctrl+Shift+G': goToNextUnread,
+        
+        // Channel shortcuts
+        'Alt+ArrowUp': moveToPreviousChannel,
+        'Alt+ArrowDown': moveToNextChannel,
+        'Alt+ArrowLeft': moveToPreviousServer,
+        'Alt+ArrowRight': moveToNextServer,
+        
+        // Voice shortcuts
+        'Ctrl+M': toggleMicrophone,
+        'Ctrl+Shift+M': toggleDeafen,
+        'Ctrl+Shift+S': startScreenShare,
+        'Ctrl+Shift+C': startCameraShare,
+        
+        // Settings shortcuts
+        'Ctrl+Comma': openSettingsModal,
+        'Ctrl+Shift+P': openProfileSettings,
+        'Ctrl+Shift+U': showUserSettings,
+        
+        // Utility shortcuts
+        'Escape': closeCurrentModal,
+        'Ctrl+Shift+L': toggleDarkMode,
+        'Ctrl+Shift+A': toggleAnimations,
+        'Ctrl+Shift+D': toggleCompactMode,
+        'Ctrl+Shift+H': showHelpModal,
+        'F1': showKeyboardShortcutsModal,
+        'F11': toggleFullscreen
+    };
+    
+    // Add event listeners
+    document.addEventListener('keydown', (e) => {
+        const key = getKeyString(e);
+        const shortcut = shortcuts[key];
+        
+        if (shortcut) {
+            e.preventDefault();
+            shortcut(e);
+        }
+    });
+    
+    // Store shortcuts for reference
+    state.keyboardShortcuts = shortcuts;
+}
+
+function getKeyString(e) {
+    const parts = [];
+    
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Meta');
+    
+    // Handle special keys
+    const specialKeys = {
+        'Enter': 'Enter',
+        'Escape': 'Escape',
+        'ArrowUp': 'ArrowUp',
+        'ArrowDown': 'ArrowDown',
+        'ArrowLeft': 'ArrowLeft',
+        'ArrowRight': 'ArrowRight',
+        ' ': 'Space',
+        'Tab': 'Tab',
+        'Backspace': 'Backspace',
+        'Delete': 'Delete',
+        'Home': 'Home',
+        'End': 'End',
+        'PageUp': 'PageUp',
+        'PageDown': 'PageDown',
+        'F1': 'F1',
+        'F2': 'F2',
+        'F3': 'F3',
+        'F4': 'F4',
+        'F5': 'F5',
+        'F6': 'F6',
+        'F7': 'F7',
+        'F8': 'F8',
+        'F9': 'F9',
+        'F10': 'F10',
+        'F11': 'F11',
+        'F12': 'F12'
+    };
+    
+    const key = specialKeys[e.key] || e.key;
+    parts.push(key);
+    
+    return parts.join('+');
+}
+
+function showQuickSwitcher() {
+    const modalContent = `
+        <div class="quick-switcher">
+            <div class="quick-switcher-header">
+                <input type="text" id="quick-switcher-input" placeholder="Sunucu, kanal veya kullanıcı ara..." autocomplete="off">
+            </div>
+            <div class="quick-switcher-results" id="quick-switcher-results">
+                <!-- Results will be loaded dynamically -->
+            </div>
+        </div>
+    `;
+    
+    showModal("Hızlı Geçiş", modalContent, '', true); // No footer, closable with Escape
+    
+    // Focus input
+    const input = document.getElementById('quick-switcher-input');
+    if (input) {
+        input.focus();
+        input.addEventListener('input', handleQuickSwitcherSearch);
+        input.addEventListener('keydown', handleQuickSwitcherNavigation);
+    }
+    
+    // Load initial results
+    loadQuickSwitcherResults('');
+}
+
+function handleQuickSwitcherSearch(e) {
+    const query = e.target.value.toLowerCase();
+    loadQuickSwitcherResults(query);
+}
+
+function handleQuickSwitcherNavigation(e) {
+    const results = document.querySelectorAll('.quick-switcher-item');
+    const currentIndex = Array.from(results).findIndex(item => item.classList.contains('selected'));
+    
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const nextIndex = currentIndex < results.length - 1 ? currentIndex + 1 : 0;
+        selectQuickSwitcherItem(results, nextIndex);
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prevIndex = currentIndex > 0 ? currentIndex - 1 : results.length - 1;
+        selectQuickSwitcherItem(results, prevIndex);
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (currentIndex >= 0 && results[currentIndex]) {
+            results[currentIndex].click();
+        }
+    }
+}
+
+function selectQuickSwitcherItem(results, index) {
+    results.forEach(item => item.classList.remove('selected'));
+    results[index].classList.add('selected');
+    results[index].scrollIntoView({ block: 'nearest' });
+}
+
+function loadQuickSwitcherResults(query) {
+    const resultsContainer = document.getElementById('quick-switcher-results');
+    if (!resultsContainer) return;
+    
+    let html = '';
+    let hasResults = false;
+    
+    // Search servers
+    const matchingServers = state.servers.filter(server => 
+        server.name.toLowerCase().includes(query)
+    );
+    
+    if (matchingServers.length > 0) {
+        html += '<div class="quick-switcher-section">Sunucular</div>';
+        matchingServers.forEach(server => {
+            html += `
+                <div class="quick-switcher-item" onclick="switchToServer('${server.id}'); hideModal();">
+                    <div class="quick-switcher-icon">🏠</div>
+                    <div class="quick-switcher-info">
+                        <div class="quick-switcher-title">${escapeHtml(server.name)}</div>
+                        <div class="quick-switcher-subtitle">Sunucu</div>
+                    </div>
+                </div>
+            `;
+        });
+        hasResults = true;
+    }
+    
+    // Search channels
+    const currentServer = state.servers.find(s => s.id === state.activeServerId);
+    if (currentServer) {
+        const matchingChannels = currentServer.channels.filter(channel => 
+            channel.name.toLowerCase().includes(query)
+        );
+        
+        if (matchingChannels.length > 0) {
+            if (hasResults) html += '<div class="quick-switcher-divider"></div>';
+            html += '<div class="quick-switcher-section">Kanallar</div>';
+            matchingChannels.forEach(channel => {
+                const icon = channel.type === 'voice' ? '🎤' : '💬';
+                html += `
+                    <div class="quick-switcher-item" onclick="switchToChannel('${channel.id}'); hideModal();">
+                        <div class="quick-switcher-icon">${icon}</div>
+                        <div class="quick-switcher-info">
+                            <div class="quick-switcher-title">${escapeHtml(channel.name)}</div>
+                            <div class="quick-switcher-subtitle">${channel.type === 'voice' ? 'Sesli Kanal' : 'Metin Kanalı'}</div>
+                        </div>
+                    </div>
+                `;
+            });
+            hasResults = true;
+        }
+    }
+    
+    // Search users
+    const allUsers = new Set();
+    state.servers.forEach(server => {
+        Object.keys(server.peer_roles || {}).forEach(userId => allUsers.add(userId));
+    });
+    
+    const matchingUsers = Array.from(allUsers).filter(userId => {
+        const user = state.peerInfo?.[userId];
+        return user && user.username && user.username.toLowerCase().includes(query);
+    });
+    
+    if (matchingUsers.length > 0) {
+        if (hasResults) html += '<div class="quick-switcher-divider"></div>';
+        html += '<div class="quick-switcher-section">Kullanıcılar</div>';
+        matchingUsers.forEach(userId => {
+            const user = state.peerInfo?.[userId];
+            if (user) {
+                html += `
+                    <div class="quick-switcher-item" onclick="openDMWithUser('${userId}'); hideModal();">
+                        <div class="quick-switcher-icon">👤</div>
+                        <div class="quick-switcher-info">
+                            <div class="quick-switcher-title">${escapeHtml(user.username)}</div>
+                            <div class="quick-switcher-subtitle">Kullanıcı</div>
+                        </div>
+                    </div>
+                `;
+            }
+        });
+    }
+    
+    if (!hasResults) {
+        html = '<div class="quick-switcher-empty">Sonuç bulunamadı</div>';
+    }
+    
+    resultsContainer.innerHTML = html;
+}
+
+function showKeyboardShortcutsModal() {
+    const shortcuts = [
+        { category: 'Gezinme', shortcuts: [
+            { key: 'Ctrl+K', description: 'Hızlı geçiş menüsünü aç' },
+            { key: 'Ctrl+N', description: 'Yeni oluştur menüsünü aç' },
+            { key: 'Alt+↑/↓', description: 'Kanallar arasında gezin' },
+            { key: 'Alt+←/→', description: 'Sunucular arasında gezin' }
+        ]},
+        { category: 'Mesajlaşma', shortcuts: [
+            { key: 'Ctrl+Enter', description: 'Mesajı gönder' },
+            { key: 'Shift+Enter', description: 'Yeni satır ekle' },
+            { key: 'Ctrl+I', description: 'İtalik yap' },
+            { key: 'Ctrl+B', description: 'Kalın yap' },
+            { key: 'Ctrl+U', description: 'Altı çizili yap' }
+        ]},
+        { category: 'Arama', shortcuts: [
+            { key: 'Ctrl+F', description: 'Arama kutusuna odaklan' },
+            { key: 'Ctrl+Shift+F', description: 'Mevcut kanalda ara' },
+            { key: 'Ctrl+G', description: 'Mesaja git' },
+            { key: 'Ctrl+Shift+G', description: 'Sonraki okunmamışa git' }
+        ]},
+        { category: 'Sesli', shortcuts: [
+            { key: 'Ctrl+M', description: 'Mikrofonu aç/kapat' },
+            { key: 'Ctrl+Shift+M', description: 'Sesi kapat/aç' },
+            { key: 'Ctrl+Shift+S', description: 'Ekran paylaşımını başlat' },
+            { key: 'Ctrl+Shift+C', description: 'Kamera paylaşımını başlat' }
+        ]},
+        { category: 'Ayarlar', shortcuts: [
+            { key: 'Ctrl+,', description: 'Ayarları aç' },
+            { key: 'Ctrl+Shift+T', description: 'Tema ayarlarını aç' },
+            { key: 'Ctrl+Shift+N', description: 'Bildirim ayarlarını aç' },
+            { key: 'Ctrl+Shift+L', description: 'Koyu/açık mod değiştir' }
+        ]},
+        { category: 'Yardımcı', shortcuts: [
+            { key: 'Escape', description: 'Mevcut modalı kapat' },
+            { key: 'F1', description: 'Klavye kısayollarını göster' },
+            { key: 'F11', description: 'Tam ekran modu' }
+        ]}
+    ];
+    
+    let html = '<div class="keyboard-shortcuts-list">';
+    
+    shortcuts.forEach(category => {
+        html += `
+            <div class="shortcut-category">
+                <div class="shortcut-category-title">${category.category}</div>
+                <div class="shortcut-items">
+        `;
+        
+        category.shortcuts.forEach(shortcut => {
+            html += `
+                <div class="shortcut-item">
+                    <div class="shortcut-keys">${shortcut.key}</div>
+                    <div class="shortcut-description">${shortcut.description}</div>
+                </div>
+            `;
+        });
+        
+        html += `
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    
+    showModal("Klavye Kısayolları", html, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+// Shortcut implementations
+function createNewServer() {
+    showCreateServerModal();
+}
+
+function createNewChannel() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (server) {
+        showCreateChannelModal(server.id);
+    }
+}
+
+function createNewRole() {
+    showRoleManagementModal();
+}
+
+function sendMessage() {
+    const input = document.getElementById('message-input');
+    if (input && input.value.trim()) {
+        sendChatMessage();
+    }
+}
+
+function addNewLineToMessage(e) {
+    const input = document.getElementById('message-input');
+    if (input) {
+        const start = input.selectionStart;
+        const end = input.selectionEnd;
+        const value = input.value;
+        
+        input.value = value.substring(0, start) + '\n' + value.substring(end);
+        input.selectionStart = input.selectionEnd = start + 1;
+    }
+}
+
+function sendFormattedMessage() {
+    // Implement formatted message sending
+    sendMessage();
+}
+
+function toggleItalic() {
+    toggleMessageFormat('italic');
+}
+
+function toggleBold() {
+    toggleMessageFormat('bold');
+}
+
+function toggleUnderline() {
+    toggleMessageFormat('underline');
+}
+
+function toggleStrikethrough() {
+    toggleMessageFormat('strikethrough');
+}
+
+function toggleCode() {
+    toggleMessageFormat('code');
+}
+
+function toggleCodeBlock() {
+    toggleMessageFormat('codeblock');
+}
+
+function toggleMessageFormat(format) {
+    const input = document.getElementById('message-input');
+    if (!input) return;
+    
+    const start = input.selectionStart;
+    const end = input.selectionEnd;
+    const selectedText = input.value.substring(start, end);
+    
+    let formattedText = '';
+    switch (format) {
+        case 'italic':
+            formattedText = `*${selectedText}*`;
+            break;
+        case 'bold':
+            formattedText = `**${selectedText}**`;
+            break;
+        case 'underline':
+            formattedText = `__${selectedText}__`;
+            break;
+        case 'strikethrough':
+            formattedText = `~~${selectedText}~~`;
+            break;
+        case 'code':
+            formattedText = `\`${selectedText}\``;
+            break;
+        case 'codeblock':
+            formattedText = `\`\`\`\n${selectedText}\n\`\`\``;
+            break;
+    }
+    
+    input.value = input.value.substring(0, start) + formattedText + input.value.substring(end);
+    input.selectionStart = start + 1;
+    input.selectionEnd = start + formattedText.length - 1;
+    input.focus();
+}
+
+function focusSearchInput() {
+    const searchInput = document.querySelector('#search-input');
+    if (searchInput) {
+        searchInput.focus();
+    } else {
+        // Create search input if it doesn't exist
+        showSearchModal();
+    }
+}
+
+function searchInCurrentChannel() {
+    showSearchModal();
+}
+
+function goToMessage() {
+    const messageId = prompt('Mesaj ID:');
+    if (messageId) {
+        jumpToMessage(messageId);
+    }
+}
+
+function goToNextUnread() {
+    // Implement next unread message navigation
+    toast('Sonraki okunmamış mesaja gidiliyor', 'info');
+}
+
+function moveToPreviousChannel() {
+    // Implement channel navigation
+    toast('Önceki kanala geçiliyor', 'info');
+}
+
+function moveToNextChannel() {
+    // Implement channel navigation
+    toast('Sonraki kanala geçiliyor', 'info');
+}
+
+function moveToPreviousServer() {
+    // Implement server navigation
+    toast('Önceki sunucuya geçiliyor', 'info');
+}
+
+function moveToNextServer() {
+    // Implement server navigation
+    toast('Sonraki sunucuya geçiliyor', 'info');
+}
+
+function toggleMicrophone() {
+    if (state.mesh && state.mesh.voiceActive) {
+        toggleMute();
+    }
+}
+
+function toggleDeafen() {
+    if (state.mesh && state.mesh.voiceActive) {
+        toggleDeafen();
+    }
+}
+
+function openProfileSettings() {
+    showProfileSettingsModal();
+}
+
+function showUserSettings() {
+    showUserSettingsModal();
+}
+
+function toggleDarkMode() {
+    const currentTheme = state.theme || 'sapphire';
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    selectTheme(newTheme);
+}
+
+function toggleAnimations() {
+    const enabled = state.settings?.animations !== false;
+    updateAnimations(!enabled);
+}
+
+function toggleCompactMode() {
+    const current = state.settings?.messageDensity || 'cozy';
+    const densities = ['comfortable', 'cozy', 'compact'];
+    const currentIndex = densities.indexOf(current);
+    const nextIndex = (currentIndex + 1) % densities.length;
+    updateMessageDensity(densities[nextIndex]);
+}
+
+function showHelpModal() {
+    showKeyboardShortcutsModal();
+}
+
+function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen();
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+function closeCurrentModal() {
+    hideModal();
+}
+
+function openDMWithUser(userId) {
+    // Implement DM opening
+    toast(`DM açılıyor: ${userId}`, 'info');
+}
+
+function switchToChannel(channelId) {
+    // Implement channel switching
+    toast(`Kanala geçiliyor: ${channelId}`, 'info');
+}
+
+// Voice Recording and Call History System
+function showVoiceRecordingModal() {
+    const modalContent = `
+        <div class="voice-recording-modal">
+            <div class="voice-recording-header">
+                <div class="voice-recording-title">🎙️ Ses Kaydı</div>
+                <div class="voice-recording-subtitle">Sesli mesajlar ve aramalar</div>
+            </div>
+            <div class="voice-recording-tabs">
+                <button class="voice-recording-tab active" data-tab="record">Kayıt</button>
+                <button class="voice-recording-tab" data-tab="history">Geçmiş</button>
+                <button class="voice-recording-tab" data-tab="settings">Ayarlar</button>
+            </div>
+            <div class="voice-recording-content" id="voice-recording-content">
+                <!-- Content will be loaded dynamically -->
+            </div>
+        </div>
+    `;
+    
+    showModal("Ses Kaydı", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+    
+    // Initialize tabs
+    initializeVoiceRecordingTabs();
+    loadVoiceRecordingContent();
+}
+
+function initializeVoiceRecordingTabs() {
+    const tabs = document.querySelectorAll('.voice-recording-tab');
+    const content = document.getElementById('voice-recording-content');
+    
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const tabName = tab.getAttribute('data-tab');
+            switch(tabName) {
+                case 'record':
+                    loadVoiceRecordingContent();
+                    break;
+                case 'history':
+                    loadVoiceHistoryContent();
+                    break;
+                case 'settings':
+                    loadVoiceSettingsContent();
+                    break;
+            }
+        });
+    });
+}
+
+function loadVoiceRecordingContent() {
+    const content = document.getElementById('voice-recording-content');
+    
+    const html = `
+        <div class="voice-recording-interface">
+            <div class="recording-controls">
+                <div class="recording-status" id="recording-status">Hazır</div>
+                <div class="recording-timer" id="recording-timer">00:00</div>
+                <div class="recording-actions">
+                    <button class="btn-record" id="start-recording-btn" onclick="startVoiceRecording()">
+                        <span class="record-icon">🔴</span>
+                        Kayıt Başlat
+                    </button>
+                    <button class="btn-stop" id="stop-recording-btn" onclick="stopVoiceRecording()" style="display: none;">
+                        <span class="stop-icon">⏹️</span>
+                        Durdur
+                    </button>
+                    <button class="btn-pause" id="pause-recording-btn" onclick="pauseVoiceRecording()" style="display: none;">
+                        <span class="pause-icon">⏸️</span>
+                        Duraklat
+                    </button>
+                </div>
+            </div>
+            <div class="recording-visualizer" id="recording-visualizer">
+                <div class="visualizer-bars">
+                    ${Array(20).fill(0).map(() => '<div class="visualizer-bar"></div>').join('')}
+                </div>
+            </div>
+            <div class="recording-options">
+                <div class="option-group">
+                    <label>Kalite:</label>
+                    <select id="recording-quality">
+                        <option value="low">Düşük (8kHz)</option>
+                        <option value="medium" selected>Orta (16kHz)</option>
+                        <option value="high">Yüksek (44.1kHz)</option>
+                    </select>
+                </div>
+                <div class="option-group">
+                    <label>Format:</label>
+                    <select id="recording-format">
+                        <option value="webm" selected>WebM</option>
+                        <option value="mp3">MP3</option>
+                        <option value="wav">WAV</option>
+                    </select>
+                </div>
+                <div class="option-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="auto-send" checked>
+                        Kaydı otomatik gönder
+                    </label>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    content.innerHTML = html;
+}
+
+function loadVoiceHistoryContent() {
+    const content = document.getElementById('voice-recording-content');
+    const recordings = getVoiceRecordings();
+    const calls = getCallHistory();
+    
+    let html = '<div class="voice-history">';
+    
+    // Recent recordings
+    html += `
+        <div class="history-section">
+            <div class="history-title">🎙️ Son Kayıtlar</div>
+            <div class="history-list">
+    `;
+    
+    if (recordings.length > 0) {
+        recordings.slice(0, 5).forEach(recording => {
+            html += `
+                <div class="history-item voice-recording-item">
+                    <div class="history-icon">🎙️</div>
+                    <div class="history-info">
+                        <div class="history-name">${recording.name || 'Ses Kaydı'}</div>
+                        <div class="history-details">${formatDuration(recording.duration)} • ${new Date(recording.timestamp).toLocaleDateString('tr-TR')}</div>
+                    </div>
+                    <div class="history-actions">
+                        <button class="btn-play" onclick="playVoiceRecording('${recording.id}')">▶️</button>
+                        <button class="btn-send" onclick="sendVoiceRecording('${recording.id}')">📤</button>
+                        <button class="btn-delete" onclick="deleteVoiceRecording('${recording.id}')">🗑️</button>
+                    </div>
+                </div>
+            `;
+        });
+    } else {
+        html += '<div class="history-empty">Henüz kayıt yok</div>';
+    }
+    
+    html += `
+            </div>
+        </div>
+        <div class="history-section">
+            <div class="history-title">📞 Arama Geçmişi</div>
+            <div class="history-list">
+    `;
+    
+    if (calls.length > 0) {
+        calls.slice(0, 5).forEach(call => {
+            const icon = call.type === 'incoming' ? '📞' : '📱';
+            const status = call.status === 'completed' ? '✅' : call.status === 'missed' ? '❌' : '⏹️';
+            html += `
+                <div class="history-item call-item">
+                    <div class="history-icon">${icon}</div>
+                    <div class="history-info">
+                        <div class="history-name">${call.participant}</div>
+                        <div class="history-details">${formatDuration(call.duration)} • ${new Date(call.timestamp).toLocaleDateString('tr-TR')}</div>
+                    </div>
+                    <div class="history-status">${status}</div>
+                </div>
+            `;
+        });
+    } else {
+        html += '<div class="history-empty">Arama geçmişi yok</div>';
+    }
+    
+    html += `
+            </div>
+        </div>
+    </div>`;
+    
+    content.innerHTML = html;
+}
+
+function loadVoiceSettingsContent() {
+    const content = document.getElementById('voice-recording-content');
+    const settings = getVoiceRecordingSettings();
+    
+    const html = `
+        <div class="voice-settings">
+            <div class="settings-group">
+                <div class="settings-title">Kayıt Ayarları</div>
+                <div class="settings-options">
+                    <div class="setting-item">
+                        <label>Varsayılan Kalite:</label>
+                        <select id="default-quality" onchange="updateVoiceSetting('defaultQuality', this.value)">
+                            <option value="low" ${settings.defaultQuality === 'low' ? 'selected' : ''}>Düşük (8kHz)</option>
+                            <option value="medium" ${settings.defaultQuality === 'medium' ? 'selected' : ''}>Orta (16kHz)</option>
+                            <option value="high" ${settings.defaultQuality === 'high' ? 'selected' : ''}>Yüksek (44.1kHz)</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label>Varsayılan Format:</label>
+                        <select id="default-format" onchange="updateVoiceSetting('defaultFormat', this.value)">
+                            <option value="webm" ${settings.defaultFormat === 'webm' ? 'selected' : ''}>WebM</option>
+                            <option value="mp3" ${settings.defaultFormat === 'mp3' ? 'selected' : ''}>MP3</option>
+                            <option value="wav" ${settings.defaultFormat === 'wav' ? 'selected' : ''}>WAV</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label>Maksimum Kayıt Süresi (dakika):</label>
+                        <input type="number" id="max-duration" min="1" max="60" value="${settings.maxDuration}" onchange="updateVoiceSetting('maxDuration', this.value)">
+                    </div>
+                </div>
+            </div>
+            <div class="settings-group">
+                <div class="settings-title">Arama Ayarları</div>
+                <div class="settings-options">
+                    <div class="setting-item">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="auto-record-calls" ${settings.autoRecordCalls ? 'checked' : ''} onchange="updateVoiceSetting('autoRecordCalls', this.checked)">
+                            Aramaları otomatik kaydet
+                        </label>
+                    </div>
+                    <div class="setting-item">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="save-call-history" ${settings.saveCallHistory ? 'checked' : ''} onchange="updateVoiceSetting('saveCallHistory', this.checked)">
+                            Arama geçmişini kaydet
+                        </label>
+                    </div>
+                    <div class="setting-item">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="noise-suppression" ${settings.noiseSuppression ? 'checked' : ''} onchange="updateVoiceSetting('noiseSuppression', this.checked)">
+                            Gürültü bastırma
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-group">
+                <div class="settings-title">Depolama</div>
+                <div class="settings-options">
+                    <div class="setting-item">
+                        <label>Depolama Alanı:</label>
+                        <div class="storage-info">
+                            <div class="storage-bar">
+                                <div class="storage-used" style="width: ${getStorageUsagePercentage()}%"></div>
+                            </div>
+                            <div class="storage-text">${formatBytes(getStorageUsed())} / ${formatBytes(getStorageLimit())}</div>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <button class="btn-secondary" onclick="clearVoiceRecordings()">Tüm Kayıtları Temizle</button>
+                        <button class="btn-secondary" onclick="clearCallHistory()">Arama Geçmişini Temizle</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    content.innerHTML = html;
+}
+
+// Voice recording functionality
+let mediaRecorder = null;
+let recordingChunks = [];
+let recordingStartTime = null;
+let recordingTimer = null;
+let isPaused = false;
+
+async function startVoiceRecording() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: getVoiceRecordingSettings().noiseSuppression,
+                sampleRate: getSampleRate()
+            }
+        });
+        
+        const quality = document.getElementById('recording-quality')?.value || 'medium';
+        const format = document.getElementById('recording-format')?.value || 'webm';
+        
+        mediaRecorder = new MediaRecorder(stream, {
+            mimeType: getMimeType(format)
+        });
+        
+        recordingChunks = [];
+        recordingStartTime = Date.now();
+        isPaused = false;
+        
+        mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                recordingChunks.push(event.data);
+            }
+        };
+        
+        mediaRecorder.onstop = () => {
+            handleRecordingComplete();
+        };
+        
+        mediaRecorder.start(100); // Collect data every 100ms
+        
+        // Update UI
+        updateRecordingUI('recording');
+        startRecordingTimer();
+        startVisualizer(stream);
+        
+        toast('Kayıt başlatıldı', 'success');
+    } catch (error) {
+        console.error('Recording error:', error);
+        toast('Mikrofon erişimi reddedildi', 'error');
+    }
+}
+
+function stopVoiceRecording() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(track => track.stop());
+    }
+    
+    stopRecordingTimer();
+    stopVisualizer();
+    updateRecordingUI('stopped');
+}
+
+function pauseVoiceRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.pause();
+        isPaused = true;
+        stopRecordingTimer();
+        updateRecordingUI('paused');
+        toast('Kayıt duraklatıldı', 'info');
+    } else if (mediaRecorder && mediaRecorder.state === 'paused') {
+        mediaRecorder.resume();
+        isPaused = false;
+        startRecordingTimer();
+        updateRecordingUI('recording');
+        toast('Kayıt devam ediyor', 'info');
+    }
+}
+
+function handleRecordingComplete() {
+    const blob = new Blob(recordingChunks, { type: getMimeType() });
+    const duration = Date.now() - recordingStartTime;
+    
+    // Save recording
+    const recording = {
+        id: generateId(),
+        name: `Kayıt ${new Date().toLocaleTimeString('tr-TR')}`,
+        blob: blob,
+        duration: duration,
+        timestamp: Date.now(),
+        quality: document.getElementById('recording-quality')?.value || 'medium',
+        format: document.getElementById('recording-format')?.value || 'webm'
+    };
+    
+    saveVoiceRecording(recording);
+    
+    // Auto send if enabled
+    if (document.getElementById('auto-send')?.checked) {
+        sendVoiceRecording(recording.id);
+    }
+    
+    toast('Kayıt tamamlandı', 'success');
+    updateRecordingUI('ready');
+}
+
+function updateRecordingUI(status) {
+    const startBtn = document.getElementById('start-recording-btn');
+    const stopBtn = document.getElementById('stop-recording-btn');
+    const pauseBtn = document.getElementById('pause-recording-btn');
+    const statusEl = document.getElementById('recording-status');
+    
+    switch(status) {
+        case 'recording':
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'block';
+            pauseBtn.style.display = 'block';
+            statusEl.textContent = 'Kaydediliyor...';
+            statusEl.className = 'recording-status recording';
+            break;
+        case 'paused':
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'block';
+            pauseBtn.style.display = 'block';
+            pauseBtn.innerHTML = '<span class="resume-icon">▶️</span>Devam Et';
+            statusEl.textContent = 'Duraklatıldı';
+            statusEl.className = 'recording-status paused';
+            break;
+        case 'stopped':
+            startBtn.style.display = 'block';
+            stopBtn.style.display = 'none';
+            pauseBtn.style.display = 'none';
+            statusEl.textContent = 'Hazır';
+            statusEl.className = 'recording-status';
+            break;
+        case 'ready':
+            startBtn.style.display = 'block';
+            stopBtn.style.display = 'none';
+            pauseBtn.style.display = 'none';
+            statusEl.textContent = 'Hazır';
+            statusEl.className = 'recording-status';
+            break;
+    }
+}
+
+function startRecordingTimer() {
+    recordingTimer = setInterval(() => {
+        const elapsed = Date.now() - recordingStartTime;
+        const minutes = Math.floor(elapsed / 60000);
+        const seconds = Math.floor((elapsed % 60000) / 1000);
+        const timerEl = document.getElementById('recording-timer');
+        if (timerEl) {
+            timerEl.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+        
+        // Check max duration
+        const maxDuration = getVoiceRecordingSettings().maxDuration * 60000;
+        if (elapsed >= maxDuration) {
+            stopVoiceRecording();
+            toast('Maksimum kayıt süresine ulaşıldı', 'warning');
+        }
+    }, 1000);
+}
+
+function stopRecordingTimer() {
+    if (recordingTimer) {
+        clearInterval(recordingTimer);
+        recordingTimer = null;
+    }
+}
+
+// Visualizer
+let audioContext = null;
+let analyser = null;
+let dataArray = null;
+let animationId = null;
+
+function startVisualizer(stream) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(stream);
+    
+    analyser.fftSize = 256;
+    const bufferLength = analyser.frequencyBinCount;
+    dataArray = new Uint8Array(bufferLength);
+    
+    source.connect(analyser);
+    
+    function draw() {
+        animationId = requestAnimationFrame(draw);
+        
+        analyser.getByteFrequencyData(dataArray);
+        
+        const bars = document.querySelectorAll('.visualizer-bar');
+        const step = Math.floor(dataArray.length / bars.length);
+        
+        bars.forEach((bar, index) => {
+            const value = dataArray[index * step];
+            const height = Math.max(4, (value / 255) * 40);
+            bar.style.height = height + 'px';
+        });
+    }
+    
+    draw();
+}
+
+function stopVisualizer() {
+    if (animationId) {
+        cancelAnimationFrame(animationId);
+        animationId = null;
+    }
+    
+    if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+    }
+    
+    // Reset bars
+    document.querySelectorAll('.visualizer-bar').forEach(bar => {
+        bar.style.height = '4px';
+    });
+}
+
+// Storage and management functions
+function saveVoiceRecording(recording) {
+    const recordings = getVoiceRecordings();
+    recordings.push(recording);
+    
+    // Keep only last 50 recordings
+    if (recordings.length > 50) {
+        recordings.shift();
+    }
+    
+    localStorage.setItem('scord_voice_recordings', JSON.stringify(recordings.map(r => ({
+        id: r.id,
+        name: r.name,
+        duration: r.duration,
+        timestamp: r.timestamp,
+        quality: r.quality,
+        format: r.format,
+        dataUrl: r.blob ? URL.createObjectURL(r.blob) : null
+    }))));
+}
+
+function getVoiceRecordings() {
+    try {
+        const saved = localStorage.getItem('scord_voice_recordings');
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        console.warn("Failed to load voice recordings:", e);
+        return [];
+    }
+}
+
+function playVoiceRecording(recordingId) {
+    const recordings = getVoiceRecordings();
+    const recording = recordings.find(r => r.id === recordingId);
+    
+    if (recording && recording.dataUrl) {
+        const audio = new Audio(recording.dataUrl);
+        audio.play();
+        toast('Kayıt oynatılıyor', 'info');
+    }
+}
+
+function sendVoiceRecording(recordingId) {
+    const recordings = getVoiceRecordings();
+    const recording = recordings.find(r => r.id === recordingId);
+    
+    if (recording && recording.dataUrl) {
+        // Send voice message to current channel
+        const message = {
+            type: 'voice',
+            recordingId: recordingId,
+            name: recording.name,
+            duration: recording.duration,
+            dataUrl: recording.dataUrl
+        };
+        
+        // This would integrate with the existing message sending system
+        toast('Sesli mesaj gönderildi', 'success');
+    }
+}
+
+function deleteVoiceRecording(recordingId) {
+    if (confirm('Bu kaydı silmek istediğinizden emin misiniz?')) {
+        const recordings = getVoiceRecordings();
+        const index = recordings.findIndex(r => r.id === recordingId);
+        
+        if (index !== -1) {
+            recordings.splice(index, 1);
+            localStorage.setItem('scord_voice_recordings', JSON.stringify(recordings));
+            loadVoiceHistoryContent();
+            toast('Kayıt silindi', 'success');
+        }
+    }
+}
+
+function getCallHistory() {
+    try {
+        const saved = localStorage.getItem('scord_call_history');
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        console.warn("Failed to load call history:", e);
+        return [];
+    }
+}
+
+function saveCallToHistory(call) {
+    const calls = getCallHistory();
+    calls.push(call);
+    
+    // Keep only last 100 calls
+    if (calls.length > 100) {
+        calls.shift();
+    }
+    
+    localStorage.setItem('scord_call_history', JSON.stringify(calls));
+}
+
+// Utility functions
+function getVoiceRecordingSettings() {
+    try {
+        const saved = localStorage.getItem('scord_voice_settings');
+        return saved ? JSON.parse(saved) : {
+            defaultQuality: 'medium',
+            defaultFormat: 'webm',
+            maxDuration: 10,
+            autoRecordCalls: false,
+            saveCallHistory: true,
+            noiseSuppression: true
+        };
+    } catch (e) {
+        return {
+            defaultQuality: 'medium',
+            defaultFormat: 'webm',
+            maxDuration: 10,
+            autoRecordCalls: false,
+            saveCallHistory: true,
+            noiseSuppression: true
+        };
+    }
+}
+
+function updateVoiceSetting(key, value) {
+    const settings = getVoiceRecordingSettings();
+    settings[key] = value;
+    localStorage.setItem('scord_voice_settings', JSON.stringify(settings));
+    toast('Ayar güncellendi', 'success');
+}
+
+function getSampleRate() {
+    const quality = document.getElementById('recording-quality')?.value || 'medium';
+    switch(quality) {
+        case 'low': return 8000;
+        case 'medium': return 16000;
+        case 'high': return 44100;
+        default: return 16000;
+    }
+}
+
+function getMimeType(format) {
+    switch(format) {
+        case 'webm': return 'audio/webm';
+        case 'mp3': return 'audio/mpeg';
+        case 'wav': return 'audio/wav';
+        default: return 'audio/webm';
+    }
+}
+
+function formatDuration(ms) {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function getStorageUsed() {
+    const recordings = getVoiceRecordings();
+    return recordings.reduce((total, recording) => {
+        // Estimate size based on duration and quality
+        const bitrate = recording.quality === 'high' ? 128000 : recording.quality === 'medium' ? 64000 : 32000;
+        return total + (recording.duration * bitrate / 8);
+    }, 0);
+}
+
+function getStorageLimit() {
+    return 100 * 1024 * 1024; // 100MB
+}
+
+function getStorageUsagePercentage() {
+    return Math.min(100, (getStorageUsed() / getStorageLimit()) * 100);
+}
+
+function clearVoiceRecordings() {
+    if (confirm('Tüm ses kayıtlarını silmek istediğinizden emin misiniz?')) {
+        localStorage.removeItem('scord_voice_recordings');
+        loadVoiceHistoryContent();
+        toast('Tüm kayıtlar silindi', 'success');
+    }
+}
+
+function clearCallHistory() {
+    if (confirm('Arama geçmişini silmek istediğinizden emin misiniz?')) {
+        localStorage.removeItem('scord_call_history');
+        loadVoiceHistoryContent();
+        toast('Arama geçmişi silindi', 'success');
+    }
+}
+
+function generateId() {
+    return Date.now().toString(36) + Math.random().toString(36).substr(2);
+}
+
+// Screen Recording with Voice System
+function showScreenRecordingModal() {
+    const modalContent = `
+        <div class="screen-recording-modal">
+            <div class="screen-recording-header">
+                <div class="screen-recording-title">🎬 Ekran Kaydı</div>
+                <div class="screen-recording-subtitle">Ekranı sesle birlikte kaydet</div>
+            </div>
+            <div class="screen-recording-content">
+                <div class="recording-setup">
+                    <div class="setup-section">
+                        <div class="setup-title">Kayıt Kaynakları</div>
+                        <div class="setup-options">
+                            <div class="option-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="record-screen" checked>
+                                    🖥️ Ekranı Kaydet
+                                </label>
+                            </div>
+                            <div class="option-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="record-camera">
+                                    📷 Kamerayı Kaydet
+                                </label>
+                            </div>
+                            <div class="option-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="record-microphone" checked>
+                                    🎤 Mikrofonu Kaydet
+                                </label>
+                            </div>
+                            <div class="option-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="record-system-audio">
+                                    🔊 Sistem Sesini Kaydet
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="setup-section">
+                        <div class="setup-title">Kayıt Ayarları</div>
+                        <div class="setup-options">
+                            <div class="option-group">
+                                <label>Video Kalitesi:</label>
+                                <select id="video-quality">
+                                    <option value="360p">360p (SD)</option>
+                                    <option value="720p" selected>720p (HD)</option>
+                                    <option value="1080p">1080p (Full HD)</option>
+                                    <option value="4k">4K (Ultra HD)</option>
+                                </select>
+                            </div>
+                            <div class="option-group">
+                                <label>Video Formatı:</label>
+                                <select id="video-format">
+                                    <option value="webm" selected>WebM</option>
+                                    <option value="mp4">MP4</option>
+                                    <option value="mov">MOV</option>
+                                </select>
+                            </div>
+                            <div class="option-group">
+                                <label>Çerçeve Oranı (FPS):</label>
+                                <select id="frame-rate">
+                                    <option value="15">15 FPS</option>
+                                    <option value="30" selected>30 FPS</option>
+                                    <option value="60">60 FPS</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="setup-section">
+                        <div class="setup-title">Ekran Seçimi</div>
+                        <div class="screen-options">
+                            <div class="screen-option" onclick="selectEntireScreen()">
+                                <div class="screen-preview entire-screen">
+                                    <div class="screen-icon">🖥️</div>
+                                    <div class="screen-label">Tüm Ekran</div>
+                                </div>
+                            </div>
+                            <div class="screen-option" onclick="selectApplicationWindow()">
+                                <div class="screen-preview application-window">
+                                    <div class="screen-icon">🪟</div>
+                                    <div class="screen-label">Uygulama Penceresi</div>
+                                </div>
+                            </div>
+                            <div class="screen-option" onclick="selectCustomArea()">
+                                <div class="screen-preview custom-area">
+                                    <div class="screen-icon">📐</div>
+                                    <div class="screen-label">Özel Alan</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="recording-controls">
+                    <div class="recording-status" id="screen-recording-status">Hazır</div>
+                    <div class="recording-timer" id="screen-recording-timer">00:00:00</div>
+                    <div class="recording-actions">
+                        <button class="btn-record" id="start-screen-recording-btn" onclick="startScreenRecording()">
+                            <span class="record-icon">🔴</span>
+                            Kaydı Başlat
+                        </button>
+                        <button class="btn-stop" id="stop-screen-recording-btn" onclick="stopScreenRecording()" style="display: none;">
+                            <span class="stop-icon">⏹️</span>
+                            Durdur
+                        </button>
+                        <button class="btn-pause" id="pause-screen-recording-btn" onclick="pauseScreenRecording()" style="display: none;">
+                            <span class="pause-icon">⏸️</span>
+                            Duraklat
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="recording-preview" id="screen-recording-preview" style="display: none;">
+                    <video id="preview-video" muted autoplay></video>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showModal("Ekran Kaydı", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+// Screen recording functionality
+let screenMediaRecorder = null;
+let screenRecordingChunks = [];
+let screenRecordingStartTime = null;
+let screenRecordingTimer = null;
+let screenRecordingStream = null;
+let selectedScreenSource = 'entire';
+let isScreenRecordingPaused = false;
+
+async function startScreenRecording() {
+    try {
+        const constraints = await getRecordingConstraints();
+        
+        // Get display media
+        screenRecordingStream = await navigator.mediaDevices.getDisplayMedia(constraints);
+        
+        // Add audio if requested
+        if (document.getElementById('record-microphone')?.checked) {
+            const audioStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true
+                }
+            });
+            
+            // Add audio tracks to the main stream
+            audioStream.getAudioTracks().forEach(track => {
+                screenRecordingStream.addTrack(track);
+            });
+        }
+        
+        const format = document.getElementById('video-format')?.value || 'webm';
+        
+        screenMediaRecorder = new MediaRecorder(screenRecordingStream, {
+            mimeType: getVideoMimeType(format)
+        });
+        
+        screenRecordingChunks = [];
+        screenRecordingStartTime = Date.now();
+        isScreenRecordingPaused = false;
+        
+        screenMediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+                screenRecordingChunks.push(event.data);
+            }
+        };
+        
+        screenMediaRecorder.onstop = () => {
+            handleScreenRecordingComplete();
+        };
+        
+        screenMediaRecorder.start(100); // Collect data every 100ms
+        
+        // Show preview
+        showRecordingPreview(screenRecordingStream);
+        
+        // Update UI
+        updateScreenRecordingUI('recording');
+        startScreenRecordingTimer();
+        
+        // Handle stream end
+        screenRecordingStream.getVideoTracks()[0].addEventListener('ended', () => {
+            stopScreenRecording();
+        });
+        
+        toast('Ekran kaydı başlatıldı', 'success');
+    } catch (error) {
+        console.error('Screen recording error:', error);
+        toast('Ekran kaydı başlatılamadı', 'error');
+    }
+}
+
+function stopScreenRecording() {
+    if (screenMediaRecorder && screenMediaRecorder.state !== 'inactive') {
+        screenMediaRecorder.stop();
+    }
+    
+    if (screenRecordingStream) {
+        screenRecordingStream.getTracks().forEach(track => track.stop());
+        screenRecordingStream = null;
+    }
+    
+    stopScreenRecordingTimer();
+    hideRecordingPreview();
+    updateScreenRecordingUI('stopped');
+}
+
+function pauseScreenRecording() {
+    if (screenMediaRecorder && screenMediaRecorder.state === 'recording') {
+        screenMediaRecorder.pause();
+        isScreenRecordingPaused = true;
+        stopScreenRecordingTimer();
+        updateScreenRecordingUI('paused');
+        toast('Ekran kaydı duraklatıldı', 'info');
+    } else if (screenMediaRecorder && screenMediaRecorder.state === 'paused') {
+        screenMediaRecorder.resume();
+        isScreenRecordingPaused = false;
+        startScreenRecordingTimer();
+        updateScreenRecordingUI('recording');
+        toast('Ekran kaydı devam ediyor', 'info');
+    }
+}
+
+async function getRecordingConstraints() {
+    const quality = document.getElementById('video-quality')?.value || '720p';
+    const frameRate = parseInt(document.getElementById('frame-rate')?.value || '30');
+    const recordScreen = document.getElementById('record-screen')?.checked !== false;
+    const recordCamera = document.getElementById('record-camera')?.checked;
+    
+    let videoConstraints = {};
+    
+    if (recordScreen && selectedScreenSource === 'entire') {
+        videoConstraints = {
+            width: { ideal: getVideoWidth(quality) },
+            height: { ideal: getVideoHeight(quality) },
+            frameRate: { ideal: frameRate },
+            displaySurface: 'monitor'
+        };
+    } else if (recordCamera) {
+        videoConstraints = {
+            width: { ideal: getVideoWidth(quality) },
+            height: { ideal: getVideoHeight(quality) },
+            frameRate: { ideal: frameRate }
+        };
+    }
+    
+    const constraints = {
+        video: recordScreen || recordCamera ? videoConstraints : false,
+        audio: document.getElementById('record-system-audio')?.checked ? {
+            echoCancellation: true,
+            noiseSuppression: true
+        } : false
+    };
+    
+    return constraints;
+}
+
+function getVideoWidth(quality) {
+    switch(quality) {
+        case '360p': return 640;
+        case '720p': return 1280;
+        case '1080p': return 1920;
+        case '4k': return 3840;
+        default: return 1280;
+    }
+}
+
+function getVideoHeight(quality) {
+    switch(quality) {
+        case '360p': return 360;
+        case '720p': return 720;
+        case '1080p': return 1080;
+        case '4k': return 2160;
+        default: return 720;
+    }
+}
+
+function getVideoMimeType(format) {
+    switch(format) {
+        case 'webm': return 'video/webm';
+        case 'mp4': return 'video/mp4';
+        case 'mov': return 'video/quicktime';
+        default: return 'video/webm';
+    }
+}
+
+function showRecordingPreview(stream) {
+    const preview = document.getElementById('screen-recording-preview');
+    const video = document.getElementById('preview-video');
+    
+    if (preview && video) {
+        preview.style.display = 'block';
+        video.srcObject = stream;
+    }
+}
+
+function hideRecordingPreview() {
+    const preview = document.getElementById('screen-recording-preview');
+    const video = document.getElementById('preview-video');
+    
+    if (preview && video) {
+        preview.style.display = 'none';
+        video.srcObject = null;
+    }
+}
+
+function updateScreenRecordingUI(status) {
+    const startBtn = document.getElementById('start-screen-recording-btn');
+    const stopBtn = document.getElementById('stop-screen-recording-btn');
+    const pauseBtn = document.getElementById('pause-screen-recording-btn');
+    const statusEl = document.getElementById('screen-recording-status');
+    
+    switch(status) {
+        case 'recording':
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'block';
+            pauseBtn.style.display = 'block';
+            statusEl.textContent = 'Kaydediliyor...';
+            statusEl.className = 'recording-status recording';
+            break;
+        case 'paused':
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'block';
+            pauseBtn.style.display = 'block';
+            pauseBtn.innerHTML = '<span class="resume-icon">▶️</span>Devam Et';
+            statusEl.textContent = 'Duraklatıldı';
+            statusEl.className = 'recording-status paused';
+            break;
+        case 'stopped':
+            startBtn.style.display = 'block';
+            stopBtn.style.display = 'none';
+            pauseBtn.style.display = 'none';
+            statusEl.textContent = 'Hazır';
+            statusEl.className = 'recording-status';
+            break;
+        case 'ready':
+            startBtn.style.display = 'block';
+            stopBtn.style.display = 'none';
+            pauseBtn.style.display = 'none';
+            statusEl.textContent = 'Hazır';
+            statusEl.className = 'recording-status';
+            break;
+    }
+}
+
+function startScreenRecordingTimer() {
+    screenRecordingTimer = setInterval(() => {
+        const elapsed = Date.now() - screenRecordingStartTime;
+        const hours = Math.floor(elapsed / 3600000);
+        const minutes = Math.floor((elapsed % 3600000) / 60000);
+        const seconds = Math.floor((elapsed % 60000) / 1000);
+        const timerEl = document.getElementById('screen-recording-timer');
+        if (timerEl) {
+            timerEl.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+    }, 1000);
+}
+
+function stopScreenRecordingTimer() {
+    if (screenRecordingTimer) {
+        clearInterval(screenRecordingTimer);
+        screenRecordingTimer = null;
+    }
+}
+
+function handleScreenRecordingComplete() {
+    const blob = new Blob(screenRecordingChunks, { type: getVideoMimeType() });
+    const duration = Date.now() - screenRecordingStartTime;
+    
+    // Save recording
+    const recording = {
+        id: generateId(),
+        name: `Ekran Kaydı ${new Date().toLocaleTimeString('tr-TR')}`,
+        blob: blob,
+        duration: duration,
+        timestamp: Date.now(),
+        quality: document.getElementById('video-quality')?.value || '720p',
+        format: document.getElementById('video-format')?.value || 'webm',
+        frameRate: document.getElementById('frame-rate')?.value || '30',
+        sources: {
+            screen: document.getElementById('record-screen')?.checked,
+            camera: document.getElementById('record-camera')?.checked,
+            microphone: document.getElementById('record-microphone')?.checked,
+            systemAudio: document.getElementById('record-system-audio')?.checked
+        }
+    };
+    
+    saveScreenRecording(recording);
+    
+    toast('Ekran kaydı tamamlandı', 'success');
+    updateScreenRecordingUI('ready');
+    
+    // Show download option
+    showRecordingDownloadOptions(recording);
+}
+
+function saveScreenRecording(recording) {
+    const recordings = getScreenRecordings();
+    recordings.push(recording);
+    
+    // Keep only last 20 recordings
+    if (recordings.length > 20) {
+        recordings.shift();
+    }
+    
+    localStorage.setItem('scord_screen_recordings', JSON.stringify(recordings.map(r => ({
+        id: r.id,
+        name: r.name,
+        duration: r.duration,
+        timestamp: r.timestamp,
+        quality: r.quality,
+        format: r.format,
+        frameRate: r.frameRate,
+        sources: r.sources,
+        dataUrl: r.blob ? URL.createObjectURL(r.blob) : null
+    }))));
+}
+
+function getScreenRecordings() {
+    try {
+        const saved = localStorage.getItem('scord_screen_recordings');
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        console.warn("Failed to load screen recordings:", e);
+        return [];
+    }
+}
+
+function showRecordingDownloadOptions(recording) {
+    const modalContent = `
+        <div class="recording-download-options">
+            <div class="download-title">🎬 Kayıt Tamamlandı</div>
+            <div class="download-info">
+                <div class="info-item">
+                    <span class="info-label">Süre:</span>
+                    <span class="info-value">${formatDuration(recording.duration)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Kalite:</span>
+                    <span class="info-value">${recording.quality} @ ${recording.frameRate}fps</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Format:</span>
+                    <span class="info-value">${recording.format.toUpperCase()}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Boyut:</span>
+                    <span class="info-value">${formatBytes(recording.blob.size)}</span>
+                </div>
+            </div>
+            <div class="download-actions">
+                <button class="btn-primary" onclick="downloadScreenRecording('${recording.id}')">
+                    💾 İndir
+                </button>
+                <button class="btn-secondary" onclick="shareScreenRecording('${recording.id}')">
+                    📤 Paylaş
+                </button>
+                <button class="btn-secondary" onclick="playScreenRecording('${recording.id}')">
+                    ▶️ Oynat
+                </button>
+            </div>
+        </div>
+    `;
+    
+    showModal("Kayıt Seçenekleri", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+function downloadScreenRecording(recordingId) {
+    const recordings = getScreenRecordings();
+    const recording = recordings.find(r => r.id === recordingId);
+    
+    if (recording && recording.dataUrl) {
+        const a = document.createElement('a');
+        a.href = recording.dataUrl;
+        a.download = `${recording.name}.${recording.format}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        toast('Kayıt indiriliyor', 'success');
+    }
+}
+
+function shareScreenRecording(recordingId) {
+    const recordings = getScreenRecordings();
+    const recording = recordings.find(r => r.id === recordingId);
+    
+    if (recording && recording.dataUrl) {
+        // Share to current channel
+        const message = {
+            type: 'screen-recording',
+            recordingId: recordingId,
+            name: recording.name,
+            duration: recording.duration,
+            quality: recording.quality,
+            format: recording.format,
+            dataUrl: recording.dataUrl
+        };
+        
+        // This would integrate with the existing message sending system
+        toast('Ekran kaydı paylaşıldı', 'success');
+    }
+}
+
+function playScreenRecording(recordingId) {
+    const recordings = getScreenRecordings();
+    const recording = recordings.find(r => r.id === recordingId);
+    
+    if (recording && recording.dataUrl) {
+        // Open video in new tab or modal
+        const videoWindow = window.open('', '_blank');
+        videoWindow.document.write(`
+            <html>
+                <head>
+                    <title>${recording.name}</title>
+                    <style>
+                        body { margin: 0; padding: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
+                        video { max-width: 100%; max-height: 100%; }
+                    </style>
+                </head>
+                <body>
+                    <video controls autoplay>
+                        <source src="${recording.dataUrl}" type="video/${recording.format}">
+                    </video>
+                </body>
+            </html>
+        `);
+        
+        toast('Kayıt oynatılıyor', 'info');
+    }
+}
+
+// Screen selection functions
+function selectEntireScreen() {
+    selectedScreenSource = 'entire';
+    updateScreenSelectionUI('entire');
+}
+
+function selectApplicationWindow() {
+    selectedScreenSource = 'window';
+    updateScreenSelectionUI('window');
+}
+
+function selectCustomArea() {
+    selectedScreenSource = 'area';
+    updateScreenSelectionUI('area');
+}
+
+function updateScreenSelectionUI(selection) {
+    document.querySelectorAll('.screen-option').forEach(option => {
+        option.classList.remove('selected');
+    });
+    
+    const selectedOption = Array.from(document.querySelectorAll('.screen-option')).find(option => {
+        const preview = option.querySelector('.screen-preview');
+        return preview.classList.contains(`${selection}-screen`) || 
+               preview.classList.contains(`${selection}-window`) || 
+               preview.classList.contains(`${selection}-area`);
+    });
+    
+    if (selectedOption) {
+        selectedOption.classList.add('selected');
+    }
+}
+
+// Enhanced File Sharing with Previews System
+function showFileSharingModal() {
+    const modalContent = `
+        <div class="file-sharing-modal">
+            <div class="file-sharing-header">
+                <div class="file-sharing-title">📁 Dosya Paylaşımı</div>
+                <div class="file-sharing-subtitle">Dosya yükle ve önizle</div>
+            </div>
+            <div class="file-sharing-content">
+                <div class="file-upload-area" id="file-upload-area">
+                    <div class="upload-zone" id="upload-zone">
+                        <div class="upload-icon">📤</div>
+                        <div class="upload-text">
+                            <div class="upload-title">Dosyaları buraya sürükle</div>
+                            <div class="upload-subtitle">veya tıklayarak seç</div>
+                        </div>
+                        <input type="file" id="file-input" multiple accept="*" style="display: none;">
+                        <button class="btn-secondary" onclick="document.getElementById('file-input').click()">
+                            Dosya Seç
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="file-preview-section" id="file-preview-section" style="display: none;">
+                    <div class="preview-header">
+                        <div class="preview-title">Dosya Önizlemesi</div>
+                        <div class="preview-actions">
+                            <button class="btn-secondary" onclick="clearFileSelection()">Temizle</button>
+                            <button class="btn-primary" onclick="uploadFiles()">Yükle</button>
+                        </div>
+                    </div>
+                    <div class="file-previews" id="file-previews">
+                        <!-- File previews will be loaded here -->
+                    </div>
+                </div>
+                
+                <div class="recent-files-section">
+                    <div class="recent-files-title">📂 Son Dosyalar</div>
+                    <div class="recent-files-list" id="recent-files-list">
+                        <!-- Recent files will be loaded here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showModal("Dosya Paylaşımı", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+    
+    // Initialize file upload
+    initializeFileUpload();
+    loadRecentFiles();
+}
+
+function initializeFileUpload() {
+    const uploadZone = document.getElementById('upload-zone');
+    const fileInput = document.getElementById('file-input');
+    const uploadArea = document.getElementById('file-upload-area');
+    
+    if (!uploadZone || !fileInput || !uploadArea) return;
+    
+    // Click to upload
+    uploadZone.addEventListener('click', () => {
+        fileInput.click();
+    });
+    
+    // File selection
+    fileInput.addEventListener('change', (e) => {
+        handleFileSelection(e.target.files);
+    });
+    
+    // Drag and drop
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.classList.add('drag-over');
+    });
+    
+    uploadArea.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove('drag-over');
+    });
+    
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove('drag-over');
+        handleFileSelection(e.dataTransfer.files);
+    });
+    
+    // Paste support
+    document.addEventListener('paste', (e) => {
+        const files = e.clipboardData?.files;
+        if (files && files.length > 0) {
+            handleFileSelection(files);
+        }
+    });
+}
+
+let selectedFiles = [];
+
+function handleFileSelection(files) {
+    selectedFiles = Array.from(files);
+    
+    if (selectedFiles.length === 0) return;
+    
+    // Check file size limits
+    const maxSize = 100 * 1024 * 1024; // 100MB
+    const oversizedFiles = selectedFiles.filter(file => file.size > maxSize);
+    
+    if (oversizedFiles.length > 0) {
+        toast(`${oversizedFiles.length} dosya boyut limitini aşıyor (max 100MB)`, 'error');
+        selectedFiles = selectedFiles.filter(file => file.size <= maxSize);
+    }
+    
+    if (selectedFiles.length === 0) return;
+    
+    // Show preview section
+    document.getElementById('file-preview-section').style.display = 'block';
+    
+    // Generate previews
+    generateFilePreviews();
+}
+
+function generateFilePreviews() {
+    const previewsContainer = document.getElementById('file-previews');
+    if (!previewsContainer) return;
+    
+    let html = '';
+    
+    selectedFiles.forEach((file, index) => {
+        const preview = generateFilePreview(file, index);
+        html += preview;
+    });
+    
+    previewsContainer.innerHTML = html;
+    
+    // Generate actual previews for images
+    selectedFiles.forEach((file, index) => {
+        if (file.type.startsWith('image/')) {
+            generateImagePreview(file, index);
+        } else if (file.type.startsWith('video/')) {
+            generateVideoPreview(file, index);
+        } else if (file.type.startsWith('audio/')) {
+            generateAudioPreview(file, index);
+        } else if (file.type.startsWith('text/') || isTextFile(file)) {
+            generateTextPreview(file, index);
+        }
+    });
+}
+
+function generateFilePreview(file, index) {
+    const fileType = getFileType(file);
+    const fileSize = formatFileSize(file.size);
+    const fileIcon = getFileIcon(file);
+    
+    return `
+        <div class="file-preview-item" data-index="${index}">
+            <div class="file-preview-content">
+                <div class="file-preview-media" id="preview-media-${index}">
+                    <div class="file-icon-large">${fileIcon}</div>
+                </div>
+                <div class="file-preview-info">
+                    <div class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
+                    <div class="file-details">
+                        <span class="file-type">${fileType}</span>
+                        <span class="file-size">${fileSize}</span>
+                    </div>
+                    <div class="file-progress" id="file-progress-${index}" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-text">0%</div>
+                    </div>
+                </div>
+                <div class="file-preview-actions">
+                    <button class="btn-remove" onclick="removeFile(${index})" title="Kaldır">✕</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function generateImagePreview(file, index) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const mediaContainer = document.getElementById(`preview-media-${index}`);
+        if (mediaContainer) {
+            mediaContainer.innerHTML = `
+                <img src="${e.target.result}" alt="${escapeHtml(file.name)}" class="preview-image">
+            `;
+        }
+    };
+    reader.readAsDataURL(file);
+}
+
+function generateVideoPreview(file, index) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const mediaContainer = document.getElementById(`preview-media-${index}`);
+        if (mediaContainer) {
+            mediaContainer.innerHTML = `
+                <video src="${e.target.result}" class="preview-video" muted></video>
+            `;
+        }
+    };
+    reader.readAsDataURL(file);
+}
+
+function generateAudioPreview(file, index) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const mediaContainer = document.getElementById(`preview-media-${index}`);
+        if (mediaContainer) {
+            mediaContainer.innerHTML = `
+                <audio src="${e.target.result}" class="preview-audio" controls></audio>
+            `;
+        }
+    };
+    reader.readAsDataURL(file);
+}
+
+function generateTextPreview(file, index) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const mediaContainer = document.getElementById(`preview-media-${index}`);
+        if (mediaContainer) {
+            const content = e.target.result;
+            const preview = content.length > 200 ? content.substring(0, 200) + '...' : content;
+            mediaContainer.innerHTML = `
+                <div class="preview-text">
+                    <pre>${escapeHtml(preview)}</pre>
+                </div>
+            `;
+        }
+    };
+    reader.readAsText(file);
+}
+
+function getFileType(file) {
+    if (file.type.startsWith('image/')) return 'Görüntü';
+    if (file.type.startsWith('video/')) return 'Video';
+    if (file.type.startsWith('audio/')) return 'Ses';
+    if (file.type.startsWith('text/')) return 'Metin';
+    if (file.type === 'application/pdf') return 'PDF';
+    if (file.type.includes('word')) return 'Word';
+    if (file.type.includes('excel') || file.type.includes('spreadsheet')) return 'Excel';
+    if (file.type.includes('powerpoint') || file.type.includes('presentation')) return 'PowerPoint';
+    if (file.type.includes('zip') || file.type.includes('rar') || file.type.includes('7z')) return 'Arşiv';
+    return 'Dosya';
+}
+
+function getFileIcon(file) {
+    if (file.type.startsWith('image/')) return '🖼️';
+    if (file.type.startsWith('video/')) return '🎬';
+    if (file.type.startsWith('audio/')) return '🎵';
+    if (file.type.startsWith('text/')) return '📄';
+    if (file.type === 'application/pdf') return '📑';
+    if (file.type.includes('word')) return '📝';
+    if (file.type.includes('excel') || file.type.includes('spreadsheet')) return '📊';
+    if (file.type.includes('powerpoint') || file.type.includes('presentation')) return '📽️';
+    if (file.type.includes('zip') || file.type.includes('rar') || file.type.includes('7z')) return '📦';
+    return '📎';
+}
+
+function isTextFile(file) {
+    const textExtensions = ['.txt', '.md', '.json', '.xml', '.csv', '.log', '.ini', '.cfg', '.conf'];
+    const extension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    return textExtensions.includes(extension);
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function removeFile(index) {
+    selectedFiles = selectedFiles.filter((_, i) => i !== index);
+    
+    if (selectedFiles.length === 0) {
+        clearFileSelection();
+    } else {
+        generateFilePreviews();
+    }
+}
+
+function clearFileSelection() {
+    selectedFiles = [];
+    document.getElementById('file-preview-section').style.display = 'none';
+    document.getElementById('file-input').value = '';
+}
+
+async function uploadFiles() {
+    if (selectedFiles.length === 0) return;
+    
+    const uploadPromises = selectedFiles.map((file, index) => uploadSingleFile(file, index));
+    
+    try {
+        await Promise.all(uploadPromises);
+        toast('Dosyalar başarıyla yüklendi', 'success');
+        clearFileSelection();
+        loadRecentFiles();
+    } catch (error) {
+        console.error('Upload error:', error);
+        toast('Dosya yükleme başarısız', 'error');
+    }
+}
+
+async function uploadSingleFile(file, index) {
+    return new Promise((resolve, reject) => {
+        // Show progress
+        const progressContainer = document.getElementById(`file-progress-${index}`);
+        const progressFill = progressContainer?.querySelector('.progress-fill');
+        const progressText = progressContainer?.querySelector('.progress-text');
+        
+        if (progressContainer) {
+            progressContainer.style.display = 'block';
+        }
+        
+        // Simulate upload progress
+        let progress = 0;
+        const interval = setInterval(() => {
+            progress += Math.random() * 30;
+            if (progress > 100) progress = 100;
+            
+            if (progressFill) progressFill.style.width = progress + '%';
+            if (progressText) progressText.textContent = Math.round(progress) + '%';
+            
+            if (progress >= 100) {
+                clearInterval(interval);
+                
+                // Save file to storage
+                saveUploadedFile(file);
+                resolve();
+            }
+        }, 200);
+    });
+}
+
+function saveUploadedFile(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const uploadedFile = {
+            id: generateId(),
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            timestamp: Date.now(),
+            dataUrl: e.target.result
+        };
+        
+        const uploadedFiles = getUploadedFiles();
+        uploadedFiles.unshift(uploadedFile);
+        
+        // Keep only last 50 files
+        if (uploadedFiles.length > 50) {
+            uploadedFiles.pop();
+        }
+        
+        localStorage.setItem('scord_uploaded_files', JSON.stringify(uploadedFiles));
+    };
+    reader.readAsDataURL(file);
+}
+
+function getUploadedFiles() {
+    try {
+        const saved = localStorage.getItem('scord_uploaded_files');
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        console.warn("Failed to load uploaded files:", e);
+        return [];
+    }
+}
+
+function loadRecentFiles() {
+    const recentFilesList = document.getElementById('recent-files-list');
+    if (!recentFilesList) return;
+    
+    const uploadedFiles = getUploadedFiles();
+    
+    if (uploadedFiles.length === 0) {
+        recentFilesList.innerHTML = '<div class="recent-files-empty">Henüz dosya yüklenmedi</div>';
+        return;
+    }
+    
+    let html = '';
+    uploadedFiles.slice(0, 10).forEach(file => {
+        html += `
+            <div class="recent-file-item" onclick="shareFile('${file.id}')">
+                <div class="recent-file-icon">${getFileIcon(file)}</div>
+                <div class="recent-file-info">
+                    <div class="recent-file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</div>
+                    <div class="recent-file-details">
+                        <span class="file-type">${getFileType(file)}</span>
+                        <span class="file-size">${formatFileSize(file.size)}</span>
+                        <span class="file-date">${new Date(file.timestamp).toLocaleDateString('tr-TR')}</span>
+                    </div>
+                </div>
+                <div class="recent-file-actions">
+                    <button class="btn-download" onclick="downloadFile('${file.id}', event)" title="İndir">⬇️</button>
+                    <button class="btn-share" onclick="shareFile('${file.id}', event)" title="Paylaş">📤</button>
+                    <button class="btn-delete" onclick="deleteFile('${file.id}', event)" title="Sil">🗑️</button>
+                </div>
+            </div>
+        `;
+    });
+    
+    recentFilesList.innerHTML = html;
+}
+
+function downloadFile(fileId, event) {
+    if (event) event.stopPropagation();
+    
+    const uploadedFiles = getUploadedFiles();
+    const file = uploadedFiles.find(f => f.id === fileId);
+    
+    if (file && file.dataUrl) {
+        const a = document.createElement('a');
+        a.href = file.dataUrl;
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        toast('Dosya indiriliyor', 'success');
+    }
+}
+
+function shareFile(fileId, event) {
+    if (event) event.stopPropagation();
+    
+    const uploadedFiles = getUploadedFiles();
+    const file = uploadedFiles.find(f => f.id === fileId);
+    
+    if (file) {
+        // Share to current channel
+        const message = {
+            type: 'file',
+            fileId: fileId,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            dataUrl: file.dataUrl
+        };
+        
+        // This would integrate with the existing message sending system
+        toast('Dosya paylaşıldı', 'success');
+    }
+}
+
+function deleteFile(fileId, event) {
+    if (event) event.stopPropagation();
+    
+    if (confirm('Bu dosyayı silmek istediğinizden emin misiniz?')) {
+        const uploadedFiles = getUploadedFiles();
+        const index = uploadedFiles.findIndex(f => f.id === fileId);
+        
+        if (index !== -1) {
+            uploadedFiles.splice(index, 1);
+            localStorage.setItem('scord_uploaded_files', JSON.stringify(uploadedFiles));
+            loadRecentFiles();
+            toast('Dosya silindi', 'success');
+        }
+    }
+}
+
+// File viewer modal
+function showFileViewer(fileId) {
+    const uploadedFiles = getUploadedFiles();
+    const file = uploadedFiles.find(f => f.id === fileId);
+    
+    if (!file) return;
+    
+    let content = '';
+    
+    if (file.type.startsWith('image/')) {
+        content = `
+            <div class="file-viewer-image">
+                <img src="${file.dataUrl}" alt="${escapeHtml(file.name)}">
+            </div>
+        `;
+    } else if (file.type.startsWith('video/')) {
+        content = `
+            <div class="file-viewer-video">
+                <video src="${file.dataUrl}" controls autoplay></video>
+            </div>
+        `;
+    } else if (file.type.startsWith('audio/')) {
+        content = `
+            <div class="file-viewer-audio">
+                <audio src="${file.dataUrl}" controls autoplay></audio>
+            </div>
+        `;
+    } else if (file.type.startsWith('text/') || isTextFile(file)) {
+        content = `
+            <div class="file-viewer-text">
+                <pre>${escapeHtml(atob(file.dataUrl.split(',')[1]))}</pre>
+            </div>
+        `;
+    } else {
+        content = `
+            <div class="file-viewer-info">
+                <div class="file-info-icon">${getFileIcon(file)}</div>
+                <div class="file-info-details">
+                    <div class="file-info-name">${escapeHtml(file.name)}</div>
+                    <div class="file-info-type">${getFileType(file)}</div>
+                    <div class="file-info-size">${formatFileSize(file.size)}</div>
+                    <button class="btn-primary" onclick="downloadFile('${file.id}')">İndir</button>
+                </div>
+            </div>
+        `;
+    }
+    
+    const modalContent = `
+        <div class="file-viewer">
+            <div class="file-viewer-header">
+                <div class="file-viewer-title">${escapeHtml(file.name)}</div>
+                <div class="file-viewer-actions">
+                    <button class="btn-secondary" onclick="downloadFile('${file.id}')">İndir</button>
+                    <button class="btn-secondary" onclick="shareFile('${file.id}')">Paylaş</button>
+                </div>
+            </div>
+            <div class="file-viewer-content">
+                ${content}
+            </div>
+        </div>
+    `;
+    
+    showModal("Dosya Görüntüleyici", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+// GIF Integration System
+function showGifPickerModal() {
+    const modalContent = `
+        <div class="gif-picker-modal">
+            <div class="gif-picker-header">
+                <div class="gif-picker-title">🎬 GIF Seçici</div>
+                <div class="gif-search-container">
+                    <input type="text" id="gif-search-input" placeholder="GIF ara..." autocomplete="off">
+                    <button class="btn-secondary" onclick="searchGifs()">Ara</button>
+                </div>
+            </div>
+            <div class="gif-picker-content">
+                <div class="gif-categories">
+                    <div class="category-tabs">
+                        <button class="category-tab active" data-category="trending">Trendler</button>
+                        <button class="category-tab" data-category="reactions">Tepkiler</button>
+                        <button class="category-tab" data-category="memes">Meme'ler</button>
+                        <button class="category-tab" data-category="gaming">Oyun</button>
+                        <button class="category-tab" data-category="anime">Anime</button>
+                        <button class="category-tab" data-category="cute">Sevimli</button>
+                    </div>
+                </div>
+                <div class="gif-results" id="gif-results">
+                    <div class="gif-loading" id="gif-loading" style="display: none;">
+                        <div class="loading-spinner"></div>
+                        <div>GIF'ler yükleniyor...</div>
+                    </div>
+                    <div class="gif-grid" id="gif-grid">
+                        <!-- GIF results will be loaded here -->
+                    </div>
+                    <div class="gif-empty" id="gif-empty" style="display: none;">
+                        <div class="empty-icon">🔍</div>
+                        <div>Sonuç bulunamadı</div>
+                        <div class="empty-subtitle">Başka anahtar kelimeler dene</div>
+                    </div>
+                </div>
+            </div>
+            <div class="gif-picker-footer">
+                <div class="gif-preview" id="gif-preview" style="display: none;">
+                    <img id="preview-image" src="" alt="GIF Preview">
+                    <div class="preview-info">
+                        <div class="preview-title" id="preview-title">GIF Adı</div>
+                        <div class="preview-dimensions" id="preview-dimensions">0x0</div>
+                    </div>
+                </div>
+                <div class="gif-actions">
+                    <button class="btn-secondary" onclick="hideModal()">İptal</button>
+                    <button class="btn-primary" id="send-gif-btn" onclick="sendSelectedGif()" disabled>GIF Gönder</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showModal("GIF Seçici", modalContent, '', true); // No footer, closable with Escape
+    
+    // Initialize GIF picker
+    initializeGifPicker();
+    loadTrendingGifs();
+}
+
+function initializeGifPicker() {
+    const searchInput = document.getElementById('gif-search-input');
+    const categoryTabs = document.querySelectorAll('.category-tab');
+    
+    // Search on Enter
+    if (searchInput) {
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                searchGifs();
+            }
+        });
+        
+        // Search on input with debounce
+        let searchTimeout;
+        searchInput.addEventListener('input', () => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                if (searchInput.value.trim()) {
+                    searchGifs();
+                }
+            }, 500);
+        });
+    }
+    
+    // Category tabs
+    categoryTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            categoryTabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const category = tab.getAttribute('data-category');
+            loadCategoryGifs(category);
+        });
+    });
+    
+    // Initialize selected GIF
+    state.selectedGif = null;
+}
+
+let selectedGif = null;
+
+function loadTrendingGifs() {
+    showGifLoading();
+    
+    // Simulate API call with mock data
+    setTimeout(() => {
+        const trendingGifs = getMockGifs('trending');
+        displayGifResults(trendingGifs);
+    }, 800);
+}
+
+function searchGifs() {
+    const searchInput = document.getElementById('gif-search-input');
+    const query = searchInput?.value.trim();
+    
+    if (!query) {
+        loadTrendingGifs();
+        return;
+    }
+    
+    showGifLoading();
+    
+    // Simulate API call with mock data
+    setTimeout(() => {
+        const searchResults = getMockGifs('search', query);
+        displayGifResults(searchResults);
+    }, 600);
+}
+
+function loadCategoryGifs(category) {
+    showGifLoading();
+    
+    // Simulate API call with mock data
+    setTimeout(() => {
+        const categoryGifs = getMockGifs(category);
+        displayGifResults(categoryGifs);
+    }, 600);
+}
+
+function showGifLoading() {
+    const loading = document.getElementById('gif-loading');
+    const grid = document.getElementById('gif-grid');
+    const empty = document.getElementById('gif-empty');
+    
+    if (loading) loading.style.display = 'flex';
+    if (grid) grid.style.display = 'none';
+    if (empty) empty.style.display = 'none';
+}
+
+function displayGifResults(gifs) {
+    const loading = document.getElementById('gif-loading');
+    const grid = document.getElementById('gif-grid');
+    const empty = document.getElementById('gif-empty');
+    
+    if (loading) loading.style.display = 'none';
+    
+    if (gifs.length === 0) {
+        if (grid) grid.style.display = 'none';
+        if (empty) empty.style.display = 'flex';
+        return;
+    }
+    
+    if (empty) empty.style.display = 'none';
+    if (grid) {
+        grid.style.display = 'grid';
+        grid.innerHTML = '';
+        
+        gifs.forEach(gif => {
+            const gifElement = createGifElement(gif);
+            grid.appendChild(gifElement);
+        });
+    }
+}
+
+function createGifElement(gif) {
+    const div = document.createElement('div');
+    div.className = 'gif-item';
+    div.setAttribute('data-gif-id', gif.id);
+    
+    const img = document.createElement('img');
+    img.src = gif.thumbnail;
+    img.alt = gif.title;
+    img.loading = 'lazy';
+    
+    // Handle click
+    div.addEventListener('click', () => selectGif(gif));
+    
+    // Handle hover preview
+    div.addEventListener('mouseenter', () => showGifPreview(gif));
+    div.addEventListener('mouseleave', hideGifPreview);
+    
+    div.appendChild(img);
+    return div;
+}
+
+function selectGif(gif) {
+    selectedGif = gif;
+    
+    // Update UI
+    document.querySelectorAll('.gif-item').forEach(item => {
+        item.classList.remove('selected');
+    });
+    
+    const selectedItem = document.querySelector(`[data-gif-id="${gif.id}"]`);
+    if (selectedItem) {
+        selectedItem.classList.add('selected');
+    }
+    
+    // Enable send button
+    const sendBtn = document.getElementById('send-gif-btn');
+    if (sendBtn) {
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'GIF Gönder';
+    }
+    
+    // Show preview
+    showGifPreview(gif);
+}
+
+function showGifPreview(gif) {
+    const preview = document.getElementById('gif-preview');
+    const previewImage = document.getElementById('preview-image');
+    const previewTitle = document.getElementById('preview-title');
+    const previewDimensions = document.getElementById('preview-dimensions');
+    
+    if (preview && previewImage && previewTitle && previewDimensions) {
+        preview.style.display = 'flex';
+        previewImage.src = gif.url;
+        previewTitle.textContent = gif.title;
+        previewDimensions.textContent = `${gif.width}x${gif.height}`;
+    }
+}
+
+function hideGifPreview() {
+    const preview = document.getElementById('gif-preview');
+    if (preview && selectedGif) {
+        // Keep preview if a GIF is selected
+        return;
+    }
+    
+    if (preview) {
+        preview.style.display = 'none';
+    }
+}
+
+function sendSelectedGif() {
+    if (!selectedGif) return;
+    
+    // Send GIF to current channel
+    const message = {
+        type: 'gif',
+        gifId: selectedGif.id,
+        title: selectedGif.title,
+        url: selectedGif.url,
+        thumbnail: selectedGif.thumbnail,
+        width: selectedGif.width,
+        height: selectedGif.height
+    };
+    
+    // This would integrate with the existing message sending system
+    toast('GIF gönderildi', 'success');
+    
+    // Save to recent GIFs
+    saveRecentGif(selectedGif);
+    
+    hideModal();
+}
+
+function saveRecentGif(gif) {
+    const recentGifs = getRecentGifs();
+    
+    // Remove if already exists
+    const index = recentGifs.findIndex(g => g.id === gif.id);
+    if (index !== -1) {
+        recentGifs.splice(index, 1);
+    }
+    
+    // Add to beginning
+    recentGifs.unshift(gif);
+    
+    // Keep only last 20
+    if (recentGifs.length > 20) {
+        recentGifs.pop();
+    }
+    
+    localStorage.setItem('scord_recent_gifs', JSON.stringify(recentGifs));
+}
+
+function getRecentGifs() {
+    try {
+        const saved = localStorage.getItem('scord_recent_gifs');
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        console.warn("Failed to load recent GIFs:", e);
+        return [];
+    }
+}
+
+// Mock GIF data generator
+function getMockGifs(category, query = '') {
+    const mockGifs = [
+        // Trending
+        { id: 't1', title: 'Happy Dance', url: 'https://media.giphy.com/media/3o7TKTD1NUq1q7CB5C/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7TKTD1NUq1q7CB5C/giphy.gif', width: 480, height: 270 },
+        { id: 't2', title: 'Mind Blown', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
+        { id: 't3', title: 'Yes!', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
+        { id: 't4', title: 'Facepalm', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
+        { id: 't5', title: 'Celebration', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
+        
+        // Reactions
+        { id: 'r1', title: 'Laughing', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
+        { id: 'r2', title: 'Crying', url: 'https://media.giphy.com/media/l41lGvinE5Vw/giphy.gif', thumbnail: 'https://media.giphy.com/media/l41lGvinE5Vw/giphy.gif', width: 480, height: 270 },
+        { id: 'r3', title: 'Angry', url: 'https://media.giphy.com/media/3o6fJgOdwvUIa3dGxK/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6fJgOdwvUIa3dGxK/giphy.gif', width: 480, height: 270 },
+        { id: 'r4', title: 'Love', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
+        { id: 'r5', title: 'Wow', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
+        
+        // Memes
+        { id: 'm1', title: 'Distracted Boyfriend', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
+        { id: 'm2', title: 'This is Fine', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
+        { id: 'm3', title: 'Change My Mind', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
+        { id: 'm4', title: 'Drake Hotline Bling', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
+        { id: 'm5', title: 'Two Buttons', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
+        
+        // Gaming
+        { id: 'g1', title: 'Gaming Moment', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
+        { id: 'g2', title: 'Victory Royale', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
+        { id: 'g3', title: 'Rage Quit', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
+        { id: 'g4', title: 'Epic Win', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
+        { id: 'g5', title: 'GG WP', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
+        
+        // Anime
+        { id: 'a1', title: 'Anime Dance', url: 'https://media.giphy.com/media/3o7TKTD1NUq1q7CB5C/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7TKTD1NUq1q7CB5C/giphy.gif', width: 480, height: 270 },
+        { id: 'a2', title: 'Sweat Drop', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
+        { id: 'a3', title: 'Anime Cry', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
+        { id: 'a4', title: 'Power Up', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
+        { id: 'a5', title: 'Anime Fight', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
+        
+        // Cute
+        { id: 'c1', title: 'Cute Cat', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
+        { id: 'c2', title: 'Puppy Love', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
+        { id: 'c3', title: 'Baby Laugh', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
+        { id: 'c4', title: 'Cute Bunny', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
+        { id: 'c5', title: 'Happy Puppy', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 }
+    ];
+    
+    // Filter by category
+    let filteredGifs = [];
+    switch (category) {
+        case 'trending':
+            filteredGifs = mockGifs.filter(g => g.id.startsWith('t'));
+            break;
+        case 'reactions':
+            filteredGifs = mockGifs.filter(g => g.id.startsWith('r'));
+            break;
+        case 'memes':
+            filteredGifs = mockGifs.filter(g => g.id.startsWith('m'));
+            break;
+        case 'gaming':
+            filteredGifs = mockGifs.filter(g => g.id.startsWith('g'));
+            break;
+        case 'anime':
+            filteredGifs = mockGifs.filter(g => g.id.startsWith('a'));
+            break;
+        case 'cute':
+            filteredGifs = mockGifs.filter(g => g.id.startsWith('c'));
+            break;
+        case 'search':
+            // Simple search simulation
+            filteredGifs = mockGifs.filter(g => 
+                g.title.toLowerCase().includes(query.toLowerCase())
+            );
+            break;
+        default:
+            filteredGifs = mockGifs;
+    }
+    
+    // Shuffle and return subset
+    return filteredGifs.sort(() => Math.random() - 0.5).slice(0, 12);
+}
+
+// GIF message display
+function createGifMessage(gif) {
+    return `
+        <div class="message-gif">
+            <div class="gif-container">
+                <img src="${gif.url}" alt="${escapeHtml(gif.title)}" class="gif-image" loading="lazy">
+                <div class="gif-overlay">
+                    <div class="gif-title">${escapeHtml(gif.title)}</div>
+                    <div class="gif-dimensions">${gif.width}x${gif.height}</div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+// Recent GIFs modal
+function showRecentGifsModal() {
+    const recentGifs = getRecentGifs();
+    
+    if (recentGifs.length === 0) {
+        toast('Henüz GIF kullanılmadı', 'info');
+        return;
+    }
+    
+    let content = `
+        <div class="recent-gifs-modal">
+            <div class="recent-gifs-title">🎬 Son GIF'ler</div>
+            <div class="recent-gifs-grid">
+    `;
+    
+    recentGifs.forEach(gif => {
+        content += `
+            <div class="recent-gif-item" onclick="shareGif('${gif.id}')">
+                <img src="${gif.thumbnail}" alt="${escapeHtml(gif.title)}" class="recent-gif-image">
+                <div class="recent-gif-info">
+                    <div class="recent-gif-title">${escapeHtml(gif.title)}</div>
+                    <div class="recent-gif-date">${new Date(gif.timestamp || Date.now()).toLocaleDateString('tr-TR')}</div>
+                </div>
+            </div>
+        `;
+    });
+    
+    content += `
+            </div>
+        </div>
+    `;
+    
+    showModal("Son GIF'ler", content, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+function shareGif(gifId) {
+    const recentGifs = getRecentGifs();
+    const gif = recentGifs.find(g => g.id === gifId);
+    
+    if (gif) {
+        selectGif(gif);
+        sendSelectedGif();
+    }
+}
+
+// Game Invite System
+function showGameInviteModal() {
+    const modalContent = `
+        <div class="game-invite-modal">
+            <div class="game-invite-header">
+                <div class="game-invite-title">🎮 Oyun Daveti</div>
+                <div class="game-invite-subtitle">Arkadaşlarını oynamaya davet et</div>
+            </div>
+            <div class="game-invite-content">
+                <div class="game-selection">
+                    <div class="game-categories">
+                        <div class="category-tabs">
+                            <button class="category-tab active" data-category="all">Tümü</button>
+                            <button class="category-tab" data-category="popular">Popüler</button>
+                            <button class="category-tab" data-category="action">Aksiyon</button>
+                            <button class="category-tab" data-category="strategy">Strateji</button>
+                            <button class="category-tab" data-category="puzzle">Bulmaca</button>
+                            <button class="category-tab" data-category="multiplayer">Çok Oyunculu</button>
+                        </div>
+                    </div>
+                    
+                    <div class="game-search">
+                        <input type="text" id="game-search-input" placeholder="Oyun ara..." autocomplete="off">
+                    </div>
+                    
+                    <div class="game-grid" id="game-grid">
+                        <!-- Games will be loaded here -->
+                    </div>
+                </div>
+                
+                <div class="invite-details" id="invite-details" style="display: none;">
+                    <div class="selected-game">
+                        <div class="selected-game-header">
+                            <div class="selected-game-info">
+                                <div class="selected-game-title" id="selected-game-title">Oyun Adı</div>
+                                <div class="selected-game-genre" id="selected-game-genre">Tür</div>
+                                <div class="selected-game-players" id="selected-game-players">Oyuncu Sayısı</div>
+                            </div>
+                            <div class="selected-game-image" id="selected-game-image">
+                                <div class="game-icon-large">🎮</div>
+                            </div>
+                        </div>
+                        
+                        <div class="invite-settings">
+                            <div class="setting-group">
+                                <label>Oyun Modu:</label>
+                                <select id="game-mode">
+                                    <option value="casual">Gayriresmi</option>
+                                    <option value="ranked">Sıralı</option>
+                                    <option value="tournament">Turnuva</option>
+                                </select>
+                            </div>
+                            
+                            <div class="setting-group">
+                                <label>Oyuncu Limiti:</label>
+                                <select id="player-limit">
+                                    <option value="2">2 Oyuncu</option>
+                                    <option value="4">4 Oyuncu</option>
+                                    <option value="6">6 Oyuncu</option>
+                                    <option value="8">8 Oyuncu</option>
+                                    <option value="unlimited">Sınırsız</option>
+                                </select>
+                            </div>
+                            
+                            <div class="setting-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="private-game">
+                                    Özel Oda
+                                </label>
+                            </div>
+                            
+                            <div class="setting-group">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="voice-chat" checked>
+                                    Sesli Sohbet
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="invite-message">
+                            <label>Mesaj:</label>
+                            <textarea id="invite-message" placeholder="Davet mesajını buraya yaz..." rows="3"></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="game-invite-footer">
+                <div class="selected-game-preview" id="selected-game-preview" style="display: none;">
+                    <div class="preview-info">
+                        <div class="preview-game-title" id="preview-game-title">Oyun Adı</div>
+                        <div class="preview-game-mode" id="preview-game-mode">Gayriresmi • 2 Oyuncu</div>
+                    </div>
+                </div>
+                <div class="invite-actions">
+                    <button class="btn-secondary" onclick="hideModal()">İptal</button>
+                    <button class="btn-primary" id="send-invite-btn" onclick="sendGameInvite()" disabled>Davet Gönder</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showModal("Oyun Daveti", modalContent, '', true);
+    
+    // Initialize game invite system
+    initializeGameInvite();
+    loadGames();
+}
+
+function initializeGameInvite() {
+    const searchInput = document.getElementById('game-search-input');
+    const categoryTabs = document.querySelectorAll('.category-tab');
+    
+    // Search functionality
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            filterGames();
+        });
+    }
+    
+    // Category tabs
+    categoryTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            categoryTabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const category = tab.getAttribute('data-category');
+            filterGamesByCategory(category);
+        });
+    });
+    
+    // Initialize selected game
+    state.selectedGame = null;
+}
+
+let selectedGame = null;
+
+function loadGames() {
+    const games = getMockGames();
+    displayGames(games);
+}
+
+function getMockGames() {
+    return [
+        {
+            id: 'game1',
+            name: 'Valorant',
+            genre: 'FPS',
+            category: 'popular',
+            players: '5v5',
+            icon: '🔫',
+            description: 'Taktiksel nişancı oyunu',
+            modes: ['Casual', 'Ranked', 'Spike Rush'],
+            maxPlayers: 10
+        },
+        {
+            id: 'game2',
+            name: 'League of Legends',
+            genre: 'MOBA',
+            category: 'popular',
+            players: '5v5',
+            icon: '⚔️',
+            description: 'Çok oyunculu savaş alanı',
+            modes: ['ARAM', 'Ranked', 'Normal'],
+            maxPlayers: 10
+        },
+        {
+            id: 'game3',
+            name: 'Among Us',
+            genre: 'Sosyal Dedektiflik',
+            category: 'multiplayer',
+            players: '4-10',
+            icon: '👨‍🚀',
+            description: 'Uzay gemisinde dolandırıcıyı bul',
+            modes: ['Classic', 'Hide and Seek'],
+            maxPlayers: 10
+        },
+        {
+            id: 'game4',
+            name: 'Minecraft',
+            genre: 'Sandbox',
+            category: 'popular',
+            players: '1-∞',
+            icon: '⛏️',
+            description: 'Bloklardan dünyalar inşa et',
+            modes: ['Survival', 'Creative', 'Adventure'],
+            maxPlayers: 999
+        },
+        {
+            id: 'game5',
+            name: 'Chess.com',
+            genre: 'Strateji',
+            category: 'strategy',
+            players: '1v1',
+            icon: '♟️',
+            description: 'Klasik satranç oyunu',
+            modes: ['Blitz', 'Rapid', 'Classical'],
+            maxPlayers: 2
+        },
+        {
+            id: 'game6',
+            name: 'PUBG Mobile',
+            genre: 'Battle Royale',
+            category: 'action',
+            players: '100',
+            icon: '🎯',
+            description: 'Hayatta kalan son kişi',
+            modes: ['Solo', 'Duo', 'Squad'],
+            maxPlayers: 100
+        },
+        {
+            id: 'game7',
+            name: 'Tetris',
+            genre: 'Bulmaca',
+            category: 'puzzle',
+            players: '1v1',
+            icon: '🟦',
+            description: 'Klasik blok oyunu',
+            modes: ['Marathon', 'Sprint', 'Battle'],
+            maxPlayers: 2
+        },
+        {
+            id: 'game8',
+            name: 'Rocket League',
+            genre: 'Spor',
+            category: 'popular',
+            players: '1v1, 2v2, 3v3',
+            icon: '🏎️',
+            description: 'Araba ile futbol',
+            modes: ['Casual', 'Ranked', 'Tournament'],
+            maxPlayers: 6
+        },
+        {
+            id: 'game9',
+            name: 'Fortnite',
+            genre: 'Battle Royale',
+            category: 'popular',
+            players: '100',
+            icon: '🏝️',
+            description: 'İnşa et ve savaş',
+            modes: ['Solo', 'Duo', 'Squad', 'Creative'],
+            maxPlayers: 100
+        },
+        {
+            id: 'game10',
+            name: 'Apex Legends',
+            genre: 'Battle Royale',
+            category: 'action',
+            players: '3v3',
+            icon: '🔫',
+            description: 'Ekip tabanlı savaş',
+            modes: ['Battle Royale', 'Arena'],
+            maxPlayers: 60
+        },
+        {
+            id: 'game11',
+            name: 'Civilization VI',
+            genre: 'Strateji',
+            category: 'strategy',
+            players: '1-12',
+            icon: '🏛️',
+            description: 'Medeniyet kur',
+            modes: ['Single Player', 'Multiplayer'],
+            maxPlayers: 12
+        },
+        {
+            id: 'game12',
+            name: 'Fall Guys',
+            genre: 'Platform',
+            category: 'multiplayer',
+            players: '60',
+            icon: '🟣',
+            description: 'Kaos dolu yarışlar',
+            modes: ['Show', 'Party'],
+            maxPlayers: 60
+        }
+    ];
+}
+
+function displayGames(games) {
+    const gameGrid = document.getElementById('game-grid');
+    if (!gameGrid) return;
+    
+    let html = '';
+    games.forEach(game => {
+        html += createGameElement(game);
+    });
+    
+    gameGrid.innerHTML = html;
+}
+
+function createGameElement(game) {
+    return `
+        <div class="game-item" data-game-id="${game.id}" onclick="selectGame('${game.id}')">
+            <div class="game-icon">${game.icon}</div>
+            <div class="game-info">
+                <div class="game-name">${escapeHtml(game.name)}</div>
+                <div class="game-genre">${escapeHtml(game.genre)}</div>
+                <div class="game-players">${escapeHtml(game.players)}</div>
+            </div>
+        </div>
+    `;
+}
+
+function selectGame(gameId) {
+    const games = getMockGames();
+    const game = games.find(g => g.id === gameId);
+    
+    if (!game) return;
+    
+    selectedGame = game;
+    
+    // Update UI
+    document.querySelectorAll('.game-item').forEach(item => {
+        item.classList.remove('selected');
+    });
+    
+    const selectedItem = document.querySelector(`[data-game-id="${gameId}"]`);
+    if (selectedItem) {
+        selectedItem.classList.add('selected');
+    }
+    
+    // Show invite details
+    showInviteDetails(game);
+    
+    // Enable send button
+    const sendBtn = document.getElementById('send-invite-btn');
+    if (sendBtn) {
+        sendBtn.disabled = false;
+    }
+    
+    // Update preview
+    updateGamePreview(game);
+}
+
+function showInviteDetails(game) {
+    const inviteDetails = document.getElementById('invite-details');
+    const selectedGameTitle = document.getElementById('selected-game-title');
+    const selectedGameGenre = document.getElementById('selected-game-genre');
+    const selectedGamePlayers = document.getElementById('selected-game-players');
+    const selectedGameImage = document.getElementById('selected-game-image');
+    
+    if (inviteDetails) {
+        inviteDetails.style.display = 'block';
+    }
+    
+    if (selectedGameTitle) selectedGameTitle.textContent = game.name;
+    if (selectedGameGenre) selectedGameGenre.textContent = game.genre;
+    if (selectedGamePlayers) selectedGamePlayers.textContent = game.players;
+    if (selectedGameImage) {
+        selectedGameImage.innerHTML = `<div class="game-icon-large">${game.icon}</div>`;
+    }
+    
+    // Set default invite message
+    const inviteMessage = document.getElementById('invite-message');
+    if (inviteMessage) {
+        inviteMessage.value = `${game.name} oynamak ister misin? 🎮`;
+    }
+}
+
+function updateGamePreview(game) {
+    const preview = document.getElementById('selected-game-preview');
+    const previewTitle = document.getElementById('preview-game-title');
+    const previewMode = document.getElementById('preview-game-mode');
+    
+    if (preview) {
+        preview.style.display = 'block';
+    }
+    
+    if (previewTitle) previewTitle.textContent = game.name;
+    
+    // Update mode based on settings
+    updateGameModePreview();
+}
+
+function updateGameModePreview() {
+    const previewMode = document.getElementById('preview-game-mode');
+    const gameMode = document.getElementById('game-mode')?.value || 'casual';
+    const playerLimit = document.getElementById('player-limit')?.value || '2';
+    
+    if (previewMode) {
+        const modeText = gameMode === 'casual' ? 'Gayriresmi' : 
+                        gameMode === 'ranked' ? 'Sıralı' : 'Turnuva';
+        const playerText = playerLimit === 'unlimited' ? 'Sınırsız' : `${playerLimit} Oyuncu`;
+        previewMode.textContent = `${modeText} • ${playerText}`;
+    }
+}
+
+// Listen for setting changes
+document.addEventListener('change', (e) => {
+    if (e.target.id === 'game-mode' || e.target.id === 'player-limit') {
+        updateGameModePreview();
+    }
+});
+
+function filterGames() {
+    const searchInput = document.getElementById('game-search-input');
+    const query = searchInput?.value.toLowerCase() || '';
+    const games = getMockGames();
+    
+    const filtered = games.filter(game => 
+        game.name.toLowerCase().includes(query) ||
+        game.genre.toLowerCase().includes(query) ||
+        game.description.toLowerCase().includes(query)
+    );
+    
+    displayGames(filtered);
+}
+
+function filterGamesByCategory(category) {
+    const games = getMockGames();
+    
+    let filtered = games;
+    if (category !== 'all') {
+        filtered = games.filter(game => game.category === category);
+    }
+    
+    displayGames(filtered);
+}
+
+function sendGameInvite() {
+    if (!selectedGame) return;
+    
+    const gameMode = document.getElementById('game-mode')?.value || 'casual';
+    const playerLimit = document.getElementById('player-limit')?.value || '2';
+    const privateGame = document.getElementById('private-game')?.checked || false;
+    const voiceChat = document.getElementById('voice-chat')?.checked || false;
+    const inviteMessage = document.getElementById('invite-message')?.value || '';
+    
+    // Create invite
+    const invite = {
+        id: generateId(),
+        gameId: selectedGame.id,
+        gameName: selectedGame.name,
+        gameIcon: selectedGame.icon,
+        gameGenre: selectedGame.genre,
+        mode: gameMode,
+        playerLimit: playerLimit,
+        isPrivate: privateGame,
+        voiceChat: voiceChat,
+        message: inviteMessage,
+        timestamp: Date.now(),
+        status: 'pending',
+        hostId: state.peerId
+    };
+    
+    // Save invite
+    saveGameInvite(invite);
+    
+    // Send to current channel
+    const message = {
+        type: 'game-invite',
+        inviteId: invite.id,
+        gameName: selectedGame.name,
+        gameIcon: selectedGame.icon,
+        mode: gameMode,
+        playerLimit: playerLimit,
+        message: inviteMessage,
+        timestamp: invite.timestamp
+    };
+    
+    // This would integrate with the existing message sending system
+    toast('Oyun daveti gönderildi', 'success');
+    
+    hideModal();
+}
+
+function saveGameInvite(invite) {
+    const invites = getGameInvites();
+    invites.push(invite);
+    
+    // Keep only last 50 invites
+    if (invites.length > 50) {
+        invites.shift();
+    }
+    
+    localStorage.setItem('scord_game_invites', JSON.stringify(invites));
+}
+
+function getGameInvites() {
+    try {
+        const saved = localStorage.getItem('scord_game_invites');
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        console.warn("Failed to load game invites:", e);
+        return [];
+    }
+}
+
+// Game invite message display
+function createGameInviteMessage(invite) {
+    return `
+        <div class="message-game-invite">
+            <div class="game-invite-container">
+                <div class="game-invite-header">
+                    <div class="game-invite-icon">${invite.gameIcon}</div>
+                    <div class="game-invite-info">
+                        <div class="game-invite-title">${escapeHtml(invite.gameName)}</div>
+                        <div class="game-invite-details">${escapeHtml(invite.mode)} • ${escapeHtml(invite.playerLimit)} Oyuncu</div>
+                    </div>
+                    <div class="game-invite-badge">🎮</div>
+                </div>
+                ${invite.message ? `<div class="game-invite-message">${escapeHtml(invite.message)}</div>` : ''}
+                <div class="game-invite-actions">
+                    <button class="btn-primary" onclick="acceptGameInvite('${invite.id}')">Katıl</button>
+                    <button class="btn-secondary" onclick="declineGameInvite('${invite.id}')">Reddet</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function acceptGameInvite(inviteId) {
+    const invites = getGameInvites();
+    const invite = invites.find(i => i.id === inviteId);
+    
+    if (invite) {
+        // Update invite status
+        invite.status = 'accepted';
+        invite.acceptedAt = Date.now();
+        invite.acceptedById = state.peerId;
+        
+        localStorage.setItem('scord_game_invites', JSON.stringify(invites));
+        
+        // Launch game or join session
+        toast(`${invite.gameName} daveti kabul edildi!`, 'success');
+        
+        // This would integrate with actual game launching
+        setTimeout(() => {
+            toast('Oyun başlatılıyor...', 'info');
+        }, 1000);
+    }
+}
+
+function declineGameInvite(inviteId) {
+    const invites = getGameInvites();
+    const invite = invites.find(i => i.id === inviteId);
+    
+    if (invite) {
+        // Update invite status
+        invite.status = 'declined';
+        invite.declinedAt = Date.now();
+        invite.declinedById = state.peerId;
+        
+        localStorage.setItem('scord_game_invites', JSON.stringify(invites));
+        
+        toast('Oyun daveti reddedildi', 'info');
+    }
+}
+
+// Recent game invites modal
+function showRecentGameInvitesModal() {
+    const invites = getGameInvites();
+    
+    if (invites.length === 0) {
+        toast('Henüz oyun daveti yok', 'info');
+        return;
+    }
+    
+    let content = `
+        <div class="recent-game-invites-modal">
+            <div class="recent-invites-title">🎮 Son Oyun Davetleri</div>
+            <div class="recent-invites-list">
+    `;
+    
+    invites.slice(0, 10).forEach(invite => {
+        const statusIcon = invite.status === 'accepted' ? '✅' : 
+                          invite.status === 'declined' ? '❌' : '⏳';
+        
+        content += `
+            <div class="recent-invite-item">
+                <div class="invite-game-icon">${invite.gameIcon}</div>
+                <div class="invite-info">
+                    <div class="invite-game-name">${escapeHtml(invite.gameName)}</div>
+                    <div class="invite-details">${escapeHtml(invite.mode)} • ${escapeHtml(invite.playerLimit)}</div>
+                    <div class="invite-date">${new Date(invite.timestamp).toLocaleDateString('tr-TR')}</div>
+                </div>
+                <div class="invite-status">${statusIcon}</div>
+            </div>
+        `;
+    });
+    
+    content += `
+            </div>
+        </div>
+    `;
+    
+    showModal("Son Oyun Davetleri", content, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+// Calendar and Event Planning System
+function showCalendarModal() {
+    const modalContent = `
+        <div class="calendar-modal">
+            <div class="calendar-header">
+                <div class="calendar-title">📅 Takvim ve Etkinlikler</div>
+                <div class="calendar-nav">
+                    <button class="btn-secondary" onclick="previousMonth()">◀</button>
+                    <div class="current-month" id="current-month">Ocak 2024</div>
+                    <button class="btn-secondary" onclick="nextMonth()">▶</button>
+                </div>
+            </div>
+            
+            <div class="calendar-content">
+                <div class="calendar-view">
+                    <div class="calendar-weekdays">
+                        <div class="weekday">Pzt</div>
+                        <div class="weekday">Sal</div>
+                        <div class="weekday">Çar</div>
+                        <div class="weekday">Per</div>
+                        <div class="weekday">Cum</div>
+                        <div class="weekday">Cmt</div>
+                        <div class="weekday">Paz</div>
+                    </div>
+                    <div class="calendar-days" id="calendar-days">
+                        <!-- Calendar days will be generated here -->
+                    </div>
+                </div>
+                
+                <div class="calendar-sidebar">
+                    <div class="sidebar-section">
+                        <div class="sidebar-title">📝 Etkinlik Oluştur</div>
+                        <button class="btn-primary" onclick="showCreateEventModal()">Yeni Etkinlik</button>
+                    </div>
+                    
+                    <div class="sidebar-section">
+                        <div class="sidebar-title">📋 Yaklaşan Etkinlikler</div>
+                        <div class="upcoming-events" id="upcoming-events">
+                            <!-- Upcoming events will be loaded here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showModal("Takvim", modalContent, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+    
+    // Initialize calendar
+    initializeCalendar();
+}
+
+let currentMonth = new Date();
+let selectedDate = new Date();
+
+function initializeCalendar() {
+    renderCalendar();
+    loadUpcomingEvents();
+}
+
+function renderCalendar() {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth();
+    
+    // Update month display
+    const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 
+                       'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+    document.getElementById('current-month').textContent = `${monthNames[month]} ${year}`;
+    
+    // Get first day of month and number of days
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    
+    // Adjust for Monday as first day (0 = Monday, 6 = Sunday)
+    let startDay = firstDay.getDay() - 1;
+    if (startDay === -1) startDay = 6;
+    
+    const calendarDays = document.getElementById('calendar-days');
+    if (!calendarDays) return;
+    
+    let html = '';
+    
+    // Add empty cells for days before month starts
+    for (let i = 0; i < startDay; i++) {
+        html += '<div class="calendar-day empty"></div>';
+    }
+    
+    // Add days of the month
+    const events = getEvents();
+    const today = new Date();
+    
+    for (let day = 1; day <= daysInMonth; day++) {
+        const date = new Date(year, month, day);
+        const dateStr = formatDateForStorage(date);
+        const dayEvents = events.filter(event => event.date === dateStr);
+        const isToday = date.toDateString() === today.toDateString();
+        const isSelected = date.toDateString() === selectedDate.toDateString();
+        
+        html += `
+            <div class="calendar-day ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''} ${dayEvents.length > 0 ? 'has-events' : ''}" 
+                 onclick="selectDate(${year}, ${month}, ${day})">
+                <div class="day-number">${day}</div>
+                ${dayEvents.length > 0 ? `<div class="event-indicator">${dayEvents.length}</div>` : ''}
+            </div>
+        `;
+    }
+    
+    calendarDays.innerHTML = html;
+}
+
+function previousMonth() {
+    currentMonth.setMonth(currentMonth.getMonth() - 1);
+    renderCalendar();
+    loadUpcomingEvents();
+}
+
+function nextMonth() {
+    currentMonth.setMonth(currentMonth.getMonth() + 1);
+    renderCalendar();
+    loadUpcomingEvents();
+}
+
+function selectDate(year, month, day) {
+    selectedDate = new Date(year, month, day);
+    renderCalendar();
+    showDayEvents();
+}
+
+function showDayEvents() {
+    const dateStr = formatDateForStorage(selectedDate);
+    const events = getEvents().filter(event => event.date === dateStr);
+    
+    if (events.length === 0) {
+        toast('Bu gün için etkinlik yok', 'info');
+        return;
+    }
+    
+    let content = `
+        <div class="day-events-modal">
+            <div class="day-events-header">
+                <div class="day-events-title">${selectedDate.toLocaleDateString('tr-TR')} Etkinlikleri</div>
+            </div>
+            <div class="day-events-list">
+    `;
+    
+    events.forEach(event => {
+        content += `
+            <div class="event-item">
+                <div class="event-time">${event.time}</div>
+                <div class="event-info">
+                    <div class="event-title">${escapeHtml(event.title)}</div>
+                    <div class="event-description">${escapeHtml(event.description)}</div>
+                    <div class="event-participants">${event.participants?.length || 0} katılımcı</div>
+                </div>
+                <div class="event-actions">
+                    <button class="btn-secondary" onclick="editEvent('${event.id}')">Düzenle</button>
+                    <button class="btn-danger" onclick="deleteEvent('${event.id}')">Sil</button>
+                </div>
+            </div>
+        `;
+    });
+    
+    content += `
+            </div>
+        </div>
+    `;
+    
+    showModal("Günlük Etkinlikler", content, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+function showCreateEventModal() {
+    const modalContent = `
+        <div class="create-event-modal">
+            <div class="create-event-header">
+                <div class="create-event-title">📝 Yeni Etkinlik</div>
+            </div>
+            <div class="create-event-content">
+                <div class="form-group">
+                    <label>Etkinlik Adı:</label>
+                    <input type="text" id="event-title" placeholder="Etkinlik adını girin..." maxlength="100">
+                </div>
+                
+                <div class="form-group">
+                    <label>Tarih:</label>
+                    <input type="date" id="event-date" value="${formatDateForInput(selectedDate)}">
+                </div>
+                
+                <div class="form-group">
+                    <label>Saat:</label>
+                    <input type="time" id="event-time" value="19:00">
+                </div>
+                
+                <div class="form-group">
+                    <label>Açıklama:</label>
+                    <textarea id="event-description" placeholder="Etkinlik açıklaması..." rows="3" maxlength="500"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>Etkinlik Türü:</label>
+                    <select id="event-type">
+                        <option value="meeting">Toplantı</option>
+                        <option value="game">Oyun Gecesi</option>
+                        <option value="study">Çalışma Oturumu</option>
+                        <option value="social">Sosyal Etkinlik</option>
+                        <option value="birthday">Doğum Günü</option>
+                        <option value="other">Diğer</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="event-reminder">
+                        Hatırlatıcı Gönder
+                    </label>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="event-recurring">
+                        Tekrarlayan Etkinlik
+                    </label>
+                </div>
+            </div>
+            
+            <div class="create-event-footer">
+                <button class="btn-secondary" onclick="hideModal()">İptal</button>
+                <button class="btn-primary" onclick="createEvent()">Oluştur</button>
+            </div>
+        </div>
+    `;
+    
+    showModal("Etkinlik Oluştur", modalContent, '', true);
+}
+
+function createEvent() {
+    const title = document.getElementById('event-title')?.value.trim();
+    const date = document.getElementById('event-date')?.value;
+    const time = document.getElementById('event-time')?.value;
+    const description = document.getElementById('event-description')?.value.trim();
+    const type = document.getElementById('event-type')?.value;
+    const reminder = document.getElementById('event-reminder')?.checked || false;
+    const recurring = document.getElementById('event-recurring')?.checked || false;
+    
+    if (!title || !date || !time) {
+        toast('Lütfen zorunlu alanları doldurun', 'error');
+        return;
+    }
+    
+    const event = {
+        id: generateId(),
+        title: title,
+        date: date,
+        time: time,
+        description: description,
+        type: type,
+        reminder: reminder,
+        recurring: recurring,
+        createdBy: state.peerId,
+        createdAt: Date.now(),
+        participants: []
+    };
+    
+    // Save event
+    saveEvent(event);
+    
+    // Show success message
+    toast('Etkinlik oluşturuldu', 'success');
+    
+    // Close modal and refresh calendar
+    hideModal();
+    renderCalendar();
+    loadUpcomingEvents();
+}
+
+function saveEvent(event) {
+    const events = getEvents();
+    events.push(event);
+    
+    // Sort events by date and time
+    events.sort((a, b) => {
+        const dateA = new Date(a.date + ' ' + a.time);
+        const dateB = new Date(b.date + ' ' + b.time);
+        return dateA - dateB;
+    });
+    
+    // Keep only last 100 events
+    if (events.length > 100) {
+        events.splice(0, events.length - 100);
+    }
+    
+    localStorage.setItem('scord_events', JSON.stringify(events));
+}
+
+function getEvents() {
+    try {
+        const saved = localStorage.getItem('scord_events');
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        console.warn("Failed to load events:", e);
+        return [];
+    }
+}
+
+function loadUpcomingEvents() {
+    const events = getEvents();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const upcomingEvents = events.filter(event => {
+        const eventDate = new Date(event.date);
+        return eventDate >= today;
+    }).slice(0, 5);
+    
+    const container = document.getElementById('upcoming-events');
+    if (!container) return;
+    
+    if (upcomingEvents.length === 0) {
+        container.innerHTML = '<div class="no-events">Yaklaşan etkinlik yok</div>';
+        return;
+    }
+    
+    let html = '';
+    upcomingEvents.forEach(event => {
+        const eventDate = new Date(event.date);
+        const dateStr = eventDate.toLocaleDateString('tr-TR', { 
+            day: 'numeric', 
+            month: 'short' 
+        });
+        
+        html += `
+            <div class="upcoming-event-item" onclick="showEventDetails('${event.id}')">
+                <div class="event-date">${dateStr}</div>
+                <div class="event-info">
+                    <div class="event-title">${escapeHtml(event.title)}</div>
+                    <div class="event-time">${event.time}</div>
+                </div>
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html;
+}
+
+function showEventDetails(eventId) {
+    const events = getEvents();
+    const event = events.find(e => e.id === eventId);
+    
+    if (!event) return;
+    
+    const eventDate = new Date(event.date);
+    const dateStr = eventDate.toLocaleDateString('tr-TR', { 
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
+    
+    const typeLabels = {
+        meeting: '📅 Toplantı',
+        game: '🎮 Oyun Gecesi',
+        study: '📚 Çalışma Oturumu',
+        social: '🎉 Sosyal Etkinlik',
+        birthday: '🎂 Doğum Günü',
+        other: '📝 Diğer'
+    };
+    
+    const content = `
+        <div class="event-details-modal">
+            <div class="event-details-header">
+                <div class="event-details-title">${escapeHtml(event.title)}</div>
+                <div class="event-details-type">${typeLabels[event.type] || typeLabels.other}</div>
+            </div>
+            <div class="event-details-content">
+                <div class="event-detail-item">
+                    <div class="detail-label">📅 Tarih:</div>
+                    <div class="detail-value">${dateStr}</div>
+                </div>
+                <div class="event-detail-item">
+                    <div class="detail-label">⏰ Saat:</div>
+                    <div class="detail-value">${event.time}</div>
+                </div>
+                ${event.description ? `
+                    <div class="event-detail-item">
+                        <div class="detail-label">📝 Açıklama:</div>
+                        <div class="detail-value">${escapeHtml(event.description)}</div>
+                    </div>
+                ` : ''}
+                <div class="event-detail-item">
+                    <div class="detail-label">👥 Katılımcılar:</div>
+                    <div class="detail-value">${event.participants?.length || 0} kişi</div>
+                </div>
+                ${event.reminder ? `
+                    <div class="event-detail-item">
+                        <div class="detail-label">🔔 Hatırlatıcı:</div>
+                        <div class="detail-value">Aktif</div>
+                    </div>
+                ` : ''}
+                ${event.recurring ? `
+                    <div class="event-detail-item">
+                        <div class="detail-label">🔄 Tekrarlama:</div>
+                        <div class="detail-value">Aktif</div>
+                    </div>
+                ` : ''}
+            </div>
+            <div class="event-details-actions">
+                <button class="btn-primary" onclick="joinEvent('${event.id}')">Katıl</button>
+                <button class="btn-secondary" onclick="editEvent('${event.id}')">Düzenle</button>
+                <button class="btn-danger" onclick="deleteEvent('${event.id}')">Sil</button>
+            </div>
+        </div>
+    `;
+    
+    showModal("Etkinlik Detayları", content, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+function joinEvent(eventId) {
+    const events = getEvents();
+    const event = events.find(e => e.id === eventId);
+    
+    if (!event) return;
+    
+    // Check if already joined
+    if (event.participants?.includes(state.peerId)) {
+        toast('Bu etkinliğe zaten katıldınız', 'info');
+        return;
+    }
+    
+    // Add participant
+    if (!event.participants) event.participants = [];
+    event.participants.push(state.peerId);
+    
+    // Save updated event
+    localStorage.setItem('scord_events', JSON.stringify(events));
+    
+    toast('Etkinliğe katıldınız!', 'success');
+    
+    // Refresh displays
+    loadUpcomingEvents();
+}
+
+function editEvent(eventId) {
+    const events = getEvents();
+    const event = events.find(e => e.id === eventId);
+    
+    if (!event) return;
+    
+    // Pre-fill form with event data
+    const modalContent = `
+        <div class="create-event-modal">
+            <div class="create-event-header">
+                <div class="create-event-title">✏️ Etkinliği Düzenle</div>
+            </div>
+            <div class="create-event-content">
+                <div class="form-group">
+                    <label>Etkinlik Adı:</label>
+                    <input type="text" id="event-title" value="${escapeHtml(event.title)}" maxlength="100">
+                </div>
+                
+                <div class="form-group">
+                    <label>Tarih:</label>
+                    <input type="date" id="event-date" value="${event.date}">
+                </div>
+                
+                <div class="form-group">
+                    <label>Saat:</label>
+                    <input type="time" id="event-time" value="${event.time}">
+                </div>
+                
+                <div class="form-group">
+                    <label>Açıklama:</label>
+                    <textarea id="event-description" rows="3" maxlength="500">${escapeHtml(event.description || '')}</textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label>Etkinlik Türü:</label>
+                    <select id="event-type">
+                        <option value="meeting" ${event.type === 'meeting' ? 'selected' : ''}>Toplantı</option>
+                        <option value="game" ${event.type === 'game' ? 'selected' : ''}>Oyun Gecesi</option>
+                        <option value="study" ${event.type === 'study' ? 'selected' : ''}>Çalışma Oturumu</option>
+                        <option value="social" ${event.type === 'social' ? 'selected' : ''}>Sosyal Etkinlik</option>
+                        <option value="birthday" ${event.type === 'birthday' ? 'selected' : ''}>Doğum Günü</option>
+                        <option value="other" ${event.type === 'other' ? 'selected' : ''}>Diğer</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="event-reminder" ${event.reminder ? 'checked' : ''}>
+                        Hatırlatıcı Gönder
+                    </label>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="event-recurring" ${event.recurring ? 'checked' : ''}>
+                        Tekrarlayan Etkinlik
+                    </label>
+                </div>
+            </div>
+            
+            <div class="create-event-footer">
+                <button class="btn-secondary" onclick="hideModal()">İptal</button>
+                <button class="btn-primary" onclick="updateEvent('${eventId}')">Güncelle</button>
+            </div>
+        </div>
+    `;
+    
+    showModal("Etkinlik Düzenle", modalContent, '', true);
+}
+
+function updateEvent(eventId) {
+    const events = getEvents();
+    const eventIndex = events.findIndex(e => e.id === eventId);
+    
+    if (eventIndex === -1) return;
+    
+    const title = document.getElementById('event-title')?.value.trim();
+    const date = document.getElementById('event-date')?.value;
+    const time = document.getElementById('event-time')?.value;
+    const description = document.getElementById('event-description')?.value.trim();
+    const type = document.getElementById('event-type')?.value;
+    const reminder = document.getElementById('event-reminder')?.checked || false;
+    const recurring = document.getElementById('event-recurring')?.checked || false;
+    
+    if (!title || !date || !time) {
+        toast('Lütfen zorunlu alanları doldurun', 'error');
+        return;
+    }
+    
+    // Update event
+    events[eventIndex] = {
+        ...events[eventIndex],
+        title: title,
+        date: date,
+        time: time,
+        description: description,
+        type: type,
+        reminder: reminder,
+        recurring: recurring,
+        updatedAt: Date.now()
+    };
+    
+    // Save updated events
+    localStorage.setItem('scord_events', JSON.stringify(events));
+    
+    toast('Etkinlik güncellendi', 'success');
+    
+    hideModal();
+    renderCalendar();
+    loadUpcomingEvents();
+}
+
+function deleteEvent(eventId) {
+    if (!confirm('Bu etkinliği silmek istediğinizden emin misiniz?')) return;
+    
+    const events = getEvents();
+    const eventIndex = events.findIndex(e => e.id === eventId);
+    
+    if (eventIndex === -1) return;
+    
+    events.splice(eventIndex, 1);
+    localStorage.setItem('scord_events', JSON.stringify(events));
+    
+    toast('Etkinlik silindi', 'success');
+    
+    hideModal();
+    renderCalendar();
+    loadUpcomingEvents();
+}
+
+// Utility functions
+function formatDateForStorage(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function formatDateForInput(date) {
+    return formatDateForStorage(date);
+}
+
+// Event message display
+function createEventMessage(event) {
+    const eventDate = new Date(event.date);
+    const dateStr = eventDate.toLocaleDateString('tr-TR', { 
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric'
+    });
+    
+    const typeLabels = {
+        meeting: '📅 Toplantı',
+        game: '🎮 Oyun Gecesi',
+        study: '📚 Çalışma Oturumu',
+        social: '🎉 Sosyal Etkinlik',
+        birthday: '🎂 Doğum Günü',
+        other: '📝 Etkinlik'
+    };
+    
+    return `
+        <div class="message-event">
+            <div class="event-container">
+                <div class="event-header">
+                    <div class="event-icon">${typeLabels[event.type] || typeLabels.other}</div>
+                    <div class="event-info">
+                        <div class="event-title">${escapeHtml(event.title)}</div>
+                        <div class="event-date-time">${dateStr} • ${event.time}</div>
+                    </div>
+                </div>
+                ${event.description ? `<div class="event-description">${escapeHtml(event.description)}</div>` : ''}
+                <div class="event-actions">
+                    <button class="btn-primary" onclick="joinEvent('${event.id}')">Katıl</button>
+                    <button class="btn-secondary" onclick="showEventDetails('${event.id}')">Detaylar</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+// Poll System
+function showCreatePollModal() {
+    const modalContent = `
+        <div class="create-poll-modal">
+            <div class="create-poll-header">
+                <div class="create-poll-title">📊 Anket Oluştur</div>
+                <div class="create-poll-subtitle">Topluluğunun fikrini öğren</div>
+            </div>
+            <div class="create-poll-content">
+                <div class="form-group">
+                    <label>Anket Sorusu:</label>
+                    <input type="text" id="poll-question" placeholder="Anket sorusunu buraya yaz..." maxlength="200">
+                </div>
+                
+                <div class="form-group">
+                    <label>Anket Türü:</label>
+                    <select id="poll-type" onchange="updatePollType()">
+                        <option value="single">Tek Seçim</option>
+                        <option value="multiple">Çoklu Seçim</option>
+                        <option value="rating">Değerlendirme</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Seçenekler:</label>
+                    <div class="poll-options" id="poll-options">
+                        <div class="poll-option-item">
+                            <input type="text" class="option-input" placeholder="Seçenek 1" maxlength="100">
+                            <button class="btn-remove" onclick="removePollOption(this)">✕</button>
+                        </div>
+                        <div class="poll-option-item">
+                            <input type="text" class="option-input" placeholder="Seçenek 2" maxlength="100">
+                            <button class="btn-remove" onclick="removePollOption(this)">✕</button>
+                        </div>
+                    </div>
+                    <button class="btn-secondary" onclick="addPollOption()">+ Seçenek Ekle</button>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="poll-anonymous">
+                        Anonim Oylama
+                    </label>
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="poll-public-results">
+                        Sonuçları Herkes Görebilir
+                    </label>
+                </div>
+                
+                <div class="form-group">
+                    <label>Süre (Opsiyonel):</label>
+                    <select id="poll-duration">
+                        <option value="">Süresiz</option>
+                        <option value="300">5 dakika</option>
+                        <option value="600">10 dakika</option>
+                        <option value="1800">30 dakika</option>
+                        <option value="3600">1 saat</option>
+                        <option value="7200">2 saat</option>
+                        <option value="14400">4 saat</option>
+                        <option value="86400">1 gün</option>
+                        <option value="604800">1 hafta</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="create-poll-footer">
+                <button class="btn-secondary" onclick="hideModal()">İptal</button>
+                <button class="btn-primary" onclick="createPoll()">Anketi Oluştur</button>
+            </div>
+        </div>
+    `;
+    
+    showModal("Anket Oluştur", modalContent, '', true);
+}
+
+function updatePollType() {
+    const pollType = document.getElementById('poll-type')?.value;
+    const optionsContainer = document.getElementById('poll-options');
+    
+    if (!optionsContainer) return;
+    
+    if (pollType === 'rating') {
+        // For rating polls, show star rating options
+        optionsContainer.innerHTML = `
+            <div class="rating-options">
+                <div class="rating-label">Değerlendirme Ölçeği:</div>
+                <div class="rating-scale">
+                    <div class="rating-option">
+                        <input type="radio" name="rating-scale" value="5" checked>
+                        <label>⭐⭐⭐⭐⭐ (5 yıldız)</label>
+                    </div>
+                    <div class="rating-option">
+                        <input type="radio" name="rating-scale" value="4">
+                        <label>⭐⭐⭐⭐ (4 yıldız)</label>
+                    </div>
+                    <div class="rating-option">
+                        <input type="radio" name="rating-scale" value="3">
+                        <label>⭐⭐⭐ (3 yıldız)</label>
+                    </div>
+                    <div class="rating-option">
+                        <input type="radio" name="rating-scale" value="2">
+                        <label>⭐⭐ (2 yıldız)</label>
+                    </div>
+                    <div class="rating-option">
+                        <input type="radio" name="rating-scale" value="1">
+                        <label>⭐ (1 yıldız)</label>
+                    </div>
+                </div>
+            </div>
+        `;
+    } else {
+        // For single/multiple choice, show text options
+        optionsContainer.innerHTML = `
+            <div class="poll-option-item">
+                <input type="text" class="option-input" placeholder="Seçenek 1" maxlength="100">
+                <button class="btn-remove" onclick="removePollOption(this)">✕</button>
+            </div>
+            <div class="poll-option-item">
+                <input type="text" class="option-input" placeholder="Seçenek 2" maxlength="100">
+                <button class="btn-remove" onclick="removePollOption(this)">✕</button>
+            </div>
+        `;
+    }
+}
+
+function addPollOption() {
+    const optionsContainer = document.getElementById('poll-options');
+    if (!optionsContainer) return;
+    
+    const optionCount = optionsContainer.querySelectorAll('.poll-option-item').length;
+    const newOption = document.createElement('div');
+    newOption.className = 'poll-option-item';
+    newOption.innerHTML = `
+        <input type="text" class="option-input" placeholder="Seçenek ${optionCount + 1}" maxlength="100">
+        <button class="btn-remove" onclick="removePollOption(this)">✕</button>
+    `;
+    
+    optionsContainer.appendChild(newOption);
+}
+
+function removePollOption(button) {
+    const optionItem = button.parentElement;
+    const optionsContainer = optionItem.parentElement;
+    
+    // Keep at least 2 options
+    if (optionsContainer.querySelectorAll('.poll-option-item').length > 2) {
+        optionItem.remove();
+    } else {
+        toast('En az 2 seçenek olmalı', 'error');
+    }
+}
+
+function createPoll() {
+    const question = document.getElementById('poll-question')?.value.trim();
+    const pollType = document.getElementById('poll-type')?.value;
+    const anonymous = document.getElementById('poll-anonymous')?.checked || false;
+    const publicResults = document.getElementById('poll-public-results')?.checked || false;
+    const duration = document.getElementById('poll-duration')?.value || '';
+    
+    if (!question) {
+        toast('Lütfen anket sorusunu girin', 'error');
+        return;
+    }
+    
+    let options = [];
+    
+    if (pollType === 'rating') {
+        // For rating polls, create star rating options
+        const selectedScale = document.querySelector('input[name="rating-scale"]:checked')?.value || '5';
+        for (let i = 1; i <= parseInt(selectedScale); i++) {
+            options.push({
+                id: generateId(),
+                text: `${i} Yıldız`,
+                votes: 0,
+                voters: []
+            });
+        }
+    } else {
+        // For single/multiple choice, collect text options
+        const optionInputs = document.querySelectorAll('.option-input');
+        optionInputs.forEach(input => {
+            const text = input.value.trim();
+            if (text) {
+                options.push({
+                    id: generateId(),
+                    text: text,
+                    votes: 0,
+                    voters: []
+                });
+            }
+        });
+    }
+    
+    if (options.length < 2) {
+        toast('En az 2 seçenek girin', 'error');
+        return;
+    }
+    
+    const poll = {
+        id: generateId(),
+        question: question,
+        type: pollType,
+        options: options,
+        anonymous: anonymous,
+        publicResults: publicResults,
+        duration: duration,
+        createdBy: state.peerId,
+        createdAt: Date.now(),
+        expiresAt: duration ? Date.now() + (parseInt(duration) * 1000) : null,
+        totalVotes: 0,
+        voters: []
+    };
+    
+    // Save poll
+    savePoll(poll);
+    
+    // Send poll message
+    const message = {
+        type: 'poll',
+        pollId: poll.id,
+        question: poll.question,
+        pollType: poll.type,
+        options: poll.options,
+        anonymous: poll.anonymous,
+        publicResults: poll.publicResults,
+        expiresAt: poll.expiresAt,
+        totalVotes: poll.totalVotes
+    };
+    
+    // This would integrate with the existing message sending system
+    toast('Anket oluşturuldu', 'success');
+    
+    hideModal();
+}
+
+function savePoll(poll) {
+    const polls = getPolls();
+    polls.push(poll);
+    
+    // Keep only last 100 polls
+    if (polls.length > 100) {
+        polls.shift();
+    }
+    
+    localStorage.setItem('scord_polls', JSON.stringify(polls));
+}
+
+function getPolls() {
+    try {
+        const saved = localStorage.getItem('scord_polls');
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        console.warn("Failed to load polls:", e);
+        return [];
+    }
+}
+
+// Poll message display
+function createPollMessage(poll) {
+    const isExpired = poll.expiresAt && Date.now() > poll.expiresAt;
+    const hasVoted = poll.voters?.includes(state.peerId);
+    const canViewResults = poll.publicResults || hasVoted || isExpired;
+    
+    let content = `
+        <div class="message-poll">
+            <div class="poll-container">
+                <div class="poll-header">
+                    <div class="poll-question">${escapeHtml(poll.question)}</div>
+                    <div class="poll-info">
+                        <span class="poll-type">${getPollTypeLabel(poll.type)}</span>
+                        <span class="poll-votes">${poll.totalVotes} oy</span>
+                        ${poll.expiresAt ? `<span class="poll-expires">${getTimeRemaining(poll.expiresAt)}</span>` : ''}
+                    </div>
+                </div>
+                
+                <div class="poll-options">
+    `;
+    
+    poll.options.forEach(option => {
+        const percentage = poll.totalVotes > 0 ? Math.round((option.votes / poll.totalVotes) * 100) : 0;
+        const hasVotedForOption = option.voters?.includes(state.peerId);
+        
+        content += `
+            <div class="poll-option ${hasVotedForOption ? 'voted' : ''}" onclick="voteInPoll('${poll.id}', '${option.id}')">
+                <div class="poll-option-content">
+                    <div class="poll-option-text">${escapeHtml(option.text)}</div>
+                    ${canViewResults ? `
+                        <div class="poll-option-results">
+                            <div class="poll-progress-bar">
+                                <div class="poll-progress-fill" style="width: ${percentage}%"></div>
+                            </div>
+                            <div class="poll-option-stats">
+                                <span class="poll-percentage">${percentage}%</span>
+                                <span class="poll-vote-count">${option.votes} oy</span>
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+                ${!hasVoted && !isExpired ? `
+                    <div class="poll-option-radio">
+                        ${poll.type === 'single' ? '○' : '☐'}
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    });
+    
+    content += `
+                </div>
+                
+                ${!hasVoted && !isExpired ? `
+                    <div class="poll-actions">
+                        <button class="btn-primary" onclick="submitPollVote('${poll.id}')">Oy Ver</button>
+                    </div>
+                ` : ''}
+                
+                ${isExpired ? `
+                    <div class="poll-expired">Bu anket sona erdi</div>
+                ` : ''}
+                
+                ${hasVoted && !isExpired ? `
+                    <div class="poll-voted">Oyunuz kullanıldı</div>
+                ` : ''}
+            </div>
+        </div>
+    `;
+    
+    return content;
+}
+
+function getPollTypeLabel(type) {
+    const labels = {
+        single: 'Tek Seçim',
+        multiple: 'Çoklu Seçim',
+        rating: 'Değerlendirme'
+    };
+    return labels[type] || 'Anket';
+}
+
+function getTimeRemaining(expiresAt) {
+    const now = Date.now();
+    const remaining = expiresAt - now;
+    
+    if (remaining <= 0) return 'Sona erdi';
+    
+    const hours = Math.floor(remaining / 3600000);
+    const minutes = Math.floor((remaining % 3600000) / 60000);
+    
+    if (hours > 24) {
+        const days = Math.floor(hours / 24);
+        return `${days} gün`;
+    } else if (hours > 0) {
+        return `${hours} saat ${minutes} dk`;
+    } else {
+        return `${minutes} dk`;
+    }
+}
+
+let currentPollVotes = {};
+
+function voteInPoll(pollId, optionId) {
+    if (!currentPollVotes[pollId]) {
+        currentPollVotes[pollId] = [];
+    }
+    
+    const poll = getPolls().find(p => p.id === pollId);
+    if (!poll) return;
+    
+    if (poll.type === 'single') {
+        // Single choice - replace previous selection
+        currentPollVotes[pollId] = [optionId];
+    } else {
+        // Multiple choice - toggle selection
+        const index = currentPollVotes[pollId].indexOf(optionId);
+        if (index === -1) {
+            currentPollVotes[pollId].push(optionId);
+        } else {
+            currentPollVotes[pollId].splice(index, 1);
+        }
+    }
+    
+    // Update UI to show selection
+    updatePollSelectionUI(pollId);
+}
+
+function updatePollSelectionUI(pollId) {
+    const pollContainer = document.querySelector(`[data-poll-id="${pollId}"]`);
+    if (!pollContainer) return;
+    
+    const poll = getPolls().find(p => p.id === pollId);
+    if (!poll) return;
+    
+    const selectedOptions = currentPollVotes[pollId] || [];
+    
+    poll.options.forEach(option => {
+        const optionElement = pollContainer.querySelector(`[data-option-id="${option.id}"]`);
+        if (optionElement) {
+            if (selectedOptions.includes(option.id)) {
+                optionElement.classList.add('selected');
+            } else {
+                optionElement.classList.remove('selected');
+            }
+        }
+    });
+}
+
+function submitPollVote(pollId) {
+    const polls = getPolls();
+    const poll = polls.find(p => p.id === pollId);
+    
+    if (!poll) return;
+    
+    const selectedOptions = currentPollVotes[pollId] || [];
+    
+    if (selectedOptions.length === 0) {
+        toast('Lütfen en az bir seçenek seçin', 'error');
+        return;
+    }
+    
+    if (poll.type === 'single' && selectedOptions.length > 1) {
+        toast('Tek seçim anketinde sadece bir seçenek seçebilirsiniz', 'error');
+        return;
+    }
+    
+    // Check if already voted
+    if (poll.voters?.includes(state.peerId)) {
+        toast('Bu ankete zaten oy verdiniz', 'info');
+        return;
+    }
+    
+    // Check if expired
+    if (poll.expiresAt && Date.now() > poll.expiresAt) {
+        toast('Bu anket sona ermiş', 'error');
+        return;
+    }
+    
+    // Record vote
+    selectedOptions.forEach(optionId => {
+        const option = poll.options.find(o => o.id === optionId);
+        if (option) {
+            option.votes++;
+            if (!option.voters) option.voters = [];
+            option.voters.push(state.peerId);
+        }
+    });
+    
+    poll.totalVotes++;
+    if (!poll.voters) poll.voters = [];
+    poll.voters.push(state.peerId);
+    
+    // Save updated poll
+    localStorage.setItem('scord_polls', JSON.stringify(polls));
+    
+    // Clear current votes
+    delete currentPollVotes[pollId];
+    
+    // Show success message
+    toast('Oyunuz kaydedildi', 'success');
+    
+    // Update poll display
+    updatePollDisplay(pollId);
+}
+
+function updatePollDisplay(pollId) {
+    // This would update the poll message in the chat
+    // For now, we'll just show a success message
+    setTimeout(() => {
+        const pollContainer = document.querySelector(`[data-poll-id="${pollId}"]`);
+        if (pollContainer) {
+            // Refresh the poll display
+            const poll = getPolls().find(p => p.id === pollId);
+            if (poll) {
+                pollContainer.outerHTML = createPollMessage(poll);
+            }
+        }
+    }, 100);
+}
+
+// Poll results modal
+function showPollResultsModal(pollId) {
+    const polls = getPolls();
+    const poll = polls.find(p => p.id === pollId);
+    
+    if (!poll) return;
+    
+    const isExpired = poll.expiresAt && Date.now() > poll.expiresAt;
+    const canViewResults = poll.publicResults || isExpired;
+    
+    if (!canViewResults) {
+        toast('Sonuçları görme yetkiniz yok', 'error');
+        return;
+    }
+    
+    let content = `
+        <div class="poll-results-modal">
+            <div class="poll-results-header">
+                <div class="poll-results-title">📊 Anket Sonuçları</div>
+                <div class="poll-results-question">${escapeHtml(poll.question)}</div>
+            </div>
+            <div class="poll-results-content">
+                <div class="poll-results-stats">
+                    <div class="stat-item">
+                        <div class="stat-label">Toplam Oy:</div>
+                        <div class="stat-value">${poll.totalVotes}</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Anket Türü:</div>
+                        <div class="stat-value">${getPollTypeLabel(poll.type)}</div>
+                    </div>
+                    ${poll.expiresAt ? `
+                        <div class="stat-item">
+                            <div class="stat-label">Durum:</div>
+                            <div class="stat-value">${isExpired ? 'Sona erdi' : 'Aktif'}</div>
+                        </div>
+                    ` : ''}
+                </div>
+                
+                <div class="poll-results-options">
+    `;
+    
+    // Sort options by votes
+    const sortedOptions = [...poll.options].sort((a, b) => b.votes - a.votes);
+    
+    sortedOptions.forEach((option, index) => {
+        const percentage = poll.totalVotes > 0 ? Math.round((option.votes / poll.totalVotes) * 100) : 0;
+        const isWinner = index === 0 && option.votes > 0;
+        
+        content += `
+            <div class="result-option ${isWinner ? 'winner' : ''}">
+                <div class="result-option-rank">#${index + 1}</div>
+                <div class="result-option-content">
+                    <div class="result-option-text">${escapeHtml(option.text)}</div>
+                    <div class="result-option-bar">
+                        <div class="result-option-fill" style="width: ${percentage}%"></div>
+                    </div>
+                    <div class="result-option-stats">
+                        <span class="result-percentage">${percentage}%</span>
+                        <span class="result-votes">${option.votes} oy</span>
+                    </div>
+                </div>
+                ${isWinner ? '<div class="winner-crown">👑</div>' : ''}
+            </div>
+        `;
+    });
+    
+    content += `
+                </div>
+                
+                ${!poll.anonymous && poll.voters && poll.voters.length > 0 ? `
+                    <div class="poll-voters">
+                        <div class="voters-title">Oy Kullananlar (${poll.voters.length}):</div>
+                        <div class="voters-list">
+                            ${poll.voters.map(voterId => `<div class="voter-item">@${voterId.substring(0, 8)}</div>`).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        </div>
+    `;
+    
+    showModal("Anket Sonuçları", content, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+// Recent polls modal
+function showRecentPollsModal() {
+    const polls = getPolls();
+    
+    if (polls.length === 0) {
+        toast('Henüz anket yok', 'info');
+        return;
+    }
+    
+    let content = `
+        <div class="recent-polls-modal">
+            <div class="recent-polls-title">📊 Son Anketler</div>
+            <div class="recent-polls-list">
+    `;
+    
+    polls.slice(-10).reverse().forEach(poll => {
+        const isExpired = poll.expiresAt && Date.now() > poll.expiresAt;
+        const statusIcon = isExpired ? '🔒' : '📊';
+        
+        content += `
+            <div class="recent-poll-item" onclick="showPollResultsModal('${poll.id}')">
+                <div class="poll-icon">${statusIcon}</div>
+                <div class="poll-info">
+                    <div class="poll-question">${escapeHtml(poll.question)}</div>
+                    <div class="poll-details">${poll.totalVotes} oy • ${getPollTypeLabel(poll.type)}</div>
+                    <div class="poll-date">${new Date(poll.createdAt).toLocaleDateString('tr-TR')}</div>
+                </div>
+            </div>
+        `;
+    });
+    
+    content += `
+            </div>
+        </div>
+    `;
+    
+    showModal("Son Anketler", content, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+// Welcome System for New Members
+function showWelcomeSettingsModal() {
+    const welcomeSettings = getWelcomeSettings();
+    
+    const modalContent = `
+        <div class="welcome-settings-modal">
+            <div class="welcome-settings-header">
+                <div class="welcome-settings-title">👋 Hoş Geldin Sistemi</div>
+                <div class="welcome-settings-subtitle">Yeni üyeleri karşılama ayarları</div>
+            </div>
+            <div class="welcome-settings-content">
+                <div class="settings-section">
+                    <div class="settings-title">Genel Ayarlar</div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="welcome-enabled" ${welcomeSettings.enabled ? 'checked' : ''}>
+                            Hoş Geldin Sistemini Aktif Et
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="welcome-dm" ${welcomeSettings.sendDM ? 'checked' : ''}>
+                            Yeni Üyelere Özel Mesaj Gönder
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="welcome-channel" ${welcomeSettings.postInChannel ? 'checked' : ''}>
+                            Hoş Geldin Mesajını Kanalda Paylaş
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <div class="settings-title">Hoş Geldin Mesajı</div>
+                    <div class="form-group">
+                        <label>Mesaj Başlığı:</label>
+                        <input type="text" id="welcome-title" value="${escapeHtml(welcomeSettings.title)}" placeholder="Hoş Geldin!" maxlength="100">
+                    </div>
+                    <div class="form-group">
+                        <label>Mesaj İçeriği:</label>
+                        <textarea id="welcome-message" rows="4" placeholder="Sunucumuza hoş geldin!">${escapeHtml(welcomeSettings.message)}</textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Hoş Geldin GIF'i (opsiyonel):</label>
+                        <input type="text" id="welcome-gif" value="${escapeHtml(welcomeSettings.gifUrl || '')}" placeholder="GIF URL'si">
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <div class="settings-title">Otomasyonlar</div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="auto-roles" ${welcomeSettings.autoRoles ? 'checked' : ''}>
+                            Otomatik Rol Ver
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>Otomatik Rol:</label>
+                        <select id="auto-role-select">
+                            <option value="">Rol Seçin</option>
+                            <option value="newbie" ${welcomeSettings.autoRole === 'newbie' ? 'selected' : ''}>Yeni Üye</option>
+                            <option value="member" ${welcomeSettings.autoRole === 'member' ? 'selected' : ''}>Üye</option>
+                            <option value="verified" ${welcomeSettings.autoRole === 'verified' ? 'selected' : ''}>Doğrulanmış</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="welcome-emoji" ${welcomeSettings.addEmoji ? 'checked' : ''}>
+                            Hoş Geldin Emoji Ekle
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <div class="settings-title">Hoş Geldin Kanalı</div>
+                    <div class="form-group">
+                        <label>Kanal:</label>
+                        <select id="welcome-channel-select">
+                            <option value="">Genel Sohbet</option>
+                            <option value="welcome" ${welcomeSettings.channelId === 'welcome' ? 'selected' : ''}>#hoş-geldin</option>
+                            <option value="announcements" ${welcomeSettings.channelId === 'announcements' ? 'selected' : ''}>#duyurular</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="welcome-settings-footer">
+                <button class="btn-secondary" onclick="hideModal()">İptal</button>
+                <button class="btn-primary" onclick="saveWelcomeSettings()">Kaydet</button>
+            </div>
+        </div>
+    `;
+    
+    showModal("Hoş Geldin Ayarları", modalContent, '', true);
+}
+
+function getWelcomeSettings() {
+    try {
+        const saved = localStorage.getItem('scord_welcome_settings');
+        return saved ? JSON.parse(saved) : {
+            enabled: true,
+            sendDM: true,
+            postInChannel: true,
+            title: '👋 Hoş Geldin!',
+            message: 'Sunucumuza hoş geldin! Kuralları okumayı ve tanışmaya başlamayı unutma.',
+            gifUrl: '',
+            autoRoles: false,
+            autoRole: 'newbie',
+            addEmoji: true,
+            channelId: 'welcome'
+        };
+    } catch (e) {
+        console.warn("Failed to load welcome settings:", e);
+        return {
+            enabled: true,
+            sendDM: true,
+            postInChannel: true,
+            title: '👋 Hoş Geldin!',
+            message: 'Sunucumuza hoş geldin! Kuralları okumayı ve tanışmaya başlamayı unutma.',
+            gifUrl: '',
+            autoRoles: false,
+            autoRole: 'newbie',
+            addEmoji: true,
+            channelId: 'welcome'
+        };
+    }
+}
+
+function saveWelcomeSettings() {
+    const settings = {
+        enabled: document.getElementById('welcome-enabled')?.checked || false,
+        sendDM: document.getElementById('welcome-dm')?.checked || false,
+        postInChannel: document.getElementById('welcome-channel')?.checked || false,
+        title: document.getElementById('welcome-title')?.value.trim() || '👋 Hoş Geldin!',
+        message: document.getElementById('welcome-message')?.value.trim() || 'Sunucumuza hoş geldin!',
+        gifUrl: document.getElementById('welcome-gif')?.value.trim() || '',
+        autoRoles: document.getElementById('auto-roles')?.checked || false,
+        autoRole: document.getElementById('auto-role-select')?.value || 'newbie',
+        addEmoji: document.getElementById('welcome-emoji')?.checked || false,
+        channelId: document.getElementById('welcome-channel-select')?.value || 'welcome'
+    };
+    
+    localStorage.setItem('scord_welcome_settings', JSON.stringify(settings));
+    
+    toast('Hoş geldin ayarları kaydedildi', 'success');
+    hideModal();
+}
+
+function triggerWelcomeMessage(memberId, memberName) {
+    const settings = getWelcomeSettings();
+    
+    if (!settings.enabled) return;
+    
+    const welcomeMessage = createWelcomeMessage(memberName, settings);
+    
+    // Send to channel if enabled
+    if (settings.postInChannel) {
+        // This would integrate with the existing message system
+        console.log('Posting welcome message to channel:', welcomeMessage);
+    }
+    
+    // Send DM if enabled
+    if (settings.sendDM) {
+        // This would integrate with the existing DM system
+        console.log('Sending welcome DM:', welcomeMessage);
+    }
+    
+    // Add emoji reaction if enabled
+    if (settings.addEmoji) {
+        // This would add emoji reactions to the join message
+        console.log('Adding welcome emoji reactions');
+    }
+    
+    // Assign auto role if enabled
+    if (settings.autoRoles && settings.autoRole) {
+        assignAutoRole(memberId, settings.autoRole);
+    }
+    
+    // Log welcome event
+    logWelcomeEvent(memberId, memberName);
+}
+
+function createWelcomeMessage(memberName, settings) {
+    const personalizedMessage = settings.message.replace('{user}', `@${memberName}`);
+    
+    let content = `
+        <div class="welcome-message">
+            <div class="welcome-header">
+                <div class="welcome-title">${escapeHtml(settings.title)}</div>
+                <div class="welcome-subtitle">${escapeHtml(memberName)} sunucuya katıldı!</div>
+            </div>
+            <div class="welcome-content">
+                <div class="welcome-text">${escapeHtml(personalizedMessage)}</div>
+                ${settings.gifUrl ? `
+                    <div class="welcome-gif">
+                        <img src="${escapeHtml(settings.gifUrl)}" alt="Welcome GIF" />
+                    </div>
+                ` : ''}
+            </div>
+            <div class="welcome-actions">
+                <button class="btn-primary" onclick="showServerRules()">Kuralları Gör</button>
+                <button class="btn-secondary" onclick="showServerInfo()">Sunucu Hakkında</button>
+            </div>
+        </div>
+    `;
+    
+    return content;
+}
+
+function assignAutoRole(memberId, roleName) {
+    // This would integrate with the existing role system
+    console.log(`Assigning role ${roleName} to member ${memberId}`);
+    
+    // Show toast for demonstration
+    toast(`${roleName} rolü verildi`, 'success');
+}
+
+function logWelcomeEvent(memberId, memberName) {
+    const welcomeLogs = getWelcomeLogs();
+    
+    const logEntry = {
+        id: generateId(),
+        memberId: memberId,
+        memberName: memberName,
+        timestamp: Date.now(),
+        date: new Date().toISOString()
+    };
+    
+    welcomeLogs.push(logEntry);
+    
+    // Keep only last 100 logs
+    if (welcomeLogs.length > 100) {
+        welcomeLogs.shift();
+    }
+    
+    localStorage.setItem('scord_welcome_logs', JSON.stringify(welcomeLogs));
+}
+
+function getWelcomeLogs() {
+    try {
+        const saved = localStorage.getItem('scord_welcome_logs');
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        console.warn("Failed to load welcome logs:", e);
+        return [];
+    }
+}
+
+// Welcome logs modal
+function showWelcomeLogsModal() {
+    const logs = getWelcomeLogs();
+    
+    if (logs.length === 0) {
+        toast('Henüz hoş geldin kaydı yok', 'info');
+        return;
+    }
+    
+    let content = `
+        <div class="welcome-logs-modal">
+            <div class="welcome-logs-title">📋 Hoş Geldin Kayıtları</div>
+            <div class="welcome-logs-list">
+    `;
+    
+    logs.slice(-20).reverse().forEach(log => {
+        const date = new Date(log.timestamp);
+        const dateStr = date.toLocaleDateString('tr-TR');
+        const timeStr = date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+        
+        content += `
+            <div class="welcome-log-item">
+                <div class="log-info">
+                    <div class="log-member">${escapeHtml(log.memberName)}</div>
+                    <div class="log-date">${dateStr} • ${timeStr}</div>
+                </div>
+                <div class="log-actions">
+                    <button class="btn-secondary" onclick="showMemberProfile('${log.memberId}')">Profil</button>
+                </div>
+            </div>
+        `;
+    });
+    
+    content += `
+            </div>
+        </div>
+    `;
+    
+    showModal("Hoş Geldin Kayıtları", content, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+// Server rules modal
+function showServerRules() {
+    const rules = getServerRules();
+    
+    let content = `
+        <div class="server-rules-modal">
+            <div class="server-rules-header">
+                <div class="server-rules-title">📜 Sunucu Kuralları</div>
+            </div>
+            <div class="server-rules-content">
+                <div class="rules-list">
+    `;
+    
+    rules.forEach((rule, index) => {
+        content += `
+            <div class="rule-item">
+                <div class="rule-number">${index + 1}</div>
+                <div class="rule-text">${escapeHtml(rule)}</div>
+            </div>
+        `;
+    });
+    
+    content += `
+                </div>
+            </div>
+            <div class="server-rules-footer">
+                <button class="btn-primary" onclick="acknowledgeRules()">Kuralları Anladım</button>
+            </div>
+        </div>
+    `;
+    
+    showModal("Sunucu Kuralları", content, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+function getServerRules() {
+    try {
+        const saved = localStorage.getItem('scord_server_rules');
+        return saved ? JSON.parse(saved) : [
+            "Saygılı ol ve diğer üyelere karşı nazik davran",
+            "Spam ve flood yapmaktan kaçın",
+            "Uygunsuz içerik paylaşmayın",
+            "Telif haklarına dikkat edin",
+            "Kişisel bilgileri paylaşmayın",
+            "Sunucu amacına uygun davranın"
+        ];
+    } catch (e) {
+        console.warn("Failed to load server rules:", e);
+        return [
+            "Saygılı ol ve diğer üyelere karşı nazik davran",
+            "Spam ve flood yapmaktan kaçın",
+            "Uygunsuz içerik paylaşmayın"
+        ];
+    }
+}
+
+function acknowledgeRules() {
+    // This would mark the user as having read the rules
+    localStorage.setItem('scord_rules_acknowledged', Date.now().toString());
+    
+    toast('Kuralları anladım olarak işaretlendi', 'success');
+    hideModal();
+}
+
+// Server info modal
+function showServerInfo() {
+    const serverInfo = getServerInfo();
+    
+    const content = `
+        <div class="server-info-modal">
+            <div class="server-info-header">
+                <div class="server-info-title">ℹ️ Sunucu Hakkında</div>
+            </div>
+            <div class="server-info-content">
+                <div class="info-section">
+                    <div class="info-title">📝 Açıklama</div>
+                    <div class="info-text">${escapeHtml(serverInfo.description)}</div>
+                </div>
+                
+                <div class="info-section">
+                    <div class="info-title">🎯 Amaç</div>
+                    <div class="info-text">${escapeHtml(serverInfo.purpose)}</div>
+                </div>
+                
+                <div class="info-section">
+                    <div class="info-title">📊 İstatistikler</div>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-value">${serverInfo.memberCount}</div>
+                            <div class="stat-label">Üye</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">${serverInfo.channelCount}</div>
+                            <div class="stat-label">Kanal</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">${serverInfo.roleCount}</div>
+                            <div class="stat-label">Rol</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">${serverInfo.createdAt}</div>
+                            <div class="stat-label">Kuruluş</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="info-section">
+                    <div class="info-title">🔗 Bağlantılar</div>
+                    <div class="links-list">
+                        ${serverInfo.links.map(link => `
+                            <div class="link-item">
+                                <div class="link-name">${escapeHtml(link.name)}</div>
+                                <a href="${escapeHtml(link.url)}" target="_blank" class="link-url">${escapeHtml(link.url)}</a>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showModal("Sunucu Bilgileri", content, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
+}
+
+function getServerInfo() {
+    try {
+        const saved = localStorage.getItem('scord_server_info');
+        return saved ? JSON.parse(saved) : {
+            description: "Harika bir topluluk için bir aradayız. Burada herkes kendini evinde hissedecek!",
+            purpose: "Arkadaşlık, eğlence ve iletişim kurmak için bir platform.",
+            memberCount: "1,234",
+            channelCount: "15",
+            roleCount: "8",
+            createdAt: "Ocak 2024",
+            links: [
+                { name: "Web Sitesi", url: "https://example.com" },
+                { name: "Twitter", url: "https://twitter.com/example" },
+                { name: "Instagram", url: "https://instagram.com/example" }
+            ]
+        };
+    } catch (e) {
+        console.warn("Failed to load server info:", e);
+        return {
+            description: "Harika bir topluluk için bir aradayız.",
+            purpose: "Arkadaşlık ve iletişim kurmak.",
+            memberCount: "100",
+            channelCount: "5",
+            roleCount: "3",
+            createdAt: "2024",
+            links: []
+        };
+    }
+}
+
+// Test welcome message
+function testWelcomeMessage() {
+    const settings = getWelcomeSettings();
+    const testMessage = createWelcomeMessage("TestKullanıcı", settings);
+    
+    const content = `
+        <div class="test-welcome-modal">
+            <div class="test-welcome-title">🧪 Hoş Geldin Mesajı Test</div>
+            <div class="test-welcome-content">
+                ${testMessage}
+            </div>
+        </div>
+    `;
+    
+    showModal("Test Mesajı", content, `
+        <button class="btn-secondary" onclick="hideModal()">Kapat</button>
+    `);
 }
 
 function groupedChannels(server, type) {

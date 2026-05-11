@@ -668,6 +668,23 @@ async def signaling_ws(websocket: WebSocket, room_id: str, peer_id: str):
                     msg["from"] = peer_id
                     await send_to_peer(room, target, msg)
 
+            elif msg_type == "dm_relay":
+                target = msg.get("target")
+                payload = msg.get("payload")
+                if target and payload:
+                    # Relay DM to target peer
+                    relay_msg = {
+                        "type": "dm",
+                        "from": peer_id,
+                        "payload": payload
+                    }
+                    await send_to_peer(room, target, relay_msg)
+
+            elif msg_type == "dm":
+                # Direct DM between peers (already handled by P2P data channel)
+                # This can be used for server-side logging if needed
+                pass
+
             elif msg_type == "broadcast":
                 # Generic broadcast (e.g. nick changes)
                 msg["from"] = peer_id
