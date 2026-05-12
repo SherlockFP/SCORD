@@ -1,30 +1,14 @@
-/**
- * Shercord Fixes v1.0
- * Tüm kritik bugları düzeltir:
- * 1. Mesaj silme çalışmıyor → düzeltildi
- * 2. Kanal silme endpoint yok → server.py'de eklendi + client fix
- * 3. Sunucu logosu URL'de boşluk → düzeltildi
- * 4. Sesli odadan ayrılınca hala sesli odadasın → düzeltildi
- * 5. Kullanıcı ayarları chat tasarımı → CSS eklendi
- * 6. Davet kodu URL boşluk → düzeltildi
- * 7. Kanal arka plan değişimi → broadcast ile düzeltildi
- * 8. Discord benzeri ses efektleri → eklendi
- * 9. DM kapatma/silme → eklendi
- * 10. Arkadaş silme → zaten çalışıyordu, iyileştirildi
- * 11. Sunucu izinleri kayıt → düzeltildi
- * 12. GPU acceleration + performans → eklendi
- */
-
 (function () {
   "use strict";
+  var _API = typeof API_BASE !== "undefined" ? API_BASE : "/api";
 
   /* ══════════════════════════════════════════════════════════
-     1. DISCORD BENZERİ SES EFEKTLERİ (Web Audio API)
+     1. DISCORD TARZI SES EFEKTLERİ (Web Audio API)
   ══════════════════════════════════════════════════════════ */
 
   const SFX_CTX = { ac: null };
 
-  function getSFXCtx() {
+  function gctx() {
     if (!SFX_CTX.ac || SFX_CTX.ac.state === "closed") {
       SFX_CTX.ac = new (window.AudioContext || window.webkitAudioContext)();
     }
@@ -32,170 +16,122 @@
     return SFX_CTX.ac;
   }
 
-  function sfxVolume() {
+  function sfxVol() {
     const v = parseFloat(localStorage.getItem("scord_sfx_volume") ?? "0.35");
     return isNaN(v) ? 0.35 : Math.max(0, Math.min(1, v));
   }
 
-  function sfxEnabled() {
+  function sfxEn() {
     return localStorage.getItem("scord_sfx_enabled") !== "false";
   }
 
-  /**
-   * Belirli bir ses efekti çal.
-   * @param {"join"|"leave"|"message"|"dm"|"mute"|"unmute"|"error"|"click"|"mention"} name
-   */
   window.playDiscordSFX = function playDiscordSFX(name) {
-    if (!sfxEnabled()) return;
+    if (!sfxEn()) return;
     try {
-      const ac = getSFXCtx();
-      const vol = sfxVolume();
+      const ac = gctx();
+      const vol = sfxVol();
       const t = ac.currentTime;
+      const master = ac.createGain();
+      master.connect(ac.destination);
+      master.gain.setValueAtTime(vol, t);
 
-      const gain = ac.createGain();
-      gain.connect(ac.destination);
-      gain.gain.setValueAtTime(vol, t);
+      function osc(type, freq, start, dur, gv, freqEnd) {
+        const o = ac.createOscillator();
+        const g = ac.createGain();
+        o.type = type;
+        o.frequency.setValueAtTime(freq, t + start);
+        if (freqEnd) o.frequency.exponentialRampToValueAtTime(freqEnd, t + start + dur);
+        o.connect(g);
+        g.connect(master);
+        g.gain.setValueAtTime(gv, t + start);
+        g.gain.exponentialRampToValueAtTime(0.001, t + start + dur);
+        o.start(t + start);
+        o.stop(t + start + dur + 0.01);
+      }
 
-      const schedules = {
+      function noise(dur, gv) {
+        const buf = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate);
+        const d = buf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) {
+          d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+        }
+        const src = ac.createBufferSource();
+        src.buffer = buf;
+        const g = ac.createGain();
+        src.connect(g);
+        g.connect(master);
+        g.gain.setValueAtTime(gv, t);
+        src.start(t);
+      }
+
+      const s = {
         join: () => {
-          // Yukarı giden iki ton (Discord join sesi)
-          [523, 659].forEach((freq, i) => {
-            const o = ac.createOscillator();
-            const g = ac.createGain();
-            o.type = "sine";
-            o.frequency.value = freq;
-            o.connect(g);
-            g.connect(ac.destination);
-            g.gain.setValueAtTime(vol * 0.6, t + i * 0.12);
-            g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + 0.25);
-            o.start(t + i * 0.12);
-            o.stop(t + i * 0.12 + 0.25);
-          });
+          // Discord join: ascending chirp with noise tail
+          osc("sine", 523, 0, 0.15, 0.5);
+          osc("sine", 659, 0.08, 0.2, 0.45);
+          osc("sine", 784, 0.16, 0.25, 0.3);
+          noise(0.1, 0.06);
         },
         leave: () => {
-          // Aşağı inen iki ton
-          [659, 494].forEach((freq, i) => {
-            const o = ac.createOscillator();
-            const g = ac.createGain();
-            o.type = "sine";
-            o.frequency.value = freq;
-            o.connect(g);
-            g.connect(ac.destination);
-            g.gain.setValueAtTime(vol * 0.5, t + i * 0.12);
-            g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.12 + 0.22);
-            o.start(t + i * 0.12);
-            o.stop(t + i * 0.12 + 0.22);
-          });
+          // Discord leave: descending
+          osc("sine", 659, 0, 0.18, 0.45);
+          osc("sine", 494, 0.1, 0.2, 0.4);
+          osc("sine", 392, 0.2, 0.22, 0.2);
+          noise(0.08, 0.05);
         },
         message: () => {
-          const o = ac.createOscillator();
-          const g = ac.createGain();
-          o.type = "sine";
-          o.frequency.setValueAtTime(880, t);
-          o.frequency.exponentialRampToValueAtTime(660, t + 0.1);
-          o.connect(g);
-          g.connect(ac.destination);
-          g.gain.setValueAtTime(vol * 0.3, t);
-          g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
-          o.start(t);
-          o.stop(t + 0.18);
+          // Quick pip (Discord message)
+          osc("sine", 880, 0, 0.06, 0.25);
+          osc("sine", 1100, 0.04, 0.08, 0.15);
         },
         dm: () => {
-          [880, 1100].forEach((freq, i) => {
-            const o = ac.createOscillator();
-            const g = ac.createGain();
-            o.type = "sine";
-            o.frequency.value = freq;
-            o.connect(g);
-            g.connect(ac.destination);
-            g.gain.setValueAtTime(vol * 0.35, t + i * 0.08);
-            g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.15);
-            o.start(t + i * 0.08);
-            o.stop(t + i * 0.08 + 0.15);
-          });
+          // Two-tone ascending
+          osc("sine", 880, 0, 0.1, 0.3);
+          osc("sine", 1100, 0.07, 0.12, 0.25);
         },
         mute: () => {
-          const o = ac.createOscillator();
-          const g = ac.createGain();
-          o.type = "square";
-          o.frequency.setValueAtTime(200, t);
-          o.frequency.exponentialRampToValueAtTime(100, t + 0.15);
-          o.connect(g);
-          g.connect(ac.destination);
-          g.gain.setValueAtTime(vol * 0.15, t);
-          g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
-          o.start(t);
-          o.stop(t + 0.15);
+          osc("square", 200, 0, 0.12, 0.12, 100);
+          noise(0.05, 0.04);
         },
         unmute: () => {
-          const o = ac.createOscillator();
-          const g = ac.createGain();
-          o.type = "square";
-          o.frequency.setValueAtTime(100, t);
-          o.frequency.exponentialRampToValueAtTime(200, t + 0.12);
-          o.connect(g);
-          g.connect(ac.destination);
-          g.gain.setValueAtTime(vol * 0.15, t);
-          g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
-          o.start(t);
-          o.stop(t + 0.12);
+          osc("square", 100, 0, 0.1, 0.12, 200);
+          noise(0.04, 0.04);
         },
         mention: () => {
-          [660, 880, 1100].forEach((freq, i) => {
-            const o = ac.createOscillator();
-            const g = ac.createGain();
-            o.type = "sine";
-            o.frequency.value = freq;
-            o.connect(g);
-            g.connect(ac.destination);
-            g.gain.setValueAtTime(vol * 0.4, t + i * 0.07);
-            g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.07 + 0.15);
-            o.start(t + i * 0.07);
-            o.stop(t + i * 0.07 + 0.15);
-          });
+          // Three-tone alert
+          osc("sine", 660, 0, 0.1, 0.35);
+          osc("sine", 880, 0.07, 0.1, 0.3);
+          osc("sine", 1100, 0.14, 0.15, 0.28);
+          noise(0.06, 0.05);
         },
         error: () => {
-          const o = ac.createOscillator();
-          const g = ac.createGain();
-          o.type = "sawtooth";
-          o.frequency.value = 220;
-          o.connect(g);
-          g.connect(ac.destination);
-          g.gain.setValueAtTime(vol * 0.2, t);
-          g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
-          o.start(t);
-          o.stop(t + 0.25);
+          osc("sawtooth", 220, 0, 0.2, 0.15, 110);
+          noise(0.12, 0.06);
         },
         click: () => {
-          const buf = ac.createBuffer(1, ac.sampleRate * 0.04, ac.sampleRate);
-          const d = buf.getChannelData(0);
-          for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-          const src = ac.createBufferSource();
-          src.buffer = buf;
-          const g = ac.createGain();
-          src.connect(g);
-          g.connect(ac.destination);
-          g.gain.setValueAtTime(vol * 0.08, t);
-          src.start(t);
-          src.stop(t + 0.04);
+          noise(0.03, 0.06);
+        },
+        connect: () => {
+          // Voice connect - subtle ascending
+          osc("sine", 440, 0, 0.08, 0.15);
+          osc("sine", 550, 0.06, 0.1, 0.12);
+        },
+        disconnect: () => {
+          osc("sine", 440, 0, 0.1, 0.12, 330);
         },
       };
 
-      const fn = schedules[name];
+      const fn = s[name];
       if (fn) fn();
-    } catch (e) {
-      /* sessizce geç */
-    }
+    } catch (e) {}
   };
 
-  /* Eski playSound'u Discord SFX'e yönlendir */
-  const _origPlaySound = window.playSound;
+  const _origPS = window.playSound;
   window.playSound = function (freq, duration, type) {
-    // Sadece voice join/leave efektlerini yakala
-    if (freq === 523) return playDiscordSFX("join");
-    if (freq === 330) return playDiscordSFX("leave");
-    if (freq === 660 || freq === 880) return playDiscordSFX("message");
-    _origPlaySound && _origPlaySound(freq, duration, type);
+    if (freq === 523) return window.playDiscordSFX("join");
+    if (freq === 330) return window.playDiscordSFX("leave");
+    if (freq === 660 || freq === 880) return window.playDiscordSFX("message");
+    _origPS && _origPS(freq, duration, type);
   };
 
   /* ══════════════════════════════════════════════════════════
@@ -205,32 +141,22 @@
   window.deleteChatMessage = function deleteChatMessage(msg) {
     const server = window.state?.servers?.find((s) => s.id === window.state.activeServerId);
     if (!server) return;
-
-    // channelId yoksa aktif kanalı kullan
     const channelId = msg.channelId || window.state.activeChannelId;
     if (!channelId) return;
-
     if (!server.messages) server.messages = {};
     if (!server.messages[channelId]) server.messages[channelId] = [];
-
-    // Mesajı listeden kaldır
     server.messages[channelId] = server.messages[channelId].filter((m) => m.id !== msg.id);
     server.pinned_messages = (server.pinned_messages || []).filter((m) => m.id !== msg.id);
-
-    // Diğer peer'lara ilet (güvenilir kanal üzerinden)
     if (typeof meshBroadcastReliable === "function") {
       meshBroadcastReliable({ type: "msg_delete", payload: { channelId, msgId: msg.id } });
     } else if (window.state?.mesh) {
       window.state.mesh.broadcast({ type: "msg_delete", payload: { channelId, msgId: msg.id } });
     }
-
-    // Sunucuya da bildir (opsiyonel kalıcılık)
-    if (window.API_BASE && window.state.activeServerId) {
-      fetch(`${window.API_BASE}/rooms/${window.state.activeServerId}/messages/${msg.id}`, {
+    if (_API && window.state.activeServerId) {
+      fetch(`${_API}/rooms/${window.state.activeServerId}/messages/${msg.id}?channel_id=${encodeURIComponent(channelId)}`, {
         method: "DELETE",
       }).catch(() => {});
     }
-
     if (typeof renderMessages === "function") {
       renderMessages(window.state.activeServerId, window.state.activeChannelId);
     }
@@ -238,90 +164,51 @@
   };
 
   /* ══════════════════════════════════════════════════════════
-     3. SESLİ ODADAN AYRILMA BUĞU — leaveServer fix
+     3. SESLİ ODADAN AYRILMA BUĞU
   ══════════════════════════════════════════════════════════ */
 
-  const _origLeaveServer = window.leaveServer;
+  const _origLS = window.leaveServer;
   window.leaveServer = function leaveServer(serverId) {
-    // Sunucudan ayrılmadan önce sesli kanaldan çık
     if (window.state?.voiceChannelId) {
-      try {
-        window.leaveVoiceChannel && window.leaveVoiceChannel();
-      } catch (e) {}
+      try { window.leaveVoiceChannel && window.leaveVoiceChannel(); } catch (e) {}
     }
-    _origLeaveServer && _origLeaveServer(serverId);
-    // Anasayfaya dön
+    window.state.activeChannelId = null;
+    window.state.voiceChannelId = null;
+    _origLS && _origLS(serverId);
     if (typeof showHomeView === "function") showHomeView();
     if (typeof renderServerRail === "function") renderServerRail();
   };
 
   /* ══════════════════════════════════════════════════════════
-     4. SUNUCU LOGOSU — URL boşluk fix
+     4. SUNUCU LOGOSU FİXİ
   ══════════════════════════════════════════════════════════ */
 
   window.updateServerIcon = function updateServerIcon(serverId, url) {
-    const trimmedUrl = (url || "").trim();
-    if (!trimmedUrl) {
-      typeof toast === "function" && toast("Geçerli bir URL girin.", "error");
-      return;
-    }
-    fetch(`${window.API_BASE}/rooms/${serverId}/icon`, {
+    const trimmed = (url || "").trim();
+    if (!trimmed) { typeof toast === "function" && toast("Geçerli bir URL girin.", "error"); return; }
+    fetch(`${_API}/rooms/${serverId}/icon`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: trimmedUrl }),
-    })
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.success) {
-          const server = window.state?.servers?.find((s) => s.id === serverId);
-          if (server) server.icon_url = trimmedUrl;
-          typeof renderServerRail === "function" && renderServerRail();
-          // Sidebar'daki icon'ı güncelle
-          document.querySelectorAll(`[data-server-id="${serverId}"]`).forEach((el) => {
-            if (trimmedUrl) {
-              el.innerHTML = `<img src="${trimmedUrl}" alt="" class="rail-guild-img" style="width:100%;height:100%;border-radius:inherit;object-fit:cover;"/>`;
-            }
-          });
-          typeof toast === "function" && toast("Sunucu ikonu güncellendi.", "success");
-        } else {
-          typeof toast === "function" && toast("İkon güncellenemedi: " + (data.error || "hata"), "error");
-        }
-      })
-      .catch(() => {
-        typeof toast === "function" && toast("Bağlantı hatası.", "error");
-      });
-  };
-
-  /* ══════════════════════════════════════════════════════════
-     5. DAVET KODU URL FİX
-  ══════════════════════════════════════════════════════════ */
-
-  window.joinByCode = async function joinByCode() {
-    const input = document.getElementById("join-invite-input");
-    if (!input) return;
-    const code = input.value.trim().toUpperCase();
-    if (!code) return;
-    try {
-      const res = await fetch(`${window.API_BASE}/rooms/join/${code}`);
-      if (!res.ok) {
-        typeof toast === "function" && toast("Davet kodu geçersiz.", "error");
-        return;
-      }
-      const room = await res.json();
-      if (room.room_id) {
-        typeof joinServer === "function" && joinServer(room.room_id);
-        input.value = "";
-        typeof toast === "function" && toast("Sunucuya katıldın!", "success");
+      body: JSON.stringify({ url: trimmed }),
+    }).then((r) => r.json()).then((data) => {
+      if (data.success) {
+        const server = window.state?.servers?.find((s) => s.id === serverId);
+        if (server) server.icon_url = trimmed;
+        typeof renderServerRail === "function" && renderServerRail();
+        document.querySelectorAll(`[data-server-id="${serverId}"]`).forEach((el) => {
+          if (trimmed) {
+            el.innerHTML = `<img src="${trimmed}" alt="" class="rail-guild-img" style="width:100%;height:100%;border-radius:inherit;object-fit:cover;"/>`;
+          }
+        });
+        typeof toast === "function" && toast("Sunucu ikonu güncellendi.", "success");
       } else {
-        typeof toast === "function" && toast("Davet kodu geçersiz.", "error");
+        typeof toast === "function" && toast("İkon güncellenemedi: " + (data.error || "hata"), "error");
       }
-    } catch (e) {
-      typeof toast === "function" && toast("Bağlantı hatası.", "error");
-    }
+    }).catch(() => { typeof toast === "function" && toast("Bağlantı hatası.", "error"); });
   };
 
   /* ══════════════════════════════════════════════════════════
-     6. KANAL SİLME FİX (server.py'de DELETE endpoint eklendi)
+     5. KANAL SİLME FİXİ
   ══════════════════════════════════════════════════════════ */
 
   window.deleteChannel = async function deleteChannel(serverId, channelId) {
@@ -329,34 +216,21 @@
     if (!server) return;
     const channel = server.channels?.find((c) => c.id === channelId);
     if (!channel) return;
-
     if (!confirm(`"#${channel.name}" kanalını silmek istediğine emin misin?`)) return;
-
     try {
-      const res = await fetch(`${window.API_BASE}/rooms/${serverId}/channels/${channelId}`, {
-        method: "DELETE",
-      });
+      const res = await fetch(`${_API}/rooms/${serverId}/channels/${channelId}`, { method: "DELETE" });
       const data = await res.json();
-
       if (data.success) {
-        // Yerel state güncelle
         server.channels = server.channels.filter((c) => c.id !== channelId);
         delete (server.messages || {})[channelId];
         delete (server.channel_backgrounds || {})[channelId];
-
-        // Diğer peer'lara bildir
         if (window.state?.mesh) {
           window.state.mesh.broadcast({ type: "channel_delete", payload: { serverId, channelId } });
         }
-
-        // Aktif kanal silinmişse başka kanala geç
         if (window.state?.activeChannelId === channelId) {
           const firstText = server.channels.find((c) => c.type === "text");
-          if (firstText && typeof showChatView === "function") {
-            showChatView(serverId, firstText.id);
-          } else {
-            typeof showHomeView === "function" && showHomeView();
-          }
+          if (firstText && typeof showChatView === "function") showChatView(serverId, firstText.id);
+          else typeof showHomeView === "function" && showHomeView();
         } else {
           typeof updateChannelSidebar === "function" && updateChannelSidebar(serverId);
         }
@@ -370,12 +244,29 @@
   };
 
   /* ══════════════════════════════════════════════════════════
-     7. KANAL ARKA PLAN DEĞİŞİKLİĞİ — link ile değiş
+     6. KANAL ARKA PLANI
   ══════════════════════════════════════════════════════════ */
+
+  function _applyChannelBgImg(channelId, url) {
+    if (window.state?.activeChannelId !== channelId) return;
+    const target = document.getElementById("messages-area") || document.getElementById("chat-view");
+    if (!target) return;
+    if (url) {
+      target.style.backgroundImage = `linear-gradient(rgba(6,6,16,0.88),rgba(6,6,16,0.94)), url(${JSON.stringify(url)})`;
+      target.style.backgroundSize = "cover";
+      target.style.backgroundPosition = "center";
+      target.style.backgroundAttachment = "local";
+    } else {
+      target.style.backgroundImage = "";
+      target.style.backgroundSize = "";
+      target.style.backgroundPosition = "";
+      target.style.backgroundAttachment = "";
+    }
+  }
 
   window.setChannelBackground = async function setChannelBackground(serverId, channelId, url) {
     try {
-      const res = await fetch(`${window.API_BASE}/rooms/${serverId}/channel_background`, {
+      const res = await fetch(`${_API}/rooms/${serverId}/channel_background`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channel_id: channelId, url: url || null }),
@@ -388,7 +279,7 @@
           if (url) server.channel_backgrounds[channelId] = url;
           else delete server.channel_backgrounds[channelId];
         }
-        applyChannelBackground(channelId, url || null);
+        _applyChannelBgImg(channelId, url || null);
         typeof toast === "function" && toast("Kanal arka planı güncellendi.", "success");
       }
     } catch (e) {
@@ -396,134 +287,140 @@
     }
   };
 
-  function applyChannelBackground(channelId, url) {
-    if (window.state?.activeChannelId !== channelId) return;
-    const msgArea = document.getElementById("messages-area");
-    const chatView = document.getElementById("chat-view");
-    if (!msgArea && !chatView) return;
-    const target = msgArea || chatView;
-    if (url) {
-      target.style.backgroundImage = `url(${url})`;
-      target.style.backgroundSize = "cover";
-      target.style.backgroundPosition = "center";
-      target.style.backgroundAttachment = "local";
-    } else {
-      target.style.backgroundImage = "";
-      target.style.backgroundSize = "";
-      target.style.backgroundPosition = "";
-    }
-  }
-
-  /* Kanala girildiğinde arka planı uygula */
-  const _origShowChatView = window.showChatView;
+  const _origSCV = window.showChatView;
   window.showChatView = function showChatView(serverId, channelId) {
-    const result = _origShowChatView && _origShowChatView(serverId, channelId);
+    const result = _origSCV && _origSCV(serverId, channelId);
     try {
       const server = window.state?.servers?.find((s) => s.id === serverId);
       const bg = server?.channel_backgrounds?.[channelId];
-      applyChannelBackground(channelId, bg || null);
+      _applyChannelBgImg(channelId, bg || null);
     } catch (e) {}
     return result;
   };
 
   /* ══════════════════════════════════════════════════════════
-     8. DM KAPATMA / SİLME ÖZELLİĞİ
+     7. DM KAPATMA / SİLME
   ══════════════════════════════════════════════════════════ */
 
   window.closeDMConversation = function closeDMConversation(peerId) {
-    // DM overlay'i kapat
     const overlay = document.getElementById("dm-overlay");
     if (overlay) overlay.classList.add("hidden");
-
-    // Aktif DM state'ini temizle
-    if (window.state?.activeDM === peerId) {
-      window.state.activeDM = null;
-    }
+    if (window.state?.activeDM === peerId) window.state.activeDM = null;
   };
 
   window.deleteDMConversation = function deleteDMConversation(peerId, username) {
     if (!confirm(`@${username} ile olan DM geçmişini silmek istediğine emin misin?`)) return;
-
     if (!window.state) return;
     if (!window.state.dms) window.state.dms = {};
-
-    // Mesajları sil
     delete window.state.dms[peerId];
-
-    // localStorage'dan da kaldır
     try {
       const stored = JSON.parse(localStorage.getItem("scord_dms") || "{}");
       delete stored[peerId];
       localStorage.setItem("scord_dms", JSON.stringify(stored));
     } catch (e) {}
-
-    closeDMConversation(peerId);
+    window.closeDMConversation(peerId);
     typeof toast === "function" && toast("DM sohbeti silindi.", "info");
   };
 
-  /* DM overlay'e silme butonu ekle */
+  /* Arkadaş silme */
+  window.removeFriend = function removeFriend(peerId) {
+    if (!window.state) return;
+    window.state.friends = (window.state.friends || []).filter((f) => f.peerId !== peerId);
+    localStorage.setItem("scord_friends", JSON.stringify(window.state.friends));
+    if (!window.state.activeServerId && typeof renderHomeSidebar === "function") renderHomeSidebar();
+    typeof toast === "function" && toast("Arkadaş silindi.", "info");
+  };
+
+  /* DM overlay'ine silme butonu ekle */
   function enhanceDMOverlay() {
     const header = document.querySelector(".dm-header");
     if (!header || header.querySelector(".dm-delete-btn")) return;
-
     const deleteBtn = document.createElement("button");
     deleteBtn.className = "dm-close-btn dm-delete-btn";
     deleteBtn.title = "Sohbeti sil";
-    deleteBtn.style.cssText = "margin-right:4px;color:var(--red,#ed4245);opacity:0.7;font-size:14px;";
-    deleteBtn.innerHTML = "🗑️";
+    deleteBtn.style.cssText = "margin-right:4px;color:var(--red,#ed4245);opacity:0.7;font-size:14px;padding:4px 8px;border-radius:4px;border:none;background:rgba(255,255,255,0.05);cursor:pointer;";
+    deleteBtn.textContent = "🗑";
     deleteBtn.addEventListener("click", () => {
       const peerId = window.state?.activeDM;
       if (!peerId) return;
-      const friend = window.state?.friends?.find((f) => f.peerId === peerId);
-      const username = friend?.username || peerId;
-      deleteDMConversation(peerId, username);
+      window.deleteDMConversation(peerId, peerId);
     });
-
     const closeBtn = document.getElementById("dm-close-btn");
-    if (closeBtn) {
-      header.insertBefore(deleteBtn, closeBtn);
-    } else {
-      header.appendChild(deleteBtn);
-    }
+    if (closeBtn) header.insertBefore(deleteBtn, closeBtn);
+    else header.appendChild(deleteBtn);
+  }
+
+  /* DM sidebar'ında close/delete ve arkadaş sil butonları */
+  function enhanceDMSidebar() {
+    document.querySelectorAll(".dm-sidebar-item").forEach((item) => {
+      if (item.querySelector(".dm-item-actions")) return;
+      const peerId = item.dataset.peerId;
+      if (!peerId) return;
+      const actions = document.createElement("div");
+      actions.className = "dm-item-actions";
+      actions.style.cssText = "display:none;gap:4px;margin-left:auto;flex-shrink:0;";
+      const closeBtn = document.createElement("button");
+      closeBtn.textContent = "✕";
+      closeBtn.title = "DM'yi kapat";
+      closeBtn.style.cssText = "width:20px;height:20px;border-radius:4px;border:none;background:rgba(255,255,255,0.08);color:var(--text-muted);cursor:pointer;font-size:10px;display:flex;align-items:center;justify-content:center;";
+      closeBtn.addEventListener("click", (e) => { e.stopPropagation(); window.closeDMConversation(peerId); });
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "🗑";
+      delBtn.title = "DM'yi sil";
+      delBtn.style.cssText = "width:20px;height:20px;border-radius:4px;border:none;background:rgba(255,255,255,0.08);color:var(--red);cursor:pointer;font-size:10px;display:flex;align-items:center;justify-content:center;";
+      delBtn.addEventListener("click", (e) => { e.stopPropagation(); window.deleteDMConversation(peerId, peerId); });
+      const rmFriendBtn = document.createElement("button");
+      rmFriendBtn.textContent = "✕";
+      rmFriendBtn.title = "Arkadaştan çıkar";
+      rmFriendBtn.style.cssText = "width:20px;height:20px;border-radius:4px;border:none;background:rgba(237,66,69,0.15);color:var(--red);cursor:pointer;font-size:10px;display:flex;align-items:center;justify-content:center;";
+      rmFriendBtn.addEventListener("click", (e) => { e.stopPropagation(); window.removeFriend(peerId); });
+      actions.appendChild(closeBtn);
+      actions.appendChild(delBtn);
+      actions.appendChild(rmFriendBtn);
+      item.appendChild(actions);
+      item.addEventListener("mouseenter", () => { actions.style.display = "flex"; });
+      item.addEventListener("mouseleave", () => { actions.style.display = "none"; });
+    });
   }
 
   /* ══════════════════════════════════════════════════════════
-     9. SUNUCU İZİNLERİ — Kayıt düzelt
+     8. SUNUCU İZİNLERİ KAYIT
   ══════════════════════════════════════════════════════════ */
 
-  /* Sunucu ayarları kaydet — izin değişikliklerini düzgün kaydet */
   function patchSaveServerSettings() {
     const _orig = window.saveServerSettings;
     if (!_orig) return;
     window.saveServerSettings = function saveServerSettings(...args) {
       const result = _orig.apply(this, args);
-      // İzin değişikliklerini WS üzerinden gönder
       const server = window.state?.servers?.find((s) => s.id === window.state.activeServerId);
-      if (server && typeof sendServerEvent === "function") {
-        sendServerEvent({
-          type: "role_update",
-          roles: server.roles || {},
-          peer_roles: server.peer_roles || {},
-        });
-        sendServerEvent({
-          type: "permission_update",
-          channel_permissions: server.channel_permissions || {},
-        });
+      if (server) {
+        if (typeof sendServerEvent === "function") {
+          sendServerEvent({ type: "role_update", roles: server.roles || {}, peer_roles: server.peer_roles || {} });
+          sendServerEvent({ type: "permission_update", channel_permissions: server.channel_permissions || {} });
+        }
+        if (window.state?.mesh) {
+          window.state.mesh.broadcast({
+            type: "server_update",
+            payload: {
+              id: server.id, name: server.name, roles: server.roles,
+              peer_roles: server.peer_roles, channel_permissions: server.channel_permissions || {},
+              icon_url: server.icon_url, inviteCode: server.inviteCode,
+            },
+          });
+        }
       }
       return result;
     };
   }
 
   /* ══════════════════════════════════════════════════════════
-     10. WS MESAJ TİPLERİ — Yeni broadcast tiplerini işle
+     9. WS MESAJ HANDLER PATCH
   ══════════════════════════════════════════════════════════ */
 
-  function patchWSMessageHandler() {
+  function patchWSHandler() {
     const _orig = window.handleServerMessage;
     if (!_orig) return;
-
     window.handleServerMessage = function handleServerMessage(data, ...rest) {
-      // Kanal arka planı broadcast
       if (data?.type === "channel_background_update") {
         const server = window.state?.servers?.find((s) => s.id === window.state.activeServerId);
         if (server) {
@@ -531,7 +428,7 @@
           if (data.url) server.channel_backgrounds[data.channelId] = data.url;
           else delete server.channel_backgrounds[data.channelId];
           if (data.channel_backgrounds) server.channel_backgrounds = data.channel_backgrounds;
-          applyChannelBackground(data.channelId, data.url || null);
+          _applyChannelBgImg(data.channelId, data.url || null);
         }
         return;
       }
@@ -540,294 +437,339 @@
   }
 
   /* ══════════════════════════════════════════════════════════
-     11. PERFORMANS — GPU hızlandırma + smooth animasyon
+     10. PERFORMANS — GPU + 60FPS
   ══════════════════════════════════════════════════════════ */
 
-  function applyPerformanceOptimizations() {
-    // GPU acceleration ipuçları
-    const perfStyle = document.createElement("style");
-    perfStyle.id = "scord-perf-fixes";
-    perfStyle.textContent = `
-      /* GPU acceleration for smooth animations */
-      .msg-row,
-      .channel-item,
-      .member-item,
-      .server-rail,
-      .channel-sidebar,
-      .main-content,
-      .voice-participant-card,
-      .modal,
-      .dm-sheet {
-        will-change: auto;
+  function applyPerf() {
+    if (document.getElementById("scord-perf-fixes")) return;
+    const style = document.createElement("style");
+    style.id = "scord-perf-fixes";
+    style.textContent = `
+      html { scroll-behavior: smooth; }
+      .msg-row, .channel-item, .member-item, .server-rail,
+      .channel-sidebar, .main-content, .voice-participant-card,
+      .modal, .dm-sheet, .toast, .ctx-menu {
+        will-change: transform;
         transform: translateZ(0);
-        -webkit-transform: translateZ(0);
         backface-visibility: hidden;
-        -webkit-backface-visibility: hidden;
       }
-
-      /* Smooth scroll her yerde */
-      .messages-area,
-      .channel-list,
-      .members-list,
-      #members-list,
-      .dm-body {
+      .messages-area, .channel-list, .members-list, #members-list, .dm-body {
         scroll-behavior: smooth;
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
         overscroll-behavior: contain;
       }
-
-      /* Kaydırma çubuğu daha ince ve smooth */
-      *::-webkit-scrollbar {
-        width: 4px;
-        height: 4px;
+      *::-webkit-scrollbar { width: 4px; height: 4px; }
+      *::-webkit-scrollbar-track { background: transparent; }
+      *::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+      .toast, .ctx-menu, .modal-backdrop, .dm-overlay {
+        transition: opacity 0.1s ease, transform 0.1s ease;
       }
-      *::-webkit-scrollbar-track {
-        background: transparent;
-      }
-      *::-webkit-scrollbar-thumb {
-        background: rgba(255,255,255,0.15);
-        border-radius: 4px;
-      }
-
-      /* Animasyon süreleri optimize */
-      .toast,
-      .ctx-menu,
-      .modal-backdrop,
-      .dm-overlay {
-        transition: opacity 0.12s ease, transform 0.12s ease;
-      }
-
-      /* Metin render kalitesi */
       body {
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
         text-rendering: optimizeLegibility;
       }
-
-      /* Görsel katman yönetimi */
       .server-rail { contain: layout style; }
       .channel-sidebar { contain: layout; }
     `;
-    document.head.appendChild(perfStyle);
+    document.head.appendChild(style);
   }
 
   /* ══════════════════════════════════════════════════════════
-     12. CHAT TASARIM STİLİ CSS FİXİ
+     11. CHAT STİL CSS
   ══════════════════════════════════════════════════════════ */
 
-  function applyChatStyleFix() {
-    const existing = document.getElementById("scord-chat-style-fix");
-    if (existing) return;
-
+  function applyChatStyle() {
+    if (document.getElementById("scord-chat-style-fix")) return;
     const s = document.createElement("style");
     s.id = "scord-chat-style-fix";
     s.textContent = `
-      /* data-scord-chat-style="soft" — Yumuşak baloncuklar */
-      html[data-scord-chat-style="soft"] .msg-bubble {
-        border-radius: 18px;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.12);
-      }
-      html[data-scord-chat-style="soft"] .msg-row--self .msg-bubble {
-        border-bottom-right-radius: 4px;
-      }
-      html[data-scord-chat-style="soft"] .msg-row:not(.msg-row--self) .msg-bubble {
-        border-bottom-left-radius: 4px;
-      }
-
-      /* data-scord-chat-style="sharp" — Keskin köşeler */
-      html[data-scord-chat-style="sharp"] .msg-bubble {
-        border-radius: 4px !important;
-        box-shadow: none;
-      }
-
-      /* data-scord-chat-style="compact" — Kompakt görünüm */
-      html[data-scord-chat-style="compact"] .msg-row {
-        margin-bottom: 1px !important;
-      }
-      html[data-scord-chat-style="compact"] .msg-bubble {
-        padding: 4px 10px !important;
-        border-radius: 6px !important;
-      }
-      html[data-scord-chat-style="compact"] .msg-avatar {
-        width: 28px !important;
-        height: 28px !important;
-      }
-
-      /* data-scord-chat-style="cozy" — Geniş, rahat */
-      html[data-scord-chat-style="cozy"] .msg-row {
-        margin-bottom: 10px !important;
-      }
-      html[data-scord-chat-style="cozy"] .msg-bubble {
-        padding: 12px 16px !important;
-        border-radius: 16px !important;
-      }
-
-      /* data-scord-chat-style="discord" — Discord tarzı flat */
-      html[data-scord-chat-style="discord"] .msg-bubble {
-        background: transparent !important;
-        box-shadow: none !important;
-        border-radius: 0 !important;
-        padding: 2px 0 !important;
-      }
-      html[data-scord-chat-style="discord"] .msg-row--self .msg-bubble {
-        background: transparent !important;
-      }
-      html[data-scord-chat-style="discord"] .msg-row {
-        border-radius: 0 !important;
-      }
-      html[data-scord-chat-style="discord"] .msg-row:hover {
-        background: rgba(255,255,255,0.04) !important;
-      }
+      html[data-scord-chat-style="comfortable"] .msg-row { margin-bottom: 12px !important; }
+      html[data-scord-chat-style="comfortable"] .msg-bubble { padding: 14px 18px !important; border-radius: 18px !important; }
+      html[data-scord-chat-style="cozy"] .msg-row { margin-bottom: 6px !important; }
+      html[data-scord-chat-style="cozy"] .msg-bubble { padding: 10px 14px !important; border-radius: 12px !important; }
+      html[data-scord-chat-style="compact"] .msg-row { margin-bottom: 1px !important; }
+      html[data-scord-chat-style="compact"] .msg-bubble { padding: 4px 10px !important; border-radius: 6px !important; }
+      html[data-scord-chat-style="compact"] .msg-avatar { width: 24px !important; height: 24px !important; }
+      html[data-scord-chat-style="compact"] .msg-author { font-size: 11px !important; }
     `;
     document.head.appendChild(s);
   }
 
   /* ══════════════════════════════════════════════════════════
-     13. AYARLAR — SFX seçenekleri ekle
+     13. SES TETİKLEYİCİLERİ
   ══════════════════════════════════════════════════════════ */
 
-  function injectSFXSettings(page) {
-    if (!page || page.querySelector("#sfx-settings-section")) return;
-    const section = document.createElement("div");
-    section.id = "sfx-settings-section";
-    section.style.cssText = "margin-top:20px;padding:16px;background:rgba(255,255,255,0.05);border-radius:12px;";
-    section.innerHTML = `
-      <h4 style="margin:0 0 12px;font-size:14px;font-weight:600;opacity:0.9;">🔊 Ses Efektleri</h4>
-      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:10px;">
-        <input type="checkbox" id="sfx-enabled-chk" ${sfxEnabled() ? "checked" : ""} style="width:16px;height:16px;">
-        <span style="font-size:13px;">Discord benzeri ses efektleri</span>
-      </label>
-      <label style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:12px;opacity:0.7;min-width:80px;">Ses seviyesi</span>
-        <input type="range" id="sfx-volume-range" min="0" max="1" step="0.05"
-          value="${sfxVolume()}" style="flex:1;accent-color:var(--accent,#7289da);">
-        <span id="sfx-vol-display" style="font-size:12px;min-width:32px;">${Math.round(sfxVolume()*100)}%</span>
-      </label>
-      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
-        ${["join","leave","message","dm","mute","mention"].map(name =>
-          `<button onclick="playDiscordSFX('${name}')" style="padding:4px 10px;border-radius:6px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);cursor:pointer;font-size:11px;">${name}</button>`
-        ).join("")}
-      </div>
-    `;
-    page.appendChild(section);
-
-    const chk = section.querySelector("#sfx-enabled-chk");
-    const rangeEl = section.querySelector("#sfx-volume-range");
-    const display = section.querySelector("#sfx-vol-display");
-
-    chk?.addEventListener("change", () => {
-      localStorage.setItem("scord_sfx_enabled", chk.checked ? "true" : "false");
-      if (chk.checked) playDiscordSFX("click");
-    });
-    rangeEl?.addEventListener("input", () => {
-      const v = parseFloat(rangeEl.value);
-      localStorage.setItem("scord_sfx_volume", v.toFixed(2));
-      display.textContent = Math.round(v * 100) + "%";
-      playDiscordSFX("click");
-    });
-  }
-
-  /* ══════════════════════════════════════════════════════════
-     14. SES EFEKTLERİ — Otomatik tetikleyiciler
-  ══════════════════════════════════════════════════════════ */
-
-  function hookSoundEvents() {
-    // Sesli kanala katılma/ayrılma
-    const _origJoinVoice = window.joinVoiceChannel;
-    if (_origJoinVoice) {
+  function hookSounds() {
+    const _oj = window.joinVoiceChannel;
+    if (_oj) {
       window.joinVoiceChannel = function (...args) {
-        const result = _origJoinVoice.apply(this, args);
-        setTimeout(() => playDiscordSFX("join"), 200);
-        return result;
+        const r = _oj.apply(this, args);
+        setTimeout(() => window.playDiscordSFX("join"), 300);
+        return r;
       };
     }
-
-    const _origLeaveVoice = window.leaveVoiceChannel;
-    if (_origLeaveVoice) {
+    const _ol = window.leaveVoiceChannel;
+    if (_ol) {
       window.leaveVoiceChannel = function (...args) {
-        playDiscordSFX("leave");
-        return _origLeaveVoice.apply(this, args);
+        window.playDiscordSFX("leave");
+        return _ol.apply(this, args);
       };
     }
-
-    // Mute/unmute
     const micBtn = document.getElementById("mic-toggle-btn");
     if (micBtn) {
       micBtn.addEventListener("click", () => {
         setTimeout(() => {
-          const isMuted = window.state?.muted;
-          playDiscordSFX(isMuted ? "mute" : "unmute");
+          window.playDiscordSFX(window.state?.muted ? "mute" : "unmute");
         }, 50);
       });
     }
-
-    // Mesaj gönderme sesi
-    const sendBtn = document.getElementById("send-btn");
-    if (sendBtn) {
-      sendBtn.addEventListener("click", () => playDiscordSFX("message"));
-    }
-    // Enter ile gönder
-    const chatInput = document.getElementById("chat-input");
-    if (chatInput) {
-      chatInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) playDiscordSFX("message");
-      });
-    }
-
-    // DM gönderme
-    const dmSendBtn = document.getElementById("dm-send-btn");
-    if (dmSendBtn) {
-      dmSendBtn.addEventListener("click", () => playDiscordSFX("dm"));
-    }
-    const dmInput = document.getElementById("dm-input");
-    if (dmInput) {
-      dmInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) playDiscordSFX("dm");
-      });
-    }
+    const sentinel = setInterval(() => {
+      const sendBtn = document.getElementById("send-btn");
+      const chatInput = document.getElementById("chat-input");
+      const dmSendBtn = document.getElementById("dm-send-btn");
+      const dmInput = document.getElementById("dm-input");
+      if (sendBtn && chatInput && dmSendBtn && dmInput) {
+        clearInterval(sentinel);
+        sendBtn.addEventListener("click", () => window.playDiscordSFX("message"));
+        chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) window.playDiscordSFX("message"); });
+        dmSendBtn.addEventListener("click", () => window.playDiscordSFX("dm"));
+        dmInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) window.playDiscordSFX("dm"); });
+      }
+    }, 500);
   }
 
   /* ══════════════════════════════════════════════════════════
-     INIT — Tüm fixleri başlat
+     14. MÜZİK BOTU FİX — Herkese senkron + preview kapat
+  ══════════════════════════════════════════════════════════ */
+
+  function patchMusicBot() {
+    // Sesli kanaldan çıkınca müziği durdur
+    const _origLVC = window.leaveVoiceChannel;
+    if (_origLVC) {
+      window.leaveVoiceChannel = function (...args) {
+        if (typeof stopMusicBot === "function") stopMusicBot();
+        return _origLVC.apply(this, args);
+      };
+    }
+
+    // Müzik başlatma broadcast'ini düzelt — herkese ulaşsın
+    const _origPMBU = window.playMusicBotByUrl;
+    if (_origPMBU) {
+      window.playMusicBotByUrl = function (raw) {
+        const result = _origPMBU.apply(this, arguments);
+        // Broadcast'i tekrar gönder (güvence)
+        var videoId = typeof extractYouTubeVideoId === "function" ? extractYouTubeVideoId(raw) : null;
+        if (videoId && window.state?.mesh && window.state?.voiceChannelId) {
+          window.state.mesh.broadcast({
+            type: "music_play",
+            videoId: videoId,
+            startAt: 0,
+            voiceChannelId: window.state.voiceChannelId,
+          });
+        }
+        return result;
+      };
+    }
+
+    // Müzik player'ına kapatma/küçültme butonu ekle
+    function addMusicDockCloseBtn() {
+      var dock = document.getElementById("music-player-dock");
+      if (!dock || dock.querySelector(".mdock-close-btn")) return;
+      var closeBtn = document.createElement("button");
+      closeBtn.className = "mdock-close-btn";
+      closeBtn.textContent = "✕";
+      closeBtn.title = "Kapat";
+      closeBtn.style.cssText = "position:absolute;top:2px;right:2px;z-index:999;width:22px;height:22px;border-radius:50%;border:none;background:rgba(0,0,0,0.6);color:#fff;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;";
+      closeBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        dock.classList.remove("active");
+        dock.setAttribute("aria-hidden", "true");
+      });
+      dock.style.position = "relative";
+      dock.appendChild(closeBtn);
+    }
+
+    var dockObs = new MutationObserver(function () {
+      var dock = document.getElementById("music-player-dock");
+      if (dock && !dock.querySelector(".mdock-close-btn")) addMusicDockCloseBtn();
+    });
+    dockObs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     15. MESAJ SİLME İZNİ — Herkes kendi mesajını silebilsin
+  ══════════════════════════════════════════════════════════ */
+
+  function patchMessageDeletePermission() {
+    // showMsgContextMenu içinde izin kontrolünü gevşet
+    const _origSMC = window.showMsgContextMenu;
+    if (!_origSMC) return;
+    window.showMsgContextMenu = function (msg, x, y) {
+      // Orijinal fonksiyonu çağır, ama "Mesajı Sil" butonu herkes için görünsün
+      var server = window.state?.servers?.find(function (s) { return s.id === window.state.activeServerId; });
+      if (!server) return _origSMC(msg, x, y);
+
+      var myRole = "member";
+      if (server.ownerId === window.state.peerId) myRole = "owner";
+      else if (server.peer_roles?.[window.state.peerId] === "admin") myRole = "admin";
+      else if (server.peer_roles?.[window.state.peerId] === "mod") myRole = "mod";
+
+      var canMod = ["owner", "admin", "mod"].indexOf(myRole) !== -1;
+      var isAuthor = msg.authorId === window.state.peerId;
+
+      // Herkes kendi mesajını silebilir veya mod/herkesin mesajını silebilir
+      if (!isAuthor && !canMod) {
+        return _origSMC(msg, x, y);
+      }
+
+      _origSMC(msg, x, y);
+
+      // Eğer menü zaten varsa ve silme butonu yoksa ekle
+      var menu = document.getElementById("ctx-menu");
+      if (!menu) return;
+
+      // Silme butonu zaten varsa çık
+      if (menu.querySelector('[data-action="delete-msg"]')) return;
+
+      // Silme butonunu ekle
+      var delItem = document.createElement("div");
+      delItem.className = "ctx-item danger";
+      delItem.dataset.action = "delete-msg";
+      delItem.innerHTML = '<span class="ctx-icon">🗑️</span>Mesajı Sil';
+      delItem.onclick = function () {
+        document.getElementById("ctx-menu")?.remove();
+        if (typeof window.deleteChatMessage === "function") window.deleteChatMessage(msg);
+      };
+      menu.appendChild(delItem);
+    };
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     16. ARKADAŞI ARA (Doğrudan arama)
+  ══════════════════════════════════════════════════════════ */
+
+  function patchDirectCall() {
+    var _origCMC = window.showContextMenu;
+    if (!_origCMC) return;
+    window.showContextMenu = function (peerId, username, x, y) {
+      _origCMC.apply(this, arguments);
+
+      // Menüye "Direkt Ara" butonunu ekle (sesli arama için)
+      var menu = document.getElementById("ctx-menu");
+      if (!menu) return;
+      if (menu.querySelector('[data-action="direct-call"]')) return;
+
+      var callItem = document.createElement("div");
+      callItem.className = "ctx-item";
+      callItem.dataset.action = "direct-call";
+      callItem.innerHTML = '<span class="ctx-icon">📞</span>Direkt Ara (P2P)';
+      callItem.onclick = function () {
+        document.getElementById("ctx-menu")?.remove();
+        if (typeof window.startDirectCall === "function") {
+          window.startDirectCall(peerId);
+        } else {
+          // Fallback: DM'den sesli arama başlat
+          var text = "/call " + peerId;
+          var input = document.getElementById("chat-input") || document.getElementById("dm-input");
+          if (input) { input.value = text; input.dispatchEvent(new Event("input")); }
+          typeof toast === "function" && toast("@" + username + " aranıyor... (P2P çağrı)", "info");
+        }
+      };
+
+      // İlk "Özel Mesaj" item'ından sonra ekle
+      var firstItem = menu.querySelector(".ctx-item");
+      if (firstItem && firstItem.parentNode) {
+        firstItem.parentNode.insertBefore(callItem, firstItem.nextSibling);
+      } else {
+        menu.insertBefore(callItem, menu.firstChild);
+      }
+    };
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     17. PERFORMANS — renderMessages debounce
+  ══════════════════════════════════════════════════════════ */
+
+  function patchPerformance() {
+    var _debounceTimers = {};
+
+    // renderMessages'ı debounce ile sar
+    var _origRM = window.renderMessages;
+    if (_origRM) {
+      window.renderMessages = function (serverId, channelId) {
+        var key = serverId + "_" + channelId;
+        if (_debounceTimers[key]) clearTimeout(_debounceTimers[key]);
+        _debounceTimers[key] = setTimeout(function () {
+          _origRM(serverId, channelId);
+          delete _debounceTimers[key];
+        }, 16); // ~60fps
+      };
+    }
+
+    // updateChannelSidebar'ı da debounce yap
+    var _origUCS = window.updateChannelSidebar;
+    if (_origUCS) {
+      window.updateChannelSidebar = function (serverId) {
+        if (_debounceTimers["ucs_" + serverId]) clearTimeout(_debounceTimers["ucs_" + serverId]);
+        _debounceTimers["ucs_" + serverId] = setTimeout(function () {
+          _origUCS(serverId);
+          delete _debounceTimers["ucs_" + serverId];
+        }, 16);
+      };
+    }
+
+    // updateMembersPanel'i debounce yap
+    var _origUMP = window.updateMembersPanel;
+    if (_origUMP) {
+      window.updateMembersPanel = function (serverId) {
+        if (_debounceTimers["ump_" + serverId]) clearTimeout(_debounceTimers["ump_" + serverId]);
+        _debounceTimers["ump_" + serverId] = setTimeout(function () {
+          _origUMP(serverId);
+          delete _debounceTimers["ump_" + serverId];
+        }, 16);
+      };
+    }
+
+    // Content-visibility ile görünmeyen mesajları ertele (lazy render)
+    var lazyStyle = document.createElement("style");
+    lazyStyle.id = "scord-lazy-render";
+    lazyStyle.textContent = `
+      .msg-row { content-visibility: auto; contain-intrinsic-size: 60px; }
+      .msg-row.msg-row--editing { content-visibility: visible; }
+      .messages-area > div { contain: layout style; }
+    `;
+    document.head.appendChild(lazyStyle);
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     INIT
   ══════════════════════════════════════════════════════════ */
 
   function init() {
-    applyPerformanceOptimizations();
-    applyChatStyleFix();
-
-    // DOM hazır olduktan sonra
-    function onDOMReady() {
+    applyPerf();
+    applyChatStyle();
+    function ready() {
       patchSaveServerSettings();
-      patchWSMessageHandler();
-      hookSoundEvents();
+      patchWSHandler();
+      hookSounds();
       enhanceDMOverlay();
-
-      // Ayarlar sayfası açıldığında SFX bölümünü ekle
-      const observer = new MutationObserver(() => {
-        const page = document.querySelector(".settings-page, .scord-settings-shell");
-        if (page) injectSFXSettings(page);
+      patchMusicBot();
+      patchMessageDeletePermission();
+      patchDirectCall();
+      patchPerformance();
+      const obs = new MutationObserver(() => {
         enhanceDMOverlay();
+        enhanceDMSidebar();
       });
-      observer.observe(document.body, { childList: true, subtree: true });
-
-      // applyChatCustomization'ı her zaman çağır
-      if (typeof window.applyChatCustomization === "function") {
-        window.applyChatCustomization();
-      }
-
-      // DM silme butonunu overlay'e ekle
-      const dmHeader = document.querySelector(".dm-header");
-      if (dmHeader) enhanceDMOverlay();
-
-      console.log("[Shercord Fixes] ✅ Tüm düzeltmeler yüklendi.");
+      obs.observe(document.body, { childList: true, subtree: true });
+      setInterval(enhanceDMSidebar, 2000);
+      if (typeof window.applyChatCustomization === "function") window.applyChatCustomization();
+      console.log("[Shercord Fixes] Tum duzeltmeler yuklendi.");
     }
-
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", onDOMReady);
-    } else {
-      onDOMReady();
-    }
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready);
+    else ready();
   }
 
   init();

@@ -576,11 +576,11 @@ function mergeRoomPayloadIntoServer(server, payload) {
 function applyScordAppearance() {
     const pal = localStorage.getItem("scord_palette") || "glass";
     const chat = localStorage.getItem("scord_chat_layout") || "bubbles";
+    const density = localStorage.getItem("scord_msg_density") || "cozy";
     document.documentElement.setAttribute("data-scord-palette", pal);
     document.documentElement.setAttribute("data-scord-chat", chat);
-    if (!document.documentElement.getAttribute("data-msg-density")) {
-        document.documentElement.setAttribute("data-msg-density", localStorage.getItem("scord_msg_density") || "cozy");
-    }
+    document.documentElement.setAttribute("data-msg-density", density);
+    document.documentElement.setAttribute("data-scord-chat-style", density);
 }
 
 function applyChannelBackground(serverId, channelId) {
@@ -4789,42 +4789,38 @@ async function joinVoiceChannel(channelId) {
 
         // Start Volume Loop
         state._speakingLoop = setInterval(() => {
-            requestAnimationFrame(() => {
-                const data = new Uint8Array(analyser.frequencyBinCount);
-                analyser.getByteFrequencyData(data);
-                const sum = data.reduce((a, b) => a + b, 0);
-                const avg = sum / data.length;
-                const threshold = Number(state.voiceSettings?.gateThreshold ?? 12);
-                const isSpeakingNow = avg > threshold;
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(data);
+            let sum = 0;
+            for (let i = 0; i < data.length; i++) sum += data[i];
+            const avg = sum / data.length;
+            const threshold = Number(state.voiceSettings?.gateThreshold ?? 12);
+            const isSpeakingNow = avg > threshold;
 
-                // Debounce / Hysteresis
-                if (isSpeakingNow) {
-                    state._lastSpeakTime = Date.now();
+            if (isSpeakingNow) state._lastSpeakTime = Date.now();
+
+            const holdMs = SCORD_T().VOICE_SPEAKING_HOLD_MS ?? 250;
+            const isSpeaking = (Date.now() - (state._lastSpeakTime || 0)) < holdMs;
+            const targetGain = isSpeaking || state.voiceSettings?.inputMode === "ptt" ? 1 : 0;
+            try {
+                const nowAudio = state.audioCtx.currentTime;
+                const release = Number(state.voiceSettings?.gateRelease ?? 0.09);
+                const attack = Number(state.voiceSettings?.gateAttack ?? 0.012);
+                gateNode.gain.cancelScheduledValues(nowAudio);
+                gateNode.gain.setTargetAtTime(targetGain, nowAudio, targetGain ? attack : release);
+            } catch { gateNode.gain.value = targetGain; }
+
+            if (isSpeaking !== state.isSpeaking) {
+                state.isSpeaking = isSpeaking;
+                if (state.mesh) {
+                    state.mesh.broadcast({
+                        type: "voice_status",
+                        speaking: isSpeaking,
+                        channelId: state.voiceChannelId,
+                    });
                 }
-
-                const holdMs = SCORD_T().VOICE_SPEAKING_HOLD_MS ?? 250;
-                const isSpeaking = (Date.now() - (state._lastSpeakTime || 0)) < holdMs;
-                const targetGain = isSpeaking || state.voiceSettings?.inputMode === "ptt" ? 1 : 0;
-                try {
-                    const nowAudio = state.audioCtx.currentTime;
-                    const release = Number(state.voiceSettings?.gateRelease ?? 0.09);
-                    const attack = Number(state.voiceSettings?.gateAttack ?? 0.012);
-                    gateNode.gain.cancelScheduledValues(nowAudio);
-                    gateNode.gain.setTargetAtTime(targetGain, nowAudio, targetGain ? attack : release);
-                } catch { gateNode.gain.value = targetGain; }
-
-                if (isSpeaking !== state.isSpeaking) {
-                    state.isSpeaking = isSpeaking;
-                    if (state.mesh) {
-                        state.mesh.broadcast({
-                            type: "voice_status",
-                            speaking: isSpeaking,
-                            channelId: state.voiceChannelId,
-                        });
-                    }
-                    updateVoiceSpeakingUi(state.peerId, isSpeaking, state.voiceChannelId);
-                }
-            });
+                updateVoiceSpeakingUi(state.peerId, isSpeaking, state.voiceChannelId);
+            }
         }, SCORD_T().VOICE_SPEAKING_POLL_MS ?? 100);
     } catch (err) {
         console.error("Audio error", err);
@@ -6176,14 +6172,19 @@ function showMsgContextMenu(msg, x, y) {
 
 function deleteChatMessage(msg) {
     const server = state.servers.find(s => s.id === state.activeServerId);
-    if (!server?.messages?.[msg.channelId]) return;
+    if (!server) return;
+
+    const channelId = msg.channelId || state.activeChannelId;
+    if (!channelId) return;
+    if (!server.messages) server.messages = {};
+    if (!server.messages[channelId]) server.messages[channelId] = [];
 
     // Add to edit history before deleting
-    addMessageToHistory(server.id, msg.channelId, msg, 'delete');
+    addMessageToHistory(server.id, channelId, msg, 'delete');
 
-    server.messages[msg.channelId] = server.messages[msg.channelId].filter(m => m.id !== msg.id);
+    server.messages[channelId] = server.messages[channelId].filter(m => m.id !== msg.id);
     server.pinned_messages = (server.pinned_messages || []).filter(m => m.id !== msg.id);
-    meshBroadcastReliable({ type: "msg_delete", payload: { channelId: msg.channelId, msgId: msg.id } });
+    meshBroadcastReliable({ type: "msg_delete", payload: { channelId, msgId: msg.id } });
     renderMessages(state.activeServerId, state.activeChannelId);
     toast("Mesaj silindi.", "info");
 }
@@ -6467,10 +6468,17 @@ function assignRole(peerId, role, server) {
 function leaveServer(serverId) {
     const idx = state.servers.findIndex(s => s.id === serverId);
     if (idx === -1) return;
+    // Önce sesli kanaldan çık
+    if (state.voiceChannelId) {
+        try { leaveVoiceChannel(); } catch (e) {}
+    }
+    state.activeChannelId = null;
+    state.activeServerId = null;
+    state.voiceChannelId = null;
     if (state.mesh) { state.mesh.disconnect(); state.mesh = null; }
     state.servers.splice(idx, 1);
-    state.activeServerId = null;
     renderServerRail();
+    showHomeView();
     toast("Sunucudan ayrıldın.", "info");
 }
 
@@ -6598,6 +6606,7 @@ function saveSettings() {
     const dens = document.getElementById("settings-msg-density")?.value || "cozy";
     localStorage.setItem("scord_msg_density", dens);
     document.documentElement.setAttribute("data-msg-density", dens);
+    document.documentElement.setAttribute("data-scord-chat-style", dens);
 
     const highContrast = document.getElementById("settings-high-contrast")?.checked ?? false;
     localStorage.setItem("scord_high_contrast", highContrast ? "1" : "0");
@@ -6841,7 +6850,14 @@ function openServerSettingsModal() {
         if (!srv.channel_backgrounds) srv.channel_backgrounds = {};
         if (url) srv.channel_backgrounds[state.activeChannelId] = url;
         else delete srv.channel_backgrounds[state.activeChannelId];
-        await persistChannelBackground(srv.id, state.activeChannelId, url);
+        // Server API'ye kaydet
+        try {
+            await fetch(`${API_BASE}/rooms/${srv.id}/channel_background`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ channel_id: state.activeChannelId, url: url || null }),
+            });
+        } catch (e) {}
         applyChannelBackground(srv.id, state.activeChannelId);
         if (state.mesh) {
             state.mesh.broadcast({
@@ -6897,14 +6913,34 @@ function saveServerSettings() {
         const nname = document.getElementById("sv-name")?.value.trim();
         if (nname) server.name = nname;
     }
+    const iconUrl = document.getElementById("sv-icon")?.value?.trim();
+    if (iconUrl !== undefined && isAdmin) {
+        server.icon_url = iconUrl || null;
+    }
 
-    if (isOwner && window._tmpPendingPeerRoles) {
+    if (isAdmin && window._tmpPendingPeerRoles) {
         server.peer_roles = { ...window._tmpPendingPeerRoles };
     }
 
     server.voicePermissionMode = document.getElementById("sv-voice-permission")?.value || "everyone";
 
     document.getElementById("sidebar-server-name").textContent = server.name;
+
+    // Server'a kaydet (API)
+    if (typeof API_BASE !== "undefined") {
+        fetch(`${API_BASE}/rooms/${server.id}/settings`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                name: server.name,
+                icon_url: server.icon_url,
+                roles: server.roles,
+                peer_roles: server.peer_roles,
+                channel_permissions: server.channel_permissions || {},
+                voicePermissionMode: server.voicePermissionMode,
+            }),
+        }).catch(() => {});
+    }
 
     if (state.mesh) {
         state.mesh.broadcast({
@@ -6921,6 +6957,11 @@ function saveServerSettings() {
                 voicePermissionMode: server.voicePermissionMode,
             },
         });
+        // WS üzerinden de server'a kaydet
+        if (typeof sendServerEvent === "function") {
+            sendServerEvent({ type: "role_update", roles: server.roles, peer_roles: server.peer_roles });
+            sendServerEvent({ type: "permission_update", channel_permissions: server.channel_permissions || {} });
+        }
     }
     renderServerRail();
     updateChannelSidebar(server.id);
