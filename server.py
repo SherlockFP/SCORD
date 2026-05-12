@@ -957,6 +957,14 @@ STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+@app.get("/app.js")
+def serve_app_js():
+    return FileResponse(Path(__file__).parent / "app.js")
+
+@app.get("/fixes.js")
+def serve_fixes_js():
+    return FileResponse(Path(__file__).parent / "fixes.js")
+
 @app.get("/{full_path:path}")
 def serve_spa(full_path: str):
     return FileResponse(str(STATIC_DIR / "index.html"))

@@ -115,16 +115,21 @@
      3. SESLİ ODADAN AYRILMA BUĞU
   ══════════════════════════════════════════════════════════ */
 
-  var _origLS = window.leaveServer;
   window.leaveServer = function leaveServer(serverId) {
-    if (window.state?.voiceChannelId) {
+    if (!window.state) return;
+    var idx = window.state.servers.findIndex(function (s) { return s.id === serverId; });
+    if (idx === -1) { if (typeof toast === "function") toast("Sunucu bulunamadı.", "error"); return; }
+    if (window.state.voiceChannelId) {
       try { if (window.leaveVoiceChannel) window.leaveVoiceChannel(); } catch (e) {}
     }
     window.state.activeChannelId = null;
+    window.state.activeServerId = null;
     window.state.voiceChannelId = null;
-    if (_origLS) _origLS(serverId);
-    if (typeof showHomeView === "function") showHomeView();
+    window.state.servers.splice(idx, 1);
+    try { if (window.state.mesh) { window.state.mesh.disconnect(); window.state.mesh = null; } } catch (e) {}
     if (typeof renderServerRail === "function") renderServerRail();
+    if (typeof showHomeView === "function") showHomeView();
+    if (typeof toast === "function") toast("Sunucudan ayrıldın.", "info");
   };
 
   /* ══════════════════════════════════════════════════════════
@@ -246,9 +251,26 @@
   ══════════════════════════════════════════════════════════ */
 
   window.closeDMConversation = function closeDMConversation(peerId) {
+    if (!window.state) return;
+    // Overlay'i kapat
     var overlay = document.getElementById("dm-overlay");
     if (overlay) overlay.classList.add("hidden");
-    if (window.state?.activeDM === peerId) window.state.activeDM = null;
+    // DM'i recent listesinden kaldır
+    if (window.state.recentDMs) {
+      window.state.recentDMs = window.state.recentDMs.filter(function (d) { return d.peerId !== peerId; });
+      localStorage.setItem("scord_recent_dms", JSON.stringify(window.state.recentDMs));
+    }
+    // Mesaj geçmişini temizle
+    if (window.state.dms) delete window.state.dms[peerId];
+    try {
+      var stored = JSON.parse(localStorage.getItem("scord_dms") || "{}");
+      delete stored[peerId];
+      localStorage.setItem("scord_dms", JSON.stringify(stored));
+    } catch (e) {}
+    if (window.state.activeDM === peerId) window.state.activeDM = null;
+    // Sidebar'ı yenile
+    if (!window.state.activeServerId && typeof renderHomeSidebar === "function") renderHomeSidebar();
+    if (typeof toast === "function") toast("DM kapatıldı.", "info");
   };
 
   window.deleteDMConversation = function deleteDMConversation(peerId, username) {
@@ -261,6 +283,11 @@
       delete stored[peerId];
       localStorage.setItem("scord_dms", JSON.stringify(stored));
     } catch (e) {}
+    // Recent listesinden de kaldır
+    if (window.state.recentDMs) {
+      window.state.recentDMs = window.state.recentDMs.filter(function (d) { return d.peerId !== peerId; });
+      localStorage.setItem("scord_recent_dms", JSON.stringify(window.state.recentDMs));
+    }
     window.closeDMConversation(peerId);
     if (typeof toast === "function") toast("DM sohbeti silindi.", "info");
   };
@@ -382,13 +409,12 @@
     style.id = "scord-perf-fixes";
     style.textContent = [
       "html{scroll-behavior:smooth}",
-      ".msg-row,.channel-item,.member-item,.server-rail,.channel-sidebar,.main-content,.voice-participant-card,.modal,.dm-sheet,.toast,.ctx-menu{will-change:transform;transform:translateZ(0);backface-visibility:hidden}",
+      ".toast,.ctx-menu,.modal-backdrop,.dm-overlay{will-change:opacity,transform;backface-visibility:hidden}",
       ".messages-area,.channel-list,.members-list,#members-list,.dm-body{scroll-behavior:smooth;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}",
       "*::-webkit-scrollbar{width:4px;height:4px}*::-webkit-scrollbar-track{background:transparent}*::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:4px}",
       ".toast,.ctx-menu,.modal-backdrop,.dm-overlay{transition:opacity 0.1s ease,transform 0.1s ease}",
       "body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}",
       ".server-rail{contain:layout style}.channel-sidebar{contain:layout}",
-      ".msg-row{content-visibility:auto;contain-intrinsic-size:60px}",
     ].join("");
     document.head.appendChild(style);
   }
@@ -468,75 +494,177 @@
   }
 
   /* ══════════════════════════════════════════════════════════
-     14. MÜZİK BOTU FİX — Herkese senkron
+     14. MÜZİK BOTU FİX — Sıfırdan temiz implementasyon
   ══════════════════════════════════════════════════════════ */
+
+  // YouTube API yükle
+  function _ensureYT() {
+    if (window.YT && typeof YT.Player === "function") return true;
+    if (!document.querySelector("script[data-scord-yt-fix]")) {
+      var s = document.createElement("script");
+      s.src = "https://www.youtube.com/iframe_api";
+      s.dataset.scordYtFix = "1";
+      document.head.appendChild(s);
+    }
+    return false;
+  }
+
+  var _ytReadyFix = false;
+  var _pendingMusic = null;
+
+  window.onYouTubeIframeAPIReady = function () {
+    _ytReadyFix = true;
+    // Varsa beklemedeki müziği çal
+    if (_pendingMusic) {
+      var p = _pendingMusic;
+      _pendingMusic = null;
+      _startMusicFix(p.videoId, p.startAt);
+    }
+  };
+
+  function _startMusicFix(videoId, startAt) {
+    var dock = document.getElementById("music-player-dock") || (function () {
+      var d = document.createElement("div");
+      d.id = "music-player-dock";
+      d.className = "music-player-dock";
+      d.style.cssText = "position:fixed;bottom:80px;right:20px;width:320px;height:200px;z-index:10000;background:#000;border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
+      var inner = document.createElement("div");
+      inner.id = "yt-player-fix";
+      inner.style.cssText = "width:100%;height:100%;";
+      d.appendChild(inner);
+      // Kapatma butonu
+      var closeBtn = document.createElement("button");
+      closeBtn.textContent = "\u2715";
+      closeBtn.style.cssText = "position:absolute;top:6px;right:6px;z-index:10;width:24px;height:24px;border-radius:50%;border:none;background:rgba(0,0,0,0.7);color:#fff;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;";
+      closeBtn.addEventListener("click", function () { d.remove(); });
+      d.appendChild(closeBtn);
+      document.body.appendChild(d);
+      return d;
+    })();
+
+    if (!window.YT || typeof YT.Player !== "function" || !_ytReadyFix) {
+      _pendingMusic = { videoId: videoId, startAt: startAt || 0 };
+      _ensureYT();
+      if (typeof toast === "function") toast("YouTube yükleniyor...", "info");
+      return;
+    }
+
+    var existing = document.getElementById("yt-player-fix");
+    if (!existing) {
+      var inner = document.createElement("div");
+      inner.id = "yt-player-fix";
+      inner.style.cssText = "width:100%;height:100%;";
+      dock.appendChild(inner);
+    }
+
+    try {
+      if (window._ytPlayerFix && typeof window._ytPlayerFix.loadVideoById === "function") {
+        window._ytPlayerFix.loadVideoById(videoId, Math.floor(startAt || 0));
+        window._ytPlayerFix.unMute();
+        window._ytPlayerFix.setVolume(30);
+        window._ytPlayerFix.playVideo();
+      } else {
+        if (window._ytPlayerFix) { try { window._ytPlayerFix.destroy(); } catch (e) {} }
+        window._ytPlayerFix = new YT.Player("yt-player-fix", {
+          height: "200",
+          width: "320",
+          videoId: videoId,
+          playerVars: { autoplay: 1, controls: 0, modestbranding: 1, rel: 0, playsinline: 1 },
+          events: {
+            onReady: function (e) {
+              e.target.unMute();
+              e.target.setVolume(30);
+              e.target.playVideo();
+            },
+          },
+        });
+      }
+    } catch (e) {
+      if (typeof toast === "function") toast("Müzik oynatılamadı: " + e.message, "error");
+    }
+  }
+
+  function _stopMusicFix() {
+    try {
+      if (window._ytPlayerFix && typeof window._ytPlayerFix.stopVideo === "function") {
+        window._ytPlayerFix.stopVideo();
+        window._ytPlayerFix.destroy();
+        window._ytPlayerFix = null;
+      }
+    } catch (e) {}
+    var dock = document.getElementById("music-player-dock");
+    if (dock) dock.remove();
+    _pendingMusic = null;
+  }
 
   function patchMusicBot() {
     // Sesli kanaldan çıkınca müziği durdur
     var _origLVC = window.leaveVoiceChannel;
     if (_origLVC) {
       window.leaveVoiceChannel = function () {
-        if (typeof stopMusicBot === "function") stopMusicBot();
+        _stopMusicFix();
         return _origLVC.apply(this, arguments);
       };
     }
 
-    // startMusicBot sonrası player hazır olunca sesi aç
-    var _origSMB = window.startMusicBot;
-    if (_origSMB) {
-      window.startMusicBot = function (videoId, startAt) {
-        var result = _origSMB.apply(this, arguments);
-        // Player oluştuktan sonra sesi açmak için poll
-        var attempts = 0;
-        var ensure = setInterval(function () {
-          attempts++;
-          try {
-            var p = window.state?.musicBot?.player;
-            if (p && typeof p.unMute === "function") {
-              p.unMute();
-              p.setVolume(Math.max(1, Number(window.state?.musicBot?.volume ?? 30)));
-              p.playVideo();
-              clearInterval(ensure);
-            }
-          } catch (e) {}
-          if (attempts > 30) clearInterval(ensure); // 3sn timeout
-        }, 100);
-        return result;
-      };
-    }
+    // playMusicBotByUrl - temiz override
+    var _origPMBU = window.playMusicByUrl || window.playMusicBotByUrl;
+    window.playMusicBotByUrl = function (raw) {
+      var videoId = (typeof extractYouTubeVideoId === "function" ? extractYouTubeVideoId(raw) : null) || (function () {
+        var m = String(raw).match(/(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+        return m ? m[1] : null;
+      })() || (String(raw).length === 11 ? raw : null);
+      if (!videoId) { if (typeof toast === "function") toast("Geçersiz YouTube linki.", "error"); return; }
+      _startMusicFix(videoId, 0);
+      // Broadcast to peers
+      if (window.state?.mesh && window.state?.voiceChannelId) {
+        window.state.mesh.broadcast({ type: "music_play", videoId: videoId, startAt: 0, voiceChannelId: window.state.voiceChannelId });
+      }
+      if (typeof toast === "function") toast("🎵 Müzik çalıyor!", "success");
+    };
 
-    // playMusicBotByUrl broadcast'ini güçlendir
-    var _origPMBU = window.playMusicBotByUrl;
-    if (_origPMBU) {
-      window.playMusicBotByUrl = function (raw) {
-        var result = _origPMBU.apply(this, arguments);
-        var videoId = typeof extractYouTubeVideoId === "function" ? extractYouTubeVideoId(raw) : null;
-        if (videoId && window.state?.mesh && window.state?.voiceChannelId) {
-          window.state.mesh.broadcast({ type: "music_play", videoId: videoId, startAt: 0, voiceChannelId: window.state.voiceChannelId });
+    // P2P music_play handler - diğer kullanıcılar için
+    var _origP2P = window.handleIncomingP2P;
+    if (_origP2P) {
+      window.handleIncomingP2P = function (fromPeerId, data, roomId) {
+        if (data?.type === "music_play" && data.videoId) {
+          if (window.state?.voiceChannelId) {
+            _startMusicFix(data.videoId, data.startAt || 0);
+          }
+          return;
         }
-        return result;
+        if (data?.type === "music_stop") {
+          _stopMusicFix();
+          return;
+        }
+        return _origP2P.apply(this, arguments);
       };
     }
 
-    // Music dock kapatma butonu
-    function addCloseBtn() {
-      var dock = document.getElementById("music-player-dock");
-      if (!dock || dock.querySelector(".mdock-close-btn")) return;
-      var btn = document.createElement("button");
-      btn.className = "mdock-close-btn";
-      btn.textContent = "\u2715";
-      btn.title = "Kapat";
-      btn.style.cssText = "position:absolute;top:2px;right:2px;z-index:999;width:22px;height:22px;border-radius:50%;border:none;background:rgba(0,0,0,0.6);color:#fff;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;line-height:1;";
-      btn.addEventListener("click", function (e) { e.stopPropagation(); dock.classList.remove("active"); dock.setAttribute("aria-hidden", "true"); });
-      dock.style.position = "relative";
-      dock.appendChild(btn);
+    // Ayrıca app.js'deki P2P handler'ı da patch'le (handleP2PMessage)
+    var _origHPM = window.handleP2PMessage || window.handleServerMessage;
+    if (_origHPM) {
+      var savedOrig = _origHPM;
+      window.handleServerMessage = function (data) {
+        if (data?.type === "music_play" && data.videoId) {
+          if (window.state?.voiceChannelId) _startMusicFix(data.videoId, data.startAt || 0);
+          return;
+        }
+        if (data?.type === "music_stop") { _stopMusicFix(); return; }
+        return savedOrig.apply(this, arguments);
+      };
     }
 
-    var dockObs = new MutationObserver(function () {
-      var dock = document.getElementById("music-player-dock");
-      if (dock && !dock.querySelector(".mdock-close-btn")) addCloseBtn();
-    });
-    dockObs.observe(document.body, { childList: true, subtree: true });
+    // YT API hazır değilse bekle
+    _ensureYT();
+    if (window.YT && typeof YT.Player === "function") {
+      _ytReadyFix = true;
+      if (_pendingMusic) {
+        var p = _pendingMusic;
+        _pendingMusic = null;
+        _startMusicFix(p.videoId, p.startAt);
+      }
+    }
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -567,6 +695,43 @@
       };
       menu.appendChild(delItem);
     };
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     15b. DM KAPAT BUTONU — Gerçekten kapatma
+  ══════════════════════════════════════════════════════════ */
+
+  function patchDMCloseButton() {
+    // dm-close-btn ✕ butonuna gerçek kapatma işlevi ver
+    var check = setInterval(function () {
+      var btn = document.getElementById("dm-close-btn");
+      if (btn) {
+        clearInterval(check);
+        var origClick = btn.onclick;
+        btn.onclick = function (e) {
+          // Orijinal: overlay'i gizle
+          var ov = document.getElementById("dm-overlay");
+          if (ov) { ov.classList.add("hidden"); ov.setAttribute("aria-hidden", "true"); }
+          if (typeof hideDMMainView === "function") hideDMMainView(true);
+          // DM'i recent'dan kaldır ve mesajları temizle
+          var peerId = window.state?.activeDM;
+          if (peerId) {
+            if (window.state?.recentDMs) {
+              window.state.recentDMs = window.state.recentDMs.filter(function (d) { return d.peerId !== peerId; });
+              localStorage.setItem("scord_recent_dms", JSON.stringify(window.state.recentDMs));
+            }
+            if (window.state?.dms) delete window.state.dms[peerId];
+            try {
+              var stored = JSON.parse(localStorage.getItem("scord_dms") || "{}");
+              delete stored[peerId];
+              localStorage.setItem("scord_dms", JSON.stringify(stored));
+            } catch (e) {}
+            window.state.activeDM = null;
+            if (!window.state.activeServerId && typeof renderHomeSidebar === "function") renderHomeSidebar();
+          }
+        };
+      }
+    }, 500);
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -840,6 +1005,606 @@
   }
 
   /* ══════════════════════════════════════════════════════════
+     20. ŞİFRE + DİSCRİMİNATOR (#0001) SİSTEMİ
+  ══════════════════════════════════════════════════════════ */
+
+  function patchPasswordSystem() {
+    if (!window.state) return;
+
+    // Discriminator sayaç (her nick için kaç kayıt var)
+    window._getDiscriminator = function (nick) {
+      var counterKey = "scord_disc_count_" + nick.toLowerCase().trim();
+      var count = parseInt(localStorage.getItem(counterKey) || "0", 10);
+      count++;
+      localStorage.setItem(counterKey, count.toString());
+      return String(count).padStart(4, "0");
+    };
+
+    window._formatTag = function (nick, disc) {
+      return nick + "#" + disc;
+    };
+
+    // Discriminator'a göre identity key
+    window._getIdentityKey = function (nick, disc) {
+      return "scord_id_" + nick.toLowerCase().trim() + "_" + disc;
+    };
+
+    window._getPasswordHash = function (pass) {
+      var h = 0;
+      for (var i = 0; i < pass.length; i++) { h = ((h << 5) - h) + pass.charCodeAt(i); h |= 0; }
+      return "p_" + Math.abs(h).toString(36);
+    };
+
+    window._findIdentityByFullTag = function (fullTag) {
+      var parts = fullTag.split("#");
+      if (parts.length !== 2) return null;
+      var nick = parts[0].trim().toLowerCase();
+      var disc = parts[1].trim();
+      var key = "scord_id_" + nick + "_" + disc;
+      var stored = localStorage.getItem(key);
+      if (stored) {
+        var data = JSON.parse(stored);
+        data._fullTag = fullTag;
+        return data;
+      }
+      return null;
+    };
+
+    window.loginWithPassword = function (nick, pass) {
+      var disc = window.state._discriminator;
+      var key = window._getIdentityKey(nick, disc);
+      var stored = localStorage.getItem(key);
+      var hash = window._getPasswordHash(pass);
+      var isNew = false;
+
+      if (!stored) {
+        // Daha önce kayıt yoksa discriminator ata
+        disc = window._getDiscriminator(nick);
+        key = window._getIdentityKey(nick, disc);
+        stored = localStorage.getItem(key);
+      }
+
+      if (stored) {
+        var data = JSON.parse(stored);
+        if (data.hash !== hash) {
+          if (typeof toast === "function") toast("Hatalı şifre! Bu kimlik başkasına ait.", "error");
+          return false;
+        }
+        disc = data.discriminator || disc;
+        window.state._discriminator = disc;
+        if (data.peerId) window.state.peerId = data.peerId;
+        if (data.username) window.state.username = data.username;
+        if (data.avatarColor) window.state.avatarColor = data.avatarColor;
+        if (data.avatarImage) window.state.avatarImage = data.avatarImage;
+        if (data.servers) window.state.servers = data.servers;
+        if (data.friends) window.state.friends = data.friends;
+        if (data.dms) window.state.dms = data.dms;
+        if (data.recentDMs) window.state.recentDMs = data.recentDMs;
+        if (typeof toast === "function") toast("Hoş geldin, " + window._formatTag(nick, disc) + "!", "success");
+      } else {
+        disc = window._getDiscriminator(nick);
+        window.state._discriminator = disc;
+        isNew = true;
+        if (typeof toast === "function") toast("Yeni kimlik: " + window._formatTag(nick, disc), "success");
+      }
+
+      window.state._savedNick = nick;
+      window.state._savedPass = pass;
+      localStorage.setItem("scord_last_nick", nick);
+      localStorage.setItem("scord_last_pass", pass);
+      window._saveIdentity();
+      return true;
+    };
+
+    window._saveIdentity = function () {
+      var nick = window.state._savedNick;
+      if (!nick) return;
+      var disc = window.state._discriminator || "0001";
+      var key = window._getIdentityKey(nick, disc);
+      var stored = localStorage.getItem(key);
+      var data = stored ? JSON.parse(stored) : {};
+      data.hash = window._getPasswordHash(window.state._savedPass || "");
+      data.discriminator = disc;
+      data.peerId = window.state.peerId;
+      data.username = window.state.username;
+      data.avatarColor = window.state.avatarColor;
+      data.avatarImage = window.state.avatarImage;
+      data.servers = window.state.servers || [];
+      data.friends = window.state.friends || [];
+      data.dms = window.state.dms || {};
+      data.recentDMs = window.state.recentDMs || [];
+      localStorage.setItem(key, JSON.stringify(data));
+    };
+
+    window.showLoginModal = function () {
+      var savedNick = localStorage.getItem("scord_last_nick") || "";
+      var html = '<div class="form-group"><label class="modal-label">Kullanıcı Adı</label><input class="modal-input" id="login-nick" value="' + savedNick.replace(/"/g, "&quot;") + '" placeholder="Nickin..." maxlength="32" autocomplete="off" /></div><div class="form-group"><label class="modal-label">Şifre</label><input class="modal-input" id="login-pass" type="password" placeholder="Şifre..." maxlength="64" autocomplete="off" /></div><p class="modal-info">Aynı nick + şifre ile aynı profili kullanırsın. Etiketin: #0001, #0002... (sırayla).</p>';
+      if (typeof showModal === "function") {
+        showModal("Giriş / Kayıt", html, '<button class="btn-secondary" onclick="hideModal()">İptal</button><button class="btn-primary" onclick="window._doLogin()">Giriş Yap</button>');
+        setTimeout(function () { var el = document.getElementById("login-nick"); if (el) el.focus(); }, 100);
+      }
+    };
+
+    window._doLogin = function () {
+      var nick = document.getElementById("login-nick")?.value?.trim();
+      var pass = document.getElementById("login-pass")?.value;
+      if (!nick || !pass) { if (typeof toast === "function") toast("Nick ve şifre gerekli.", "error"); return; }
+      var ok = window.loginWithPassword(nick, pass);
+      if (ok) {
+        if (typeof hideModal === "function") hideModal();
+        if (typeof renderServerRail === "function") renderServerRail();
+      }
+    };
+
+    // Etiket değiştirme
+    window.showEditTagModal = function () {
+      var currentTag = window._formatTag(window.state._savedNick || window.state.username, window.state._discriminator || "0001");
+      var html = '<div class="form-group"><label class="modal-label">Mevcut Etiketin</label><div class="peer-id-display" style="text-align:center;font-size:18px;letter-spacing:1px;">' + currentTag + '</div></div><div class="form-group"><label class="modal-label">Yeni Etiket (örn: 0005)</label><input class="modal-input" id="edit-tag-input" value="' + (window.state._discriminator || "0001") + '" placeholder="0001" maxlength="4" autocomplete="off" /></div><p class="modal-info">Not: Başkasının kullandığı bir etiketi alamazsın.</p>';
+      if (typeof showModal === "function") {
+        showModal("Etiket Değiştir", html, '<button class="btn-secondary" onclick="hideModal()">İptal</button><button class="btn-primary" onclick="window._saveEditedTag()">Kaydet</button>');
+      }
+    };
+
+    window._saveEditedTag = function () {
+      var newDisc = document.getElementById("edit-tag-input")?.value?.trim();
+      if (!newDisc || !/^\d{4}$/.test(newDisc)) { if (typeof toast === "function") toast("Geçerli 4 haneli bir etiket gir (0001-9999).", "error"); return; }
+      var nick = window.state._savedNick;
+      if (!nick) return;
+      // Başkası kullanıyor mu kontrol
+      var testKey = window._getIdentityKey(nick, newDisc);
+      var existing = localStorage.getItem(testKey);
+      if (existing && window.state._discriminator !== newDisc) {
+        if (typeof toast === "function") toast("Bu etiket dolu! Başka bir tane dene.", "error");
+        return;
+      }
+      // Eski kaydı sil
+      var oldKey = window._getIdentityKey(nick, window.state._discriminator);
+      localStorage.removeItem(oldKey);
+      // Yeni etiketi ata
+      window.state._discriminator = newDisc;
+      window._saveIdentity();
+      if (typeof hideModal === "function") hideModal();
+      if (typeof toast === "function") toast("Yeni etiketin: " + window._formatTag(nick, newDisc), "success");
+    };
+
+    // Arkadaşı etiketle ekle (#0001)
+    window.showAddFriendByTagModal = function () {
+      var html = '<div class="form-group"><label class="modal-label">Arkadaşının Etiketi</label><input class="modal-input" id="add-friend-tag-input" placeholder="örn: sherlock#0001" maxlength="64" autocomplete="off" /></div><p class="modal-info">Aynı nick + 4 haneli etiket. Örn: <b>ahmet#0241</b></p>';
+      if (typeof showModal === "function") {
+        showModal("Arkadaş Ekle (Etiket ile)", html, '<button class="btn-secondary" onclick="hideModal()">İptal</button><button class="btn-primary" onclick="window._doAddFriendByTag()">Ekle</button>');
+        setTimeout(function () { var el = document.getElementById("add-friend-tag-input"); if (el) el.focus(); }, 100);
+      }
+    };
+
+    window._doAddFriendByTag = function () {
+      var fullTag = document.getElementById("add-friend-tag-input")?.value?.trim();
+      if (!fullTag || !fullTag.includes("#")) { if (typeof toast === "function") toast("Geçerli bir etiket gir (nick#0001).", "error"); return; }
+      var identity = window._findIdentityByFullTag(fullTag);
+      if (identity) {
+        // Yerel kayıtlı kullanıcı - doğrudan ekle
+        if (!window.state.friends) window.state.friends = [];
+        if (window.state.friends.some(function (f) { return f.peerId === identity.peerId; })) { if (typeof toast === "function") toast("Zaten arkadaşsın.", "info"); return; }
+        window.state.friends.push({ peerId: identity.peerId, name: identity.username || fullTag.split("#")[0], avatarColor: identity.avatarColor, avatarImage: identity.avatarImage, tag: fullTag });
+        localStorage.setItem("scord_friends", JSON.stringify(window.state.friends));
+        window._saveIdentity();
+        if (typeof hideModal === "function") hideModal();
+        if (typeof toast === "function") toast(fullTag + " arkadaş olarak eklendi!", "success");
+        if (!window.state.activeServerId && typeof renderHomeSidebar === "function") renderHomeSidebar();
+        return;
+      }
+      // Çevrimiçi kullanıcıları ara (mesh üzerinden)
+      if (window.state?.mesh) {
+        var peers = window.state.mesh.peers || {};
+        var foundPeer = null;
+        for (var pid in peers) {
+          var info = window.state.mesh.peerInfo?.[pid] || {};
+          var ptag = info.tag || "";
+          var pname = info.username || "";
+          var checkTag = fullTag.toLowerCase().replace(/\s/g, "");
+          var pFull = (pname + "#" + ptag).toLowerCase().replace(/\s/g, "");
+          if (pFull === checkTag) { foundPeer = pid; break; }
+        }
+        if (foundPeer && typeof window.sendFriendRequest === "function") {
+          window.sendFriendRequest(foundPeer, fullTag);
+          if (typeof hideModal === "function") hideModal();
+          return;
+        }
+      }
+      if (typeof toast === "function") toast("Bu etikette kimse bulunamadı (çevrimdışı olabilir).", "error");
+    };
+
+    // Kullanıcı barına etiket göster
+    function updateUserBarTag() {
+      var nameEl = document.getElementById("user-bar-name");
+      if (!nameEl) return;
+      var nick = window.state._savedNick || window.state.username;
+      var disc = window.state._discriminator;
+      if (nick && disc) {
+        var tagSpan = nameEl.querySelector(".user-tag");
+        if (!tagSpan) {
+          tagSpan = document.createElement("span");
+          tagSpan.className = "user-tag";
+          tagSpan.style.cssText = "font-size:10px;opacity:0.5;margin-left:4px;font-weight:400;";
+          nameEl.appendChild(tagSpan);
+        }
+        tagSpan.textContent = "#" + disc;
+      }
+    }
+
+    var tagObs = new MutationObserver(updateUserBarTag);
+    tagObs.observe(document.body, { childList: true, subtree: true });
+    setInterval(updateUserBarTag, 2000);
+
+    // Otomatik giriş
+    try {
+      var lastNick = localStorage.getItem("scord_last_nick");
+      var lastPass = localStorage.getItem("scord_last_pass");
+      if (lastNick && lastPass) {
+        setTimeout(function () { window.loginWithPassword(lastNick, lastPass); }, 500);
+      }
+    } catch (e) {}
+
+    // Setup butonuna giriş + etiket butonları
+    var setupCheck = setInterval(function () {
+      var setupOverlay = document.getElementById("setup-overlay");
+      if (setupOverlay && !setupOverlay.querySelector(".login-btn")) {
+        var group = document.createElement("div");
+        group.style.cssText = "display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;";
+        var loginBtn = document.createElement("button");
+        loginBtn.className = "login-btn hero-btn";
+        loginBtn.textContent = "🔑 Giriş Yap";
+        loginBtn.style.cssText = "font-size:13px;padding:8px 20px;";
+        loginBtn.onclick = function () { if (typeof window.showLoginModal === "function") window.showLoginModal(); };
+        var friendBtn = document.createElement("button");
+        friendBtn.className = "login-btn hero-btn";
+        friendBtn.textContent = "👥 Etiketle Arkadaş Ekle";
+        friendBtn.style.cssText = "font-size:13px;padding:8px 20px;background:var(--accent);";
+        friendBtn.onclick = function () { if (typeof window.showAddFriendByTagModal === "function") window.showAddFriendByTagModal(); };
+        var editTagBtn = document.createElement("button");
+        editTagBtn.className = "login-btn hero-btn";
+        editTagBtn.textContent = "🏷 Etiket Değiştir";
+        editTagBtn.style.cssText = "font-size:13px;padding:8px 20px;background:var(--green);";
+        editTagBtn.onclick = function () { if (typeof window.showEditTagModal === "function") window.showEditTagModal(); };
+        group.appendChild(loginBtn);
+        group.appendChild(friendBtn);
+        group.appendChild(editTagBtn);
+        var container = setupOverlay.querySelector(".setup-content, .setup-card, .hero-actions");
+        if (container) container.appendChild(group);
+        else setupOverlay.appendChild(group);
+        clearInterval(setupCheck);
+      }
+    }, 1000);
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     21. MESAJ GEÇMİŞİNİ TEMİZLE
+  ══════════════════════════════════════════════════════════ */
+
+  function patchClearMessages() {
+    window.clearServerMessages = function (serverId) {
+      if (!confirm("Tüm mesaj geçmişini silmek istediğine emin misin? Bu geri alınamaz.")) return;
+      var server = window.state?.servers?.find(function (s) { return s.id === serverId; });
+      if (!server) return;
+      server.messages = {};
+      server.pinned_messages = [];
+      if (typeof toast === "function") toast("Mesaj geçmişi temizlendi.", "success");
+      if (typeof renderMessages === "function" && window.state.activeServerId === serverId) renderMessages(serverId, window.state.activeChannelId);
+    };
+
+    // Sunucu ayarlarına "Mesaj Geçmişini Temizle" butonu ekle
+    var obs = new MutationObserver(function () {
+      var advancedTab = document.getElementById("s-tab-advanced");
+      if (advancedTab && !advancedTab.querySelector(".clear-msgs-btn")) {
+        var btn = document.createElement("button");
+        btn.className = "clear-msgs-btn btn-secondary";
+        btn.style.cssText = "margin-top:12px;background:var(--yellow,#f59e0b);border:none;color:#000;";
+        btn.textContent = "🗑 Tüm Mesaj Geçmişini Sil";
+        btn.onclick = function () {
+          if (window.state?.activeServerId) window.clearServerMessages(window.state.activeServerId);
+        };
+        advancedTab.appendChild(btn);
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     22. SUNUCU LİSTESİ İYİLEŞTİRME
+  ══════════════════════════════════════════════════════════ */
+
+  function patchServerRail() {
+    var style = document.createElement("style");
+    style.id = "scord-rail-fix";
+    style.textContent = [
+      ".server-rail{overflow-y:auto!important;overflow-x:hidden!important;max-height:100vh!important;scrollbar-width:thin!important;gap:6px!important;padding:8px 4px!important}",
+      ".server-rail::-webkit-scrollbar{width:3px!important}",
+      ".server-rail::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15)!important;border-radius:3px!important}",
+      ".rail-icon{flex-shrink:0!important;transition:border-radius 0.15s ease,transform 0.1s ease!important}",
+      ".rail-icon:hover{border-radius:14px!important;transform:scale(1.05)!important}",
+      ".rail-icon.active{border-radius:14px!important}",
+      ".rail-icon img{width:100%!important;height:100%!important;object-fit:cover!important;border-radius:inherit!important}",
+      ".rail-server-guild{width:44px!important;height:44px!important;min-height:44px!important}",
+      ".rail-separator{width:32px!important;margin:4px auto!important}",
+      ".screen-overlay-tools{display:flex;align-items:center;gap:12px;padding:10px 16px;background:rgba(0,0,0,0.75);backdrop-filter:blur(8px);border-radius:12px;margin-top:8px}",
+      ".screen-overlay-tool{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);color:#fff;padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all 0.15s ease}",
+      ".screen-overlay-tool:hover{background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.3);transform:scale(1.03)}",
+      ".screen-overlay-tools label{display:flex;align-items:center;gap:6px;font-size:12px;color:rgba(255,255,255,0.7)}",
+      ".screen-overlay-tools input[type=range]{width:80px;accent-color:var(--accent,#6366f1)}",
+    ].join("");
+    document.head.appendChild(style);
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     23. ARKADAŞ İSTEĞİ SİSTEMİ (P2P)
+  ══════════════════════════════════════════════════════════ */
+
+  function patchFriendRequestSystem() {
+    // Arkadaş isteklerini yükle
+    if (!window.state._friendRequests) {
+      try { window.state._friendRequests = JSON.parse(localStorage.getItem("scord_friend_requests") || "[]"); } catch (e) { window.state._friendRequests = []; }
+    }
+    if (!window.state._pendingRequests) {
+      try { window.state._pendingRequests = JSON.parse(localStorage.getItem("scord_pending_requests") || "[]"); } catch (e) { window.state._pendingRequests = []; }
+    }
+
+    // + butonu ekle (ARKADAŞLAR kategorisinin yanına)
+    function addPlusButton() {
+      var cats = document.querySelectorAll(".channel-category");
+      cats.forEach(function (cat) {
+        if (cat.textContent.trim() === "ARKADAŞLAR" && !cat.querySelector(".fr-add-btn")) {
+          var btn = document.createElement("button");
+          btn.className = "fr-add-btn";
+          btn.textContent = "+";
+          btn.title = "Arkadaş Ekle";
+          btn.style.cssText = "float:right;background:var(--accent);color:#fff;border:none;width:22px;height:22px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0;line-height:1;transition:all 0.15s ease;";
+          btn.onmouseover = function () { this.style.transform = "scale(1.15)"; };
+          btn.onmouseout = function () { this.style.transform = "scale(1)"; };
+          btn.onclick = function (e) { e.stopPropagation(); window.showAddFriendByTagModal(); };
+          cat.style.position = "relative";
+          cat.appendChild(btn);
+        }
+      });
+    }
+
+    var plusObs = new MutationObserver(addPlusButton);
+    plusObs.observe(document.body, { childList: true, subtree: true });
+    setInterval(addPlusButton, 2000);
+
+    // Arkadaş isteği gönder
+    window.sendFriendRequest = function (targetPeerId, targetTag) {
+      if (!window.state?.mesh) { if (typeof toast === "function") toast("Bağlantı yok, istek gönderilemedi.", "error"); return; }
+      var req = {
+        type: "friend_request",
+        from: window.state.peerId,
+        username: window.state.username || "Anonim",
+        tag: window.state._discriminator || "0000",
+        targetTag: targetTag,
+        timestamp: Date.now(),
+      };
+      window.state.mesh.broadcast(req);
+      // Bekleyen istekleri kaydet
+      if (!window.state._friendRequests) window.state._friendRequests = [];
+      window.state._friendRequests.push({ peerId: targetPeerId, tag: targetTag, timestamp: Date.now() });
+      localStorage.setItem("scord_friend_requests", JSON.stringify(window.state._friendRequests));
+      if (typeof toast === "function") toast("Arkadaş isteği gönderildi!", "success");
+    };
+
+    // Gelen istekleri işle
+    var _origP2P = window.handleIncomingP2P;
+    if (_origP2P) {
+      window.handleIncomingP2P = function (fromPeerId, data, roomId) {
+        if (data?.type === "friend_request") {
+          if (!window.state._pendingRequests) window.state._pendingRequests = [];
+          // Aynı istek daha önce gelmiş mi?
+          var exists = window.state._pendingRequests.some(function (r) { return r.from === data.from && r.username === data.username; });
+          if (!exists) {
+            window.state._pendingRequests.push({ from: data.from, username: data.username, tag: data.tag, timestamp: data.timestamp });
+            localStorage.setItem("scord_pending_requests", JSON.stringify(window.state._pendingRequests));
+            if (typeof toast === "function") toast("📩 Arkadaşlık isteği: @" + data.username + "#" + data.tag, "info");
+            // Kabul/reddet butonlarıyla bildirim göster
+            window._showFriendRequestNotification(data.from, data.username, data.tag);
+          }
+          return;
+        }
+        if (data?.type === "friend_request_accepted") {
+          // Arkadaş eklendi
+          var acceptedBy = data.from || data.peerId;
+          var acceptedName = data.username || "Birisi";
+          if (window.state) {
+            if (!window.state.friends) window.state.friends = [];
+            if (!window.state.friends.some(function (f) { return f.peerId === acceptedBy; })) {
+              window.state.friends.push({ peerId: acceptedBy, name: acceptedName, avatarColor: data.avatarColor || "#5865f2", avatarImage: data.avatarImage || null, tag: data.tag || "" });
+              localStorage.setItem("scord_friends", JSON.stringify(window.state.friends));
+              // Bekleyen istekten kaldır
+              if (window.state._friendRequests) {
+                window.state._friendRequests = window.state._friendRequests.filter(function (r) { return r.peerId !== acceptedBy; });
+                localStorage.setItem("scord_friend_requests", JSON.stringify(window.state._friendRequests));
+              }
+              if (typeof toast === "function") toast("✅ " + acceptedName + " arkadaşlık isteğini kabul etti!", "success");
+              if (!window.state.activeServerId && typeof renderHomeSidebar === "function") renderHomeSidebar();
+            }
+          }
+          return;
+        }
+        if (data?.type === "friend_request_rejected") {
+          var rejectedBy = data.from || data.peerId;
+          if (window.state._friendRequests) {
+            window.state._friendRequests = window.state._friendRequests.filter(function (r) { return r.peerId !== rejectedBy; });
+            localStorage.setItem("scord_friend_requests", JSON.stringify(window.state._friendRequests));
+          }
+          if (typeof toast === "function") toast("❌ Arkadaşlık isteği reddedildi.", "info");
+          return;
+        }
+        return _origP2P.apply(this, arguments);
+      };
+    }
+
+    // Bildirim göster
+    window._showFriendRequestNotification = function (fromPeerId, username, tag) {
+      var html = '<div style="text-align:center;padding:8px;"><div style="font-size:24px;margin-bottom:8px;">📩</div><div style="font-weight:600;margin-bottom:4px;">@' + username + '#' + tag + '</div><div style="font-size:13px;opacity:0.7;margin-bottom:12px;">size arkadaşlık isteği gönderdi</div><div style="display:flex;gap:8px;justify-content:center;"><button class="btn-primary" onclick="window._acceptFriendRequest(\'' + fromPeerId + '\',\'' + username.replace(/'/g, "\\'") + '\',\'' + (tag || "") + '\')">✅ Kabul Et</button><button class="btn-secondary" onclick="window._rejectFriendRequest(\'' + fromPeerId + '\')">❌ Reddet</button></div></div>';
+      if (typeof showModal === "function") showModal("Arkadaşlık İsteği", html, '<button class="btn-secondary" onclick="hideModal()">Kapat</button>');
+    };
+
+    window._acceptFriendRequest = function (fromPeerId, username, tag) {
+      if (window.state) {
+        if (!window.state.friends) window.state.friends = [];
+        if (!window.state.friends.some(function (f) { return f.peerId === fromPeerId; })) {
+          window.state.friends.push({ peerId: fromPeerId, name: username, avatarColor: "#5865f2", avatarImage: null, tag: tag || "" });
+          localStorage.setItem("scord_friends", JSON.stringify(window.state.friends));
+        }
+        // Bekleyen istekten kaldır
+        if (window.state._pendingRequests) {
+          window.state._pendingRequests = window.state._pendingRequests.filter(function (r) { return r.from !== fromPeerId; });
+          localStorage.setItem("scord_pending_requests", JSON.stringify(window.state._pendingRequests));
+        }
+        // Kabul bildirimi gönder
+        if (window.state.mesh) {
+          window.state.mesh.broadcast({ type: "friend_request_accepted", from: window.state.peerId, username: window.state.username, avatarColor: window.state.avatarColor, avatarImage: window.state.avatarImage, tag: window.state._discriminator || "0000" });
+        }
+        if (typeof hideModal === "function") hideModal();
+        if (typeof toast === "function") toast(username + " ile arkadaş oldunuz!", "success");
+        if (!window.state.activeServerId && typeof renderHomeSidebar === "function") renderHomeSidebar();
+      }
+    };
+
+    window._rejectFriendRequest = function (fromPeerId) {
+      if (window.state._pendingRequests) {
+        window.state._pendingRequests = window.state._pendingRequests.filter(function (r) { return r.from !== fromPeerId; });
+        localStorage.setItem("scord_pending_requests", JSON.stringify(window.state._pendingRequests));
+      }
+      if (window.state?.mesh) {
+        window.state.mesh.broadcast({ type: "friend_request_rejected", from: window.state.peerId });
+      }
+      if (typeof hideModal === "function") hideModal();
+      if (typeof toast === "function") toast("İstek reddedildi.", "info");
+    };
+
+    // Bekleyen istek varsa otomatik bildirim göster
+    if (window.state._pendingRequests && window.state._pendingRequests.length > 0) {
+      var lastReq = window.state._pendingRequests[window.state._pendingRequests.length - 1];
+      setTimeout(function () {
+        window._showFriendRequestNotification(lastReq.from, lastReq.username, lastReq.tag);
+      }, 2000);
+    }
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     24. PROFİL — Nick tıklayınca kendi profil + avatar önizleme
+  ══════════════════════════════════════════════════════════ */
+
+  function patchProfileSystem() {
+    // Nick'e tıklayınca kendi profili
+    var check = setInterval(function () {
+      var nameEl = document.getElementById("user-bar-name");
+      if (nameEl && !nameEl.dataset.profilePatched) {
+        nameEl.dataset.profilePatched = "1";
+        nameEl.style.cursor = "pointer";
+        nameEl.title = "Profilini Görüntüle (tıkla)";
+        nameEl.onclick = function () {
+          if (typeof openUserProfile === "function") {
+            openUserProfile(window.state?.peerId, window.state?.username || window.state?.name, window.state?.avatarImage, window.state?.avatarColor);
+          }
+        };
+      }
+    }, 1000);
+
+    // Profil modalında avatar önizleme + değiştirme
+    var _origOUP = window.openUserProfile;
+    if (_origOUP) {
+      window.openUserProfile = function (peerId, username, avatarImage, avatarColor) {
+        var isSelf = peerId === window.state?.peerId;
+        _origOUP.apply(this, arguments);
+
+        if (!isSelf) return;
+        var mc = document.querySelector(".modal-content");
+        if (!mc || mc.querySelector(".pro-self-avatar")) return;
+
+        // Profil kartını bul
+        var proMain = mc.querySelector(".profile-pro-main");
+        if (!proMain) return;
+
+        // Avatar önizleme kısmı
+        var selfSection = document.createElement("div");
+        selfSection.className = "pro-self-avatar";
+        selfSection.style.cssText = "display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px;background:rgba(255,255,255,0.03);border-radius:12px;margin:12px 0;";
+
+        var preview = document.createElement("div");
+        preview.style.cssText = "width:100px;height:100px;border-radius:50%;background-color:" + (avatarColor || "#5865f2") + ";background-image:url(" + (avatarImage || "") + ");background-size:cover;background-position:center;border:3px solid var(--accent);box-shadow:0 4px 16px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;font-size:40px;color:#fff;font-weight:700;transition:transform 0.2s ease;";
+        if (!avatarImage) preview.textContent = (username ? username.charAt(0).toUpperCase() : "?");
+        preview.onmouseover = function () { this.style.transform = "scale(1.05)"; };
+        preview.onmouseout = function () { this.style.transform = "scale(1)"; };
+
+        var btnRow = document.createElement("div");
+        btnRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;justify-content:center;";
+
+        var uploadBtn = document.createElement("button");
+        uploadBtn.textContent = "📷 Fotoğraf Yükle";
+        uploadBtn.style.cssText = "background:var(--accent);color:#fff;border:none;padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all 0.15s ease;";
+        uploadBtn.onmouseover = function () { this.style.opacity = "0.85"; };
+        uploadBtn.onmouseout = function () { this.style.opacity = "1"; };
+        uploadBtn.onclick = function () {
+          var input = document.createElement("input");
+          input.type = "file";
+          input.accept = "image/*";
+          input.onchange = function (e) {
+            var file = e.target.files[0];
+            if (!file) return;
+            var reader = new FileReader();
+            reader.onload = function (ev) {
+              var b64 = ev.target.result;
+              if (window.state) {
+                window.state.avatarImage = b64;
+                localStorage.setItem("scord_avatar_image", b64);
+                preview.style.backgroundImage = "url(" + b64 + ")";
+                preview.textContent = "";
+                var ua = document.getElementById("user-bar-avatar");
+                if (ua && typeof applyAvatarToElement === "function") applyAvatarToElement(ua, window.state.avatarColor, b64, window.state.username);
+                if (window.state.mesh) window.state.mesh.broadcast({ type: "broadcast", payload: { type: "profile_update", username: window.state.username, avatarImage: b64 } });
+                if (typeof toast === "function") toast("Profil fotoğrafı güncellendi!", "success");
+              }
+            };
+            reader.readAsDataURL(file);
+          };
+          input.click();
+        };
+
+        var urlBtn = document.createElement("button");
+        urlBtn.textContent = "🔗 URL ile";
+        urlBtn.style.cssText = "background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.15);padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px;transition:all 0.15s ease;";
+        urlBtn.onclick = function () {
+          var url = prompt("Avatar URL'sini girin (https://...):");
+          if (url && url.trim()) {
+            var trimmed = url.trim();
+            if (window.state) {
+              window.state.avatarImage = trimmed;
+              localStorage.setItem("scord_avatar_image", trimmed);
+              preview.style.backgroundImage = "url(" + trimmed + ")";
+              preview.textContent = "";
+              var ua = document.getElementById("user-bar-avatar");
+              if (ua && typeof applyAvatarToElement === "function") applyAvatarToElement(ua, window.state.avatarColor, trimmed, window.state.username);
+              if (window.state.mesh) window.state.mesh.broadcast({ type: "broadcast", payload: { type: "profile_update", username: window.state.username, avatarImage: trimmed } });
+              if (typeof toast === "function") toast("Profil fotoğrafı güncellendi!", "success");
+            }
+          }
+        };
+
+        btnRow.appendChild(uploadBtn);
+        btnRow.appendChild(urlBtn);
+        selfSection.appendChild(preview);
+        selfSection.appendChild(btnRow);
+
+        // Profil kartının üstüne ekle
+        proMain.parentNode.insertBefore(selfSection, proMain);
+
+        // Profil kartı tasarım iyileştirme
+        var ps = document.createElement("style");
+        ps.textContent = ".modal-content{border-radius:16px!important;overflow:hidden!important;max-width:440px!important}.profile-pro-card{border:none!important}.profile-pro-banner{height:120px!important}";
+        document.head.appendChild(ps);
+      };
+    }
+  }
+
+  /* ══════════════════════════════════════════════════════════
      INIT
   ══════════════════════════════════════════════════════════ */
 
@@ -856,8 +1621,14 @@
       enhanceDMOverlay();
       patchMusicBot();
       patchMessageDeletePermission();
+      patchDMCloseButton();
       patchContextMenu();
       patchGameActivity();
+      patchClearMessages();
+      patchServerRail();
+      patchPasswordSystem();
+      patchFriendRequestSystem();
+      patchProfileSystem();
       patchPerformance();
 
       var obs = new MutationObserver(function () {
