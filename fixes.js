@@ -174,7 +174,18 @@
     window.state.voiceChannelId = null;
     window.state.servers.splice(idx, 1);
     try { if (window.state.mesh) { window.state.mesh.disconnect(); window.state.mesh = null; } } catch (e) {}
-    if (typeof removeServerFromStorage === "function") removeServerFromStorage(serverId);
+    // Tüm persistence katmanlarını temizle
+    if (typeof removeServerFromStorage === "function") removeServerFromStorage(serverId); // scord_saved_servers
+    try { localStorage.removeItem("scord_server_" + serverId); } catch (e) {} // V20 per-server key
+    // Left servers listesine ekle (reload'da tekrar gelmesin)
+    try {
+      var leftList = JSON.parse(localStorage.getItem("scord_left_servers") || "[]");
+      if (leftList.indexOf(serverId) === -1) {
+        leftList.push(serverId);
+        localStorage.setItem("scord_left_servers", JSON.stringify(leftList));
+      }
+    } catch (e) {}
+    // Identity'deki servers listesini güncelle
     if (typeof renderServerRail === "function") renderServerRail();
     if (typeof showHomeView === "function") showHomeView();
     if (typeof toast === "function") toast("Sunucudan ayrıldın.", "info");
@@ -545,12 +556,15 @@
 
   var _musicExpanded = false;
 
+  var _currentVideoId = null;
+
   function _startMusicFix(videoId, startAt) {
     _stopMusicFix();
+    _currentVideoId = videoId;
 
     var container = document.createElement("div");
     container.id = "music-player-dock";
-    container.style.cssText = "position:fixed;bottom:80px;right:20px;width:360px;z-index:10000;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.5);transition:height 0.3s ease;background:#18181b;font-family:Inter,sans-serif;";
+    container.style.cssText = "position:fixed;bottom:80px;right:20px;width:360px;z-index:10000;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.5);background:#18181b;font-family:Inter,sans-serif;";
 
     var bar = document.createElement("div");
     bar.id = "music-mini-bar";
@@ -568,7 +582,7 @@
     title.textContent = "YouTube";
     var subtitle = document.createElement("div");
     subtitle.style.cssText = "color:#a1a1aa;font-size:11px;";
-    subtitle.textContent = videoId ? "Bir müzik çalıyor..." : "Çalmıyor";
+    subtitle.textContent = "Bir müzik çalıyor, tıkla!";
     info.appendChild(title);
     info.appendChild(subtitle);
 
@@ -597,11 +611,9 @@
 
     var playerWrap = document.createElement("div");
     playerWrap.id = "music-player-wrap";
-    playerWrap.style.cssText = "height:0;overflow:hidden;transition:height 0.3s ease;";
-
+    playerWrap.style.cssText = "display:none;";
     var iframe = document.createElement("iframe");
     iframe.id = "yt-embed-fix";
-    iframe.src = "https://www.youtube.com/embed/" + videoId + "?autoplay=1&origin=" + encodeURIComponent(location.origin);
     iframe.style.cssText = "width:100%;height:240px;border:none;display:block;";
     iframe.allow = "autoplay; encrypted-media; fullscreen";
     iframe.allowFullscreen = true;
@@ -609,30 +621,36 @@
     container.appendChild(playerWrap);
 
     document.body.appendChild(container);
-
-    setTimeout(function () {
-      var pw = document.getElementById("music-player-wrap");
-      if (pw) pw.style.height = "240px";
-      _musicExpanded = true;
-    }, 50);
   }
 
   function _toggleMusicPlayer() {
     var pw = document.getElementById("music-player-wrap");
+    var iframe = document.getElementById("yt-embed-fix");
     if (!pw) return;
     if (_musicExpanded) {
-      pw.style.height = "0";
+      pw.style.display = "none";
       _musicExpanded = false;
     } else {
-      pw.style.height = "240px";
+      pw.style.display = "block";
       _musicExpanded = true;
+      // iframe'i ilk genişletmede yükle (mute ile otomatik oynasın)
+      if (iframe && !iframe.src) {
+        iframe.src = "https://www.youtube.com/embed/" + _currentVideoId + "?autoplay=1&mute=1&controls=1&modestbranding=1&rel=0&origin=" + encodeURIComponent(location.origin);
+      }
+      // Mute'u kaldır (ses aç)
+      if (iframe && iframe.src) {
+        iframe.src = iframe.src.replace("mute=1", "mute=0");
+      }
     }
   }
 
   function _stopMusicFix() {
     var dock = document.getElementById("music-player-dock");
+    var iframe = document.getElementById("yt-embed-fix");
+    if (iframe) { iframe.src = ""; iframe.remove(); }
     if (dock) dock.remove();
     _musicExpanded = false;
+    _currentVideoId = null;
   }
 
   function patchMusicBot() {
@@ -1255,8 +1273,10 @@
       var hash = window._getPasswordHash(pass);
       var isNew = false;
 
+      // HER ZAMAN username'i set et, böylece _saveIdentity null kaydetmez
+      window.state.username = nick;
+
       if (!stored) {
-        // Daha önce kayıt yoksa discriminator ata
         disc = window._getDiscriminator(nick);
         key = window._getIdentityKey(nick, disc);
         stored = localStorage.getItem(key);
@@ -1271,7 +1291,9 @@
         disc = data.discriminator || disc;
         window.state._discriminator = disc;
         if (data.peerId) window.state.peerId = data.peerId;
+        // Mevcut identity'den username varsa onu kullan, yoksa nick kullan
         if (data.username) window.state.username = data.username;
+        else window.state.username = nick;
         if (data.avatarColor) window.state.avatarColor = data.avatarColor;
         if (data.avatarImage) window.state.avatarImage = data.avatarImage;
         if (data.servers) window.state.servers = data.servers;
@@ -1282,9 +1304,13 @@
       } else {
         disc = window._getDiscriminator(nick);
         window.state._discriminator = disc;
+        window.state.username = nick;
         isNew = true;
         if (typeof toast === "function") toast("Yeni kimlik: " + window._formatTag(nick, disc), "success");
       }
+
+      // peerId yoksa oluştur
+      if (!window.state.peerId) window.state.peerId = genId();
 
       window.state._savedNick = nick;
       window.state._savedPass = pass;
@@ -1908,6 +1934,28 @@
     if (window._p2pChainFixed) return; // sadece bir kere çalışsın
     window._p2pChainFixed = true;
 
+    // 5) Ghost server temizliği - startApp'tan ÖNCE scord_left_servers'ı temizle
+    // loadSavedServers() tüm scord_server_* anahtarlarını state.servers'a ekler.
+    // Kullanıcının terk ettiği server'ları tekrar eklememek için "left list" kullan.
+    if (!window._ghostCleanFixed) {
+      window._ghostCleanFixed = true;
+      try {
+        var leftServers = JSON.parse(localStorage.getItem("scord_left_servers") || "[]");
+        if (leftServers.length > 0) {
+          leftServers.forEach(function (sid) {
+            try { localStorage.removeItem("scord_server_" + sid); } catch (e) {}
+          });
+          // Ayrıca scord_saved_servers'dan da temizle
+          try {
+            var saved = JSON.parse(localStorage.getItem("scord_saved_servers") || "[]");
+            var filtered = saved.filter(function (s) { return leftServers.indexOf(s.id) === -1; });
+            if (saved.length !== filtered.length) {
+              localStorage.setItem("scord_saved_servers", JSON.stringify(filtered));
+            }
+          } catch (e) {}
+        }
+      } catch (e) { console.warn("[fixes] Ghost pre-clean failed:", e); }
+    }
   }
 
   function patchStatusBar() {
