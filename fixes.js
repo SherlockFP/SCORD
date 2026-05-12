@@ -409,12 +409,10 @@
     style.id = "scord-perf-fixes";
     style.textContent = [
       "html{scroll-behavior:smooth}",
-      ".toast,.ctx-menu,.modal-backdrop,.dm-overlay{will-change:opacity,transform;backface-visibility:hidden}",
       ".messages-area,.channel-list,.members-list,#members-list,.dm-body{scroll-behavior:smooth;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}",
       "*::-webkit-scrollbar{width:4px;height:4px}*::-webkit-scrollbar-track{background:transparent}*::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:4px}",
       ".toast,.ctx-menu,.modal-backdrop,.dm-overlay{transition:opacity 0.1s ease,transform 0.1s ease}",
       "body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}",
-      ".server-rail{contain:layout style}.channel-sidebar{contain:layout}",
     ].join("");
     document.head.appendChild(style);
   }
@@ -1244,6 +1242,19 @@
       }
     } catch (e) {}
 
+    // İlk girişte otomatik pin/şifre sor
+    var firstRunKey = "scord_first_run_done";
+    if (!localStorage.getItem(firstRunKey)) {
+      setTimeout(function () {
+        var lastNick = localStorage.getItem("scord_last_nick");
+        var lastPass = localStorage.getItem("scord_last_pass");
+        if (!lastNick || !lastPass) {
+          if (typeof window.showLoginModal === "function") window.showLoginModal();
+        }
+        localStorage.setItem(firstRunKey, "1");
+      }, 1500);
+    }
+
     // Setup butonuna giriş + etiket butonları
     var setupCheck = setInterval(function () {
       var setupOverlay = document.getElementById("setup-overlay");
@@ -1252,26 +1263,27 @@
         group.style.cssText = "display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;";
         var loginBtn = document.createElement("button");
         loginBtn.className = "login-btn hero-btn";
-        loginBtn.textContent = "🔑 Giriş Yap";
-        loginBtn.style.cssText = "font-size:13px;padding:8px 20px;";
+        loginBtn.textContent = "🔑 Giriş Yap (Şifre ile)";
+        loginBtn.style.cssText = "font-size:13px;padding:10px 24px;";
         loginBtn.onclick = function () { if (typeof window.showLoginModal === "function") window.showLoginModal(); };
         var friendBtn = document.createElement("button");
         friendBtn.className = "login-btn hero-btn";
         friendBtn.textContent = "👥 Etiketle Arkadaş Ekle";
-        friendBtn.style.cssText = "font-size:13px;padding:8px 20px;background:var(--accent);";
+        friendBtn.style.cssText = "font-size:13px;padding:10px 24px;background:var(--accent);";
         friendBtn.onclick = function () { if (typeof window.showAddFriendByTagModal === "function") window.showAddFriendByTagModal(); };
         var editTagBtn = document.createElement("button");
         editTagBtn.className = "login-btn hero-btn";
-        editTagBtn.textContent = "🏷 Etiket Değiştir";
-        editTagBtn.style.cssText = "font-size:13px;padding:8px 20px;background:var(--green);";
+        editTagBtn.textContent = "🏷 #Etiket Değiştir";
+        editTagBtn.style.cssText = "font-size:13px;padding:10px 24px;background:var(--green);";
         editTagBtn.onclick = function () { if (typeof window.showEditTagModal === "function") window.showEditTagModal(); };
         group.appendChild(loginBtn);
         group.appendChild(friendBtn);
         group.appendChild(editTagBtn);
-        var container = setupOverlay.querySelector(".setup-content, .setup-card, .hero-actions");
-        if (container) container.appendChild(group);
-        else setupOverlay.appendChild(group);
-        clearInterval(setupCheck);
+        var container = setupOverlay.querySelector(".setup-content, .setup-card, .hero-actions, .form-group");
+        if (container) {
+          container.parentNode.insertBefore(group, container.nextSibling);
+          clearInterval(setupCheck);
+        }
       }
     }, 1000);
   }
@@ -1316,15 +1328,13 @@
     var style = document.createElement("style");
     style.id = "scord-rail-fix";
     style.textContent = [
-      ".server-rail{overflow-y:auto!important;overflow-x:hidden!important;max-height:100vh!important;scrollbar-width:thin!important;gap:6px!important;padding:8px 4px!important}",
-      ".server-rail::-webkit-scrollbar{width:3px!important}",
-      ".server-rail::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15)!important;border-radius:3px!important}",
-      ".rail-icon{flex-shrink:0!important;transition:border-radius 0.15s ease,transform 0.1s ease!important}",
-      ".rail-icon:hover{border-radius:14px!important;transform:scale(1.05)!important}",
-      ".rail-icon.active{border-radius:14px!important}",
-      ".rail-icon img{width:100%!important;height:100%!important;object-fit:cover!important;border-radius:inherit!important}",
-      ".rail-server-guild{width:44px!important;height:44px!important;min-height:44px!important}",
-      ".rail-separator{width:32px!important;margin:4px auto!important}",
+      ".server-rail{overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}",
+      ".server-rail::-webkit-scrollbar{width:3px}",
+      ".server-rail::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:3px}",
+      ".rail-icon{transition:border-radius 0.15s ease,transform 0.1s ease}",
+      ".rail-icon:hover{border-radius:14px;transform:scale(1.05)}",
+      ".rail-icon.active{border-radius:14px}",
+      ".rail-icon img{width:100%;height:100%;object-fit:cover;border-radius:inherit}",
       ".screen-overlay-tools{display:flex;align-items:center;gap:12px;padding:10px 16px;background:rgba(0,0,0,0.75);backdrop-filter:blur(8px);border-radius:12px;margin-top:8px}",
       ".screen-overlay-tool{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.15);color:#fff;padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all 0.15s ease}",
       ".screen-overlay-tool:hover{background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.3);transform:scale(1.03)}",
@@ -1489,7 +1499,51 @@
   }
 
   /* ══════════════════════════════════════════════════════════
-     24. PROFİL — Nick tıklayınca kendi profil + avatar önizleme
+     25. STATUS BAR FİX — innerHTML koruma
+  ══════════════════════════════════════════════════════════ */
+
+  function patchStatusBar() {
+    var _origUSB = window.updateStatusBar;
+    if (!_origUSB) return;
+    window.updateStatusBar = function () {
+      // Event listener'ı koru: öncekini sakla
+      var bar = document.getElementById("status-bar");
+      var hadClick = false;
+      if (bar) {
+        var clones = [];
+        for (var ci = 0; ci < bar.children.length; ci++) {
+          clones.push(bar.children[ci].cloneNode(true));
+        }
+        _origUSB.apply(this, arguments);
+        // Click listener'ı yeniden ekle (showStatusPicker)
+        if (bar && typeof window.showStatusPicker === "function") {
+          bar.onclick = function (e) {
+            // status-indicator veya status-text'e tıklandıysa
+            if (e.target.closest(".status-indicator") || e.target.closest(".status-bar")) {
+              window.showStatusPicker();
+            }
+          };
+        }
+      } else {
+        _origUSB.apply(this, arguments);
+      }
+    };
+
+    // İlk yüklemeden sonra onClick'i garantiye al
+    setInterval(function () {
+      var bar = document.getElementById("status-bar");
+      if (bar && !bar._statusFixed) {
+        bar._statusFixed = true;
+        bar.onclick = function (e) {
+          if (typeof window.showStatusPicker === "function") window.showStatusPicker();
+        };
+        bar.style.cursor = "pointer";
+      }
+    }, 2000);
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     26. PROFİL — Nick tıklayınca kendi profil + avatar önizleme
   ══════════════════════════════════════════════════════════ */
 
   function patchProfileSystem() {
@@ -1629,6 +1683,7 @@
       patchPasswordSystem();
       patchFriendRequestSystem();
       patchProfileSystem();
+      patchStatusBar();
       patchPerformance();
 
       var obs = new MutationObserver(function () {
