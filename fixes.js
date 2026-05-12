@@ -50,6 +50,76 @@
   };
 
   /* ══════════════════════════════════════════════════════════
+     PERFORMANS İYİLEŞTİRMELERİ — Genel Site Kasması Fix
+  ══════════════════════════════════════════════════════════ */
+
+  (function _perfOptimizations() {
+    // 1. Scroll handler debounce - updateLastActive'i debounce et
+    var _scrollTimer = null;
+    var _origAddEvent = document.addEventListener;
+    document.addEventListener = function (type, listener, options) {
+      if (type === "scroll") {
+        var debouncedListener = function (e) {
+          if (_scrollTimer) return;
+          _scrollTimer = setTimeout(function () {
+            _scrollTimer = null;
+            listener.call(this, e);
+          }, 50);
+        };
+        return _origAddEvent.call(document, type, debouncedListener, options);
+      }
+      return _origAddEvent.call(document, type, listener, options);
+    };
+
+    // 2. requestAnimationFrame throttle for heavy DOM updates
+    var _rafId = null;
+    window._rafQueue = [];
+    window._scheduleRAF = function (fn) {
+      window._rafQueue.push(fn);
+      if (!_rafId) {
+        _rafId = requestAnimationFrame(function () {
+          _rafId = null;
+          var q = window._rafQueue;
+          window._rafQueue = [];
+          q.forEach(function (f) { try { f(); } catch (e) {} });
+        });
+      }
+    };
+
+    // 3. Cache frequently accessed DOM elements
+    window._domCache = {};
+    function _getCachedEl(id) {
+      if (!window._domCache[id]) {
+        window._domCache[id] = document.getElementById(id);
+      }
+      return window._domCache[id];
+    }
+
+    // 4. Debounce utility
+    window._debounce = function (fn, ms) {
+      var tm = null;
+      return function () {
+        if (tm) clearTimeout(tm);
+        tm = setTimeout(function () { fn.apply(this, arguments); }, ms || 16);
+      };
+    };
+
+    // 5. Throttle utility
+    window._throttle = function (fn, ms) {
+      var last = 0;
+      return function () {
+        var now = Date.now();
+        if (now - last >= (ms || 16)) {
+          last = now;
+          fn.apply(this, arguments);
+        }
+      };
+    };
+
+    console.log("[Fixes] Performans iyileştirmeleri yüklendi");
+  })();
+
+  /* ══════════════════════════════════════════════════════════
      1. DISCORD TARZI SES EFEKTLERİ
   ══════════════════════════════════════════════════════════ */
 
@@ -561,44 +631,45 @@
   function _startMusicFix(videoId, startAt) {
     _stopMusicFix();
     _currentVideoId = videoId;
+    _musicExpanded = false;
 
     var container = document.createElement("div");
     container.id = "music-player-dock";
-    container.style.cssText = "position:fixed;bottom:80px;right:20px;width:360px;z-index:10000;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.5);background:#18181b;font-family:Inter,sans-serif;";
+    container.style.cssText = "position:fixed;bottom:80px;right:20px;width:360px;z-index:10000;border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.6);background:#1a1a1f;font-family:Inter,sans-serif;";
 
     var bar = document.createElement("div");
     bar.id = "music-mini-bar";
-    bar.style.cssText = "display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;height:48px;box-sizing:border-box;";
+    bar.style.cssText = "display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;height:52px;box-sizing:border-box;background:linear-gradient(90deg,#1a1a1f,#232328);";
     bar.onclick = function () { _toggleMusicPlayer(); };
 
     var icon = document.createElement("span");
     icon.textContent = "🎵";
-    icon.style.cssText = "font-size:18px;flex-shrink:0;";
+    icon.style.cssText = "font-size:20px;flex-shrink:0;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));";
 
     var info = document.createElement("div");
     info.style.cssText = "flex:1;min-width:0;";
     var title = document.createElement("div");
-    title.style.cssText = "color:#fff;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-    title.textContent = "YouTube";
+    title.style.cssText = "color:#fff;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+    title.textContent = "YouTube Müzik";
     var subtitle = document.createElement("div");
     subtitle.style.cssText = "color:#a1a1aa;font-size:11px;";
-    subtitle.textContent = "Bir müzik çalıyor, tıkla!";
+    subtitle.textContent = "Tıkla ve aç!";
     info.appendChild(title);
     info.appendChild(subtitle);
 
     var barControls = document.createElement("div");
-    barControls.style.cssText = "display:flex;gap:4px;align-items:center;flex-shrink:0;";
+    barControls.style.cssText = "display:flex;gap:6px;align-items:center;flex-shrink:0;";
 
     var expandBtn = document.createElement("button");
     expandBtn.innerHTML = "⏏";
     expandBtn.title = "Genişlet";
-    expandBtn.style.cssText = "width:28px;height:28px;border:none;border-radius:6px;background:rgba(255,255,255,0.08);color:#fff;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;";
+    expandBtn.style.cssText = "width:30px;height:30px;border:none;border-radius:8px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(99,102,241,0.4);";
     expandBtn.onclick = function (e) { e.stopPropagation(); _toggleMusicPlayer(); };
 
     var closeBtn = document.createElement("button");
     closeBtn.innerHTML = "✕";
     closeBtn.title = "Kapat";
-    closeBtn.style.cssText = "width:28px;height:28px;border:none;border-radius:6px;background:rgba(255,255,255,0.08);color:#a1a1aa;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;";
+    closeBtn.style.cssText = "width:30px;height:30px;border:none;border-radius:8px;background:rgba(255,255,255,0.1);color:#a1a1aa;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;";
     closeBtn.onclick = function (e) { e.stopPropagation(); _stopMusicFix(); };
 
     barControls.appendChild(expandBtn);
@@ -611,36 +682,44 @@
 
     var playerWrap = document.createElement("div");
     playerWrap.id = "music-player-wrap";
-    playerWrap.style.cssText = "display:none;";
-    var iframe = document.createElement("iframe");
-    iframe.id = "yt-embed-fix";
-    iframe.style.cssText = "width:100%;height:240px;border:none;display:block;";
-    iframe.allow = "autoplay; encrypted-media; fullscreen";
-    iframe.allowFullscreen = true;
-    playerWrap.appendChild(iframe);
+    playerWrap.style.cssText = "display:none;background:#000;";
     container.appendChild(playerWrap);
 
     document.body.appendChild(container);
+    
+    console.log("[Fixes] Music player started, videoId:", videoId);
   }
 
   function _toggleMusicPlayer() {
     var pw = document.getElementById("music-player-wrap");
-    var iframe = document.getElementById("yt-embed-fix");
-    if (!pw) return;
+    var container = document.getElementById("music-player-dock");
+    if (!pw || !container) return;
+    
     if (_musicExpanded) {
       pw.style.display = "none";
       _musicExpanded = false;
     } else {
       pw.style.display = "block";
       _musicExpanded = true;
-      // iframe'i ilk genişletmede yükle (mute ile otomatik oynasın)
-      if (iframe && !iframe.src) {
-        iframe.src = "https://www.youtube.com/embed/" + _currentVideoId + "?autoplay=1&mute=1&controls=1&modestbranding=1&rel=0&origin=" + encodeURIComponent(location.origin);
-      }
-      // Mute'u kaldır (ses aç)
-      if (iframe && iframe.src) {
-        iframe.src = iframe.src.replace("mute=1", "mute=0");
-      }
+      
+      // Var olan iframe'i kaldır ve YENİSİNİ OLUŞTUR (mute=0 ile)
+      var oldIframe = document.getElementById("yt-embed-fix");
+      if (oldIframe) { oldIframe.remove(); }
+      
+      var newIframe = document.createElement("iframe");
+      newIframe.id = "yt-embed-fix";
+      newIframe.style.cssText = "width:100%;height:240px;border:none;display:block;background:#000;";
+      newIframe.allow = "autoplay; encrypted-media; fullscreen; picture-in-picture";
+      newIframe.allowFullscreen = true;
+      newIframe.title = "YouTube Player";
+      
+      // DIRECT mute=0 - ses açık başlat
+      var embedUrl = "https://www.youtube.com/embed/" + _currentVideoId + "?autoplay=1&mute=0&controls=1&modestbranding=1&rel=0&playsinline=1";
+      newIframe.src = embedUrl;
+      
+      pw.appendChild(newIframe);
+      
+      console.log("[Fixes] Music player expanded, video:", _currentVideoId);
     }
   }
 
@@ -1143,7 +1222,12 @@
       if (_gaObsTimer) return;
       _gaObsTimer = setTimeout(function () { _gaObsTimer = null; addGameBtn(); }, 300);
     });
-    homeObs.observe(document.body, { childList: true, subtree: true });
+    // Optimize: Sadece home-view'ı izle, tüm body'yi değil
+    setTimeout(function () {
+      var homeView = document.getElementById("home-view") || document.querySelector(".home-view");
+      if (homeView) homeObs.observe(homeView, { childList: true, subtree: true });
+      else homeObs.observe(document.body, { childList: true, subtree: true });
+    }, 1000);
 
     // localStorage'dan geri yükle
     try {
@@ -1226,6 +1310,26 @@
 
   function patchPasswordSystem() {
     if (!window.state) return;
+
+    // ÖNCE: Oto-giriş kontrolü - app.js identity yüklemeden ÖNCE çalışsın
+    // Bu, "Anonim" sorununu çözer
+    (function _immediateAutoLogin() {
+      var lastNick = localStorage.getItem("scord_last_nick");
+      var lastPass = localStorage.getItem("scord_last_pass");
+      if (lastNick && lastPass && !window.state._autoLoginDone) {
+        window.state._autoLoginDone = true;
+        var ok = window.loginWithPassword(lastNick, lastPass);
+        if (ok) {
+          // CRITICAL: state.username ve localStorage'ı GÜNCELLE before startApp
+          window.state.username = lastNick;
+          localStorage.setItem("scord_username", lastNick);
+          // User bar'ı hemen güncelle
+          var nameEl = document.getElementById("user-bar-name");
+          if (nameEl) nameEl.textContent = lastNick + "#" + (window.state._discriminator || "0001");
+          console.log("[Fixes] Auto-login successful for:", lastNick);
+        }
+      }
+    })();
 
     // Discriminator sayaç (her nick için kaç kayıt var)
     window._getDiscriminator = function (nick) {
@@ -1479,10 +1583,19 @@
       var lastNick = localStorage.getItem("scord_last_nick");
       var lastPass = localStorage.getItem("scord_last_pass");
 
-      // Otomatik giriş yap - kayıtlı kimlik varsa setup'i atla
-      if (lastNick && lastPass) {
+      // Otomatik giriş yap - ZATEN yapıldı, tekrar yapma
+      if (lastNick && lastPass && window.state._autoLoginDone) {
+        // Setup overlay'ü gizle - zaten giriş yapıldı
+        if (setupOverlay) setupOverlay.style.display = "none";
+        if (typeof startApp === "function") startApp();
+        return;
+      }
+
+      // Normal giriş (henüz yapılmadıysa)
+      if (lastNick && lastPass && !window.state._autoLoginDone) {
         var ok = window.loginWithPassword(lastNick, lastPass);
         if (ok) {
+          window.state._autoLoginDone = true;
           if (typeof startApp === "function") {
             var nickInput = document.getElementById("username-input");
             if (nickInput) nickInput.value = lastNick;
@@ -1569,6 +1682,13 @@
         var result = _origSA.apply(this, arguments);
         setTimeout(function () {
           _updateDiscTag();
+          // "Anonim" görünüyorsa düzelt
+          var nameEl = document.getElementById("user-bar-name");
+          if (nameEl && nameEl.textContent === "Anonim") {
+            var savedNick = localStorage.getItem("scord_last_nick") || window.state?.username;
+            var savedDisc = window.state?._discriminator || "0001";
+            if (savedNick) nameEl.textContent = savedNick + "#" + savedDisc;
+          }
           // 3 saniye sonra bir daha dene (geç yüklenen elementler için)
           setTimeout(_updateDiscTag, 3000);
         }, 300);
