@@ -510,6 +510,19 @@ async def update_icon(room_id: str, body: dict):
     })
     return {"success": True}
 
+@app.delete("/api/rooms/{room_id}/messages/{message_id}")
+async def delete_message(room_id: str, message_id: str, channel_id: str = ""):
+    if room_id not in rooms:
+        return {"error": "Not found"}
+    room = rooms[room_id]
+    if channel_id and channel_id in room.messages:
+        room.messages[channel_id] = [m for m in room.messages[channel_id] if m.get("id") != message_id]
+    else:
+        for ch in list(room.messages.keys()):
+            room.messages[ch] = [m for m in room.messages[ch] if m.get("id") != message_id]
+    schedule_save_db()
+    return {"success": True}
+
 
 @app.post("/api/rooms/{room_id}/channel_background")
 async def set_channel_background(room_id: str, body: dict):
@@ -533,6 +546,39 @@ async def set_channel_background(room_id: str, body: dict):
         "channel_backgrounds": room.channel_backgrounds
     })
     return {"success": True, "channel_backgrounds": room.channel_backgrounds}
+
+
+@app.post("/api/rooms/{room_id}/settings")
+async def update_room_settings(room_id: str, body: dict):
+    if room_id not in rooms:
+        return {"error": "Not found"}
+    room = rooms[room_id]
+    if body.get("name"):
+        room.name = body["name"]
+    if "icon_url" in body:
+        room.icon_url = body["icon_url"]
+    if body.get("roles"):
+        room.roles = body["roles"]
+    if "peer_roles" in body:
+        room.peer_roles = body["peer_roles"]
+    if "channel_permissions" in body:
+        room.channel_permissions = body["channel_permissions"]
+    if "voicePermissionMode" in body:
+        pass  # client-side only
+    room.normalize_permissions()
+    schedule_save_db()
+    await broadcast_to_room(room, {
+        "type": "server_update",
+        "payload": {
+            "id": room_id,
+            "name": room.name,
+            "roles": room.roles,
+            "peer_roles": room.peer_roles,
+            "channel_permissions": room.channel_permissions,
+            "icon_url": room.icon_url,
+        }
+    })
+    return {"success": True}
 
 
 @app.post("/api/rooms/{room_id}/invite_rotate")
