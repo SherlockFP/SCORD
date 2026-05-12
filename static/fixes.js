@@ -874,6 +874,145 @@
     }
   }
 
+  function patchThreadBug() {
+    var _origCT = window.createThread;
+    if (!_origCT) return;
+    window.createThread = function (serverId, channelId, parentMessageId) {
+      var ctxMenu = document.getElementById("ctx-menu");
+      if (ctxMenu) ctxMenu.remove();
+      var otherMenus = document.querySelectorAll("[id*='ctx'], .ctx-menu, .dropdown-menu");
+      otherMenus.forEach(function (el) { if (el.id !== "ctx-menu") el.remove(); });
+      return _origCT.apply(this, arguments);
+    };
+
+    var _origOTV = window.openThreadView;
+    if (_origOTV) {
+      window.openThreadView = function (serverId, threadId) {
+        document.querySelectorAll(".ctx-menu, [id*='ctx-menu'], .dropdown").forEach(function (el) { el.remove(); });
+        return _origOTV.apply(this, arguments);
+      };
+    }
+  }
+
+  function patchDMContextMenu() {
+    var _origRDM = window.renderDMMessages;
+    if (!_origRDM) return;
+    window.renderDMMessages = function (peerId) {
+      var result = _origRDM.apply(this, arguments);
+      setTimeout(function () {
+        var rows = document.querySelectorAll(".dm-msg-row");
+        rows.forEach(function (row) {
+          if (row.dataset.dmCtxAdded) return;
+          row.dataset.dmCtxAdded = "1";
+          row.addEventListener("contextmenu", function (e) {
+            e.preventDefault();
+            var messages = window.state?.dms?.[peerId] || [];
+            var idx = Array.from(row.parentElement.children).indexOf(row);
+            var msg = messages[idx];
+            if (!msg) return;
+            showDMContextMenu(e.clientX, e.clientY, msg, peerId);
+          });
+        });
+      }, 100);
+      return result;
+    };
+  }
+
+  function showDMContextMenu(x, y, msg, peerId) {
+    document.querySelectorAll(".ctx-menu, .dm-ctx-menu").forEach(function (el) { el.remove(); });
+    var isOwn = msg.authorId === window.state?.peerId;
+    var username = msg.author || "Kullanici";
+    var isBlocked = window.state?.blockedPeers?.includes(peerId);
+    var dmMuted = JSON.parse(localStorage.getItem("scord_dm_muted") || "[]").includes(peerId);
+
+    var menu = document.createElement("div");
+    menu.className = "ctx-menu dm-ctx-menu";
+    menu.id = "dm-ctx-menu";
+    menu.style.cssText = "position:fixed;left:" + Math.min(x, window.innerWidth - 220) + "px;top:" + Math.min(y, window.innerHeight - 300) + "px;z-index:100000;min-width:180px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:6px 0;box-shadow:0 4px 20px rgba(0,0,0,0.4);";
+
+    function addItem(icon, label, action, danger) {
+      var item = document.createElement("div");
+      item.style.cssText = "padding:8px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text-normal);" + (danger ? "color:#ed4245;" : "");
+      item.innerHTML = '<span style="font-size:14px;">' + icon + '</span><span>' + label + '</span>';
+      item.onclick = function () { menu.remove(); action(); };
+      menu.appendChild(item);
+    }
+
+    addItem("✂️", "Metni Kopyala", function () {
+      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(msg.text || "");
+    });
+
+    if (isOwn) {
+      addItem("🗑️", "Mesajı Sil", function () {
+        var msgs = window.state.dms?.[peerId] || [];
+        var idx = msgs.findIndex(function (m) { return m.id === msg.id; });
+        if (idx !== -1) { msgs.splice(idx, 1); window.renderDMMessages(peerId); }
+        var stored = JSON.parse(localStorage.getItem("scord_dms") || "{}");
+        if (stored[peerId]) {
+          stored[peerId] = stored[peerId].filter(function (m) { return m.id !== msg.id; });
+          localStorage.setItem("scord_dms", JSON.stringify(stored));
+        }
+      }, true);
+    }
+
+    addItem(isBlocked ? "✅" : "🚫", isBlocked ? "Engeli Kaldır" : "Kişiyi Engelle", function () {
+      if (!window.state.blockedPeers) window.state.blockedPeers = [];
+      var idx = window.state.blockedPeers.indexOf(peerId);
+      if (idx !== -1) { window.state.blockedPeers.splice(idx, 1); toast("@" + username + " engeli kaldırıldı.", "success"); }
+      else { window.state.blockedPeers.push(peerId); toast("@" + username + " engellendi.", "info"); }
+      localStorage.setItem("scord_blocked_peers", JSON.stringify(window.state.blockedPeers));
+    }, !isBlocked);
+
+    addItem(dmMuted ? "🔔" : "🔇", dmMuted ? "Bildirimleri Aç" : "Sessize Al", function () {
+      var muted = JSON.parse(localStorage.getItem("scord_dm_muted") || "[]");
+      var idx = muted.indexOf(peerId);
+      if (idx !== -1) { muted.splice(idx, 1); toast("DM bildirimleri açıldı.", "success"); }
+      else { muted.push(peerId); toast("DM sessize alındı.", "info"); }
+      localStorage.setItem("scord_dm_muted", JSON.stringify(muted));
+    });
+
+    addItem("❌", "Konuşmayı Sil", function () {
+      if (!confirm("@" + username + " ile olan tüm mesajları silmek istediğine emin misin?")) return;
+      if (window.state?.dms) delete window.state.dms[peerId];
+      var stored = JSON.parse(localStorage.getItem("scord_dms") || "{}");
+      delete stored[peerId];
+      localStorage.setItem("scord_dms", JSON.stringify(stored));
+      if (window.state?.recentDMs) {
+        window.state.recentDMs = window.state.recentDMs.filter(function (d) { return d.peerId !== peerId; });
+        localStorage.setItem("scord_recent_dms", JSON.stringify(window.state.recentDMs));
+      }
+      window.state.activeDM = null;
+      var ov = document.getElementById("dm-overlay");
+      if (ov) ov.classList.add("hidden");
+      var main = document.getElementById("dm-main-view");
+      if (main) main.classList.add("hidden");
+      if (typeof window.renderHomeSidebar === "function") window.renderHomeSidebar();
+      toast("Konuşma silindi.", "info");
+    }, true);
+
+    document.body.appendChild(menu);
+    setTimeout(function () {
+      document.addEventListener("click", function handler(e) {
+        menu.remove();
+        document.removeEventListener("click", handler);
+      });
+    }, 0);
+  }
+
+  function fixChatDesign() {
+    var style = document.createElement("style");
+    style.id = "scord-chat-design-fix";
+    style.textContent = `
+      #chat-channel-name { display: none !important; }
+      .chat-header .header-right { display: none !important; }
+      #active-channel-name { font-size: 16px !important; font-weight: 600 !important; color: var(--text-normal) !important; }
+      .channel-hash { color: var(--text-muted) !important; font-size: 18px !important; margin-right: 4px !important; }
+      .chat-header { background: var(--bg-elevated) !important; border-bottom: 1px solid var(--border) !important; padding: 12px 16px !important; }
+      .chat-header .header-left { display: flex !important; align-items: center !important; gap: 8px !important; }
+    `;
+    document.head.appendChild(style);
+  }
+
   /* ══════════════════════════════════════════════════════════
      17. OYUN AKTİVİTESİ BÖLÜMÜ
   ══════════════════════════════════════════════════════════ */
@@ -1738,6 +1877,9 @@
       patchDMCloseButton();
       patchOpenDM();
       patchContextMenu();
+      patchThreadBug();
+      fixChatDesign();
+      patchDMContextMenu();
       patchGameActivity();
       patchClearMessages();
       patchServerRail();
