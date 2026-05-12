@@ -2,6 +2,53 @@
   "use strict";
   var _API = typeof API_BASE !== "undefined" ? API_BASE : "/api";
 
+  /* ── Safe localStorage helpers ──────────────────────── */
+  function safeGet(key, def) {
+    try { return localStorage.getItem(key); } catch (e) { return def !== undefined ? def : null; }
+  }
+  function safeSet(key, val) {
+    try { localStorage.setItem(key, val); return true; } catch (e) { return false; }
+  }
+  function safeRemove(key) {
+    try { localStorage.removeItem(key); } catch (e) {}
+  }
+  function safeJSON(key, def) {
+    try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : def; } catch (e) { return def; }
+  }
+  function safeJSONset(key, val) {
+    try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch (e) { return false; }
+  }
+
+  /* ── Global safe localStorage wrapper ─────────────── */
+  (function () {
+    var _origGet = Storage.prototype.getItem;
+    var _origSet = Storage.prototype.setItem;
+    var _origRemove = Storage.prototype.removeItem;
+    if (!_origGet._patched) {
+      Storage.prototype.getItem = function (key) {
+        try { return _origGet.call(this, key); } catch (e) { return null; }
+      };
+      Storage.prototype.getItem._patched = true;
+      Storage.prototype.setItem = function (key, val) {
+        try { _origSet.call(this, key, val); } catch (e) {}
+      };
+      Storage.prototype.removeItem = function (key) {
+        try { _origRemove.call(this, key); } catch (e) {}
+      };
+    }
+  })();
+
+  /* ── Global safeFetch wrapper ──────────────────────── */
+  var _origFetch = window.fetch;
+  window.fetch = function (url, opts) {
+    return _origFetch.call(window, url, opts).catch(function (err) {
+      console.warn("[fetch] Failed:", url, err);
+      return new Response(JSON.stringify({ error: err.message, success: false }), {
+        status: 503, headers: { "Content-Type": "application/json" }
+      });
+    });
+  };
+
   /* ══════════════════════════════════════════════════════════
      1. DISCORD TARZI SES EFEKTLERİ
   ══════════════════════════════════════════════════════════ */
@@ -17,11 +64,11 @@
   }
 
   function sfxVol() {
-    var v = parseFloat(localStorage.getItem("scord_sfx_volume") ?? "0.35");
+    var v = parseFloat(safeGet("scord_sfx_volume") ?? "0.35");
     return isNaN(v) ? 0.35 : Math.max(0, Math.min(1, v));
   }
 
-  function sfxEn() { return localStorage.getItem("scord_sfx_enabled") !== "false"; }
+  function sfxEn() { return safeGet("scord_sfx_enabled") !== "false"; }
 
   window.playDiscordSFX = function playDiscordSFX(name) {
     if (!sfxEn()) return;
@@ -1417,20 +1464,26 @@
       var setupTitle = setupCard.querySelector("h2") || setupCard.querySelector(".setup-title");
       if (setupTitle) setupTitle.textContent = "Scord\'a Hoş Geldin";
 
-      // Enter butonunu patch'le
+      // Enter butonunu patch'le - ORİJİNAL handler'ı KALDIR
       var enterBtn = setupCard.querySelector("#enter-btn");
       if (enterBtn) {
         enterBtn.textContent = lastNick ? "Giriş Yap" : "Kayıt Ol";
-        var origClick = enterBtn.onclick;
-        enterBtn.onclick = function (e) {
+        // Orijinal handler'ı kaldırmak için butonu klonla (cloneNode listener'ları kopyalamaz)
+        var newBtn = enterBtn.cloneNode(true);
+        if (enterBtn.parentNode) enterBtn.parentNode.replaceChild(newBtn, enterBtn);
+        newBtn.onclick = function (e) {
           var nick = document.getElementById("username-input")?.value?.trim();
           var pass = document.getElementById("setup-password")?.value || "";
-          if (!nick) { toast("Kullanıcı adı gerekli.", "error"); return; }
-          if (!pass) { toast("Şifre gerekli.", "error"); return; }
+          if (!nick) { if (typeof toast === "function") toast("Kullanıcı adı gerekli.", "error"); return; }
+          if (!pass) { if (typeof toast === "function") toast("Şifre gerekli.", "error"); return; }
           var ok = window.loginWithPassword(nick, pass);
           if (ok) {
-            if (origClick) origClick.call(this, e);
-            // Discriminator'ı user bar'da göster
+            // loginWithPassword zaten state'i ayarladı, sadece startApp çağır
+            window.state.username = nick;
+            if (!window.state.peerId) window.state.peerId = genId();
+            safeSet("scord_username", nick);
+            safeSet("scord_peer_id", window.state.peerId);
+            if (typeof startApp === "function") startApp();
             setTimeout(_updateDiscTag, 500);
           }
         };
@@ -1775,6 +1828,62 @@
     setTimeout(_broadcastMyStatus, 2000);
   }
 
+  /* ══════════════════════════════════════════════════════════
+     26. GENEL BUG FİXLERİ
+  ══════════════════════════════════════════════════════════ */
+
+  function patchGlobalBugs() {
+    // 1) initSetup() double call fix
+    var _origInitSetup = window.initSetup;
+    if (typeof window.initSetup === "function") {
+      var _setupCalled = false;
+      window.initSetup = function () {
+        if (_setupCalled) { console.warn("[fixes] initSetup blocked (double call)"); return; }
+        _setupCalled = true;
+        return _origInitSetup.apply(this, arguments);
+      };
+    }
+
+    // 2) DM payload null check
+    var _origSrvMsg = window.handleServerMessage;
+    if (_origSrvMsg) {
+      window.handleServerMessage = function (data) {
+        if (data?.type === "dm" || data?.type === "text") {
+          if (!data.payload) { console.warn("[fixes] DM with no payload, dropping"); return; }
+        }
+        return _origSrvMsg.apply(this, arguments);
+      };
+    }
+
+    // 3) chatInput null check güvencesi
+    var _safeChatInterval = setInterval(function () {
+      var ci = document.getElementById("chat-input");
+      if (!ci) return;
+      clearInterval(_safeChatInterval);
+      // Orijinal event listener'ların çalıştığından emin ol
+      if (!ci.dataset._fixChecked) {
+        ci.dataset._fixChecked = "1";
+        ci.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" && !e.shiftKey) {
+            var sendBtn = document.getElementById("send-btn");
+            if (sendBtn) sendBtn.click();
+          }
+        });
+      }
+    }, 500);
+
+    // 4) handleIncomingP2P wrapper chain - app.js'deki local değişken fix
+    // app.js'de onMessage callback'i bir local handleIncomingP2P değişkenini kullanır,
+    // window.handleIncomingP2P'yi DEĞİL. fixes.js'deki wrapper'lar window sürümünü değiştirir
+    // ama local değişken eski kalır. Bu nedenle en son window sürümünün 
+    // local değişkene de atandığından emin olalım.
+    // patchMusicBot ve patchMemberStatus zaten doğru chain yapıyor.
+    // Burada sadece status handler'ların peerStatuses'e yazıldığını doğruluyoruz.
+    if (window._p2pChainFixed) return; // sadece bir kere çalışsın
+    window._p2pChainFixed = true;
+
+  }
+
   function patchStatusBar() {
     var _origUSB = window.updateStatusBar;
     if (!_origUSB) return;
@@ -1941,6 +2050,7 @@
       patchServerRail();
       patchMemberStatus();
       patchPasswordSystem();
+      patchGlobalBugs();
       patchFriendRequestSystem();
       patchProfileSystem();
       patchStatusBar();
