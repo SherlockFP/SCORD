@@ -146,5 +146,56 @@
     "messages": {},
     "icon_url": "https://x.com/i.png",
     "invite_code": "105BA8"
+  },
+  "343145d4-af35-44d7-bf88-01449249fa19": {
+    "room_id": "343145d4-af35-44d7-bf88-01449249fa19",
+    "name": "Test",
+    "owner_id": "me",
+    "channels": [
+      {
+        "id": "ch-genel",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "ch-duyurular",
+        "name": "duyurular",
+        "type": "text"
+      },
+      {
+        "id": "ch-sesli",
+        "name": "sesli-sohbet",
+        "type": "voice"
+      },
+      {
+        "id": "ch-muzik",
+        "name": "müzik",
+        "type": "voice"
+      },
+      {
+        "id": "2313ec34",
+        "name": "renamed",
+        "type": "text"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Üye",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "me": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {},
+    "icon_url": "https://x.com/i.png",
+    "invite_code": "87ACF2"
   }
 }

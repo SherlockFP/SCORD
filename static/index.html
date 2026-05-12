@@ -333,11 +333,28 @@
         <span class="dm-status-dot"></span>
         <span id="dm-target-name">@User</span>
       </div>
-      <button class="dm-close-btn" id="dm-close-btn">✕</button>
+      <div class="dm-header-actions">
+        <button class="dm-call-btn" id="dm-call-btn" title="Sesli arama baslat">📞</button>
+        <button class="dm-close-btn" id="dm-close-btn">✕</button>
+      </div>
     </div>
+    <div id="dm-call-status" class="dm-call-status hidden"></div>
     <div class="dm-body" id="dm-messages-area"></div>
     <div class="dm-input-area">
       <input type="text" id="dm-input" placeholder="Mesaj Gönder..." maxlength="1000" autocomplete="off" />
+    </div>
+  </div>
+
+  <!-- ── Incoming Call Overlay ────────────────────────────────────────────── -->
+  <div id="incoming-call-overlay" class="incoming-call-overlay hidden">
+    <div class="incoming-call-content">
+      <div class="incoming-call-avatar" id="incoming-call-avatar">?</div>
+      <div class="incoming-call-name" id="incoming-call-name">Kullanici</div>
+      <div class="incoming-call-label">Gelen sesli arama...</div>
+      <div class="incoming-call-buttons">
+        <button class="incoming-call-btn incoming-call-decline" id="incoming-call-decline">Reddet</button>
+        <button class="incoming-call-btn incoming-call-accept" id="incoming-call-accept">Kabul Et</button>
+      </div>
     </div>
   </div>
 

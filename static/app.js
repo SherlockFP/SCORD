@@ -992,8 +992,9 @@ async function sendMessage() {
     if (!text || !state.activeServerId || !state.activeChannelId) return;
 
     // Music Bot Intercepts
-    if (text.startsWith("!play ")) {
-        const query = text.slice(6).trim();
+    if ((text.startsWith("!play ") && text.length > 6) || (text.startsWith("!p ") && text.length > 3)) {
+        const prefix = text.startsWith("!p ") ? "!p " : "!play ";
+        const query = text.slice(prefix.length).trim();
         addSystemMessage(`🎵 Müzik Botu YouTube'da arıyor: "${query}"...`);
         fetch(`${API_BASE}/ytsearch?q=${encodeURIComponent(query)}`)
             .then(res => res.json())
@@ -1326,6 +1327,60 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         } else {
             toast(`Özel Mesaj (DM) - ${data.payload.author}: ${data.payload.text.slice(0, 60)}`, "info");
         }
+    } else if (data.type === "dm_call_offer") {
+        const call = data;
+        if (!call.callId) return;
+        if (state.directCall) {
+            // Busy - reject
+            state.mesh?.sendTo(fromPeerId, { type: "dm_call_answer", callId: call.callId, accepted: false, busy: true });
+            return;
+        }
+        state.directCall = {
+            callId: call.callId,
+            peerId: fromPeerId,
+            peerName: call.fromName || "Kullanici",
+            peerAvatarColor: call.fromAvatarColor || "#5865f2",
+            peerAvatarImage: call.fromAvatarImage || null,
+            status: "incoming",
+            startTime: Date.now()
+        };
+        // Show incoming call overlay
+        const overlay = document.getElementById("incoming-call-overlay");
+        const nameEl = document.getElementById("incoming-call-name");
+        const avatarEl = document.getElementById("incoming-call-avatar");
+        if (overlay) overlay.classList.remove("hidden");
+        if (nameEl) nameEl.textContent = state.directCall.peerName;
+        if (avatarEl) avatarEl.textContent = (state.directCall.peerName || "?")[0].toUpperCase();
+        toast(`📞 ${state.directCall.peerName} seste ariyor...`, "info");
+        playSound(880, 200);
+    } else if (data.type === "dm_call_answer") {
+        if (!state.directCall || state.directCall.callId !== data.callId) return;
+        if (data.busy) {
+            toast(`${state.directCall.peerName} su an mesgul.`, "info");
+            endDirectCall();
+            return;
+        }
+        if (!data.accepted) {
+            toast(`${state.directCall.peerName} aramayi reddetti.`, "info");
+            endDirectCall();
+            return;
+        }
+        // Call accepted
+        state.directCall.status = "active";
+        state.directCall.startTime = Date.now();
+        updateDMCallStatusBar("🔊 Gorusme devam ediyor...", "active");
+        document.getElementById("dm-call-btn").classList.remove("ringing");
+        document.getElementById("dm-call-btn").classList.add("active");
+        joinDirectCallVoice(state.directCall.callId);
+        toast(`${state.directCall.peerName} aramayi kabul etti!`, "success");
+    } else if (data.type === "dm_call_end") {
+        if (!state.directCall || state.directCall.callId !== data.callId) return;
+        toast("Arama sonlandirildi.", "info");
+        leaveDirectCallVoice();
+        state.directCall = null;
+        removeIncomingCallOverlay();
+        updateDMCallStatusBar("", "");
+        document.getElementById("dm-call-btn")?.classList.remove("active", "ringing");
     } else if (data.type === "identity_announce" || data.type === "profile_update") {
         const payload = data.type === "identity_announce" ? data : data.payload;
         const uname = payload.username || payload.name;
@@ -2902,6 +2957,10 @@ function openDM(peerId, name, avatarColor = null, avatarImage = null) {
     document.getElementById("dm-target-name").textContent = "@" + name;
     document.getElementById("dm-overlay").classList.remove("hidden");
 
+    // Reset call state when opening a different DM
+    updateDMCallStatusBar("", "");
+    document.getElementById("dm-call-btn")?.classList.remove("active", "ringing");
+
     addToRecentDMs(peerId, name, avatarColor, avatarImage);
     renderDMMessages(peerId);
 }
@@ -3132,7 +3191,131 @@ function sendDM() {
     input.value = "";
 }
 
-/* ── Event listeners ──────────────────────────────────────── */
+/* ── Direct Call System ──────────────────────────────────── */
+state.directCall = null; // { callId, peerId, peerName, peerAvatarColor, peerAvatarImage, status: "ringing"|"incoming"|"active", startTime }
+
+function startDirectCall(peerId) {
+    if (!peerId || peerId === state.peerId) return;
+    if (!state.mesh) { toast("Baglanti yok.", "error"); return; }
+    if (state.directCall) { toast("Zaten aktif bir arama var.", "warning"); return; }
+
+    const peer = getPeerDisplaySafe(peerId);
+    const callId = genId();
+
+    state.directCall = {
+        callId,
+        peerId,
+        peerName: peer.name,
+        peerAvatarColor: peer.avatarColor,
+        peerAvatarImage: peer.avatarImage,
+        status: "ringing",
+        startTime: Date.now()
+    };
+
+    sendServerEvent({ type: "dm_call_offer", target: peerId, callId, fromName: state.username, fromAvatarColor: state.avatarColor, fromAvatarImage: state.avatarImage });
+    updateDMCallStatusBar("🔔 Arama yapiliyor...", "ringing");
+    document.getElementById("dm-call-btn").classList.add("ringing");
+    toast(`${peer.name} araniyor...`, "info");
+}
+
+function acceptDirectCall(callId) {
+    if (!state.directCall || state.directCall.callId !== callId) return;
+    if (callId !== state.directCall.callId) return;
+
+    state.directCall.status = "active";
+    state.directCall.startTime = Date.now();
+
+    sendServerEvent({ type: "dm_call_answer", target: state.directCall.peerId, callId, accepted: true });
+    removeIncomingCallOverlay();
+    updateDMCallStatusBar("🔊 Gorusme devam ediyor...", "active");
+    document.getElementById("dm-call-btn").classList.remove("ringing");
+    document.getElementById("dm-call-btn").classList.add("active");
+
+    // Join a virtual voice channel for the call
+    joinDirectCallVoice(state.directCall.callId);
+}
+
+function declineDirectCall(callId) {
+    if (!state.directCall || state.directCall.callId !== callId) return;
+    sendServerEvent({ type: "dm_call_answer", target: state.directCall.peerId, callId, accepted: false });
+    state.directCall = null;
+    removeIncomingCallOverlay();
+    toast("Arama reddedildi.", "info");
+}
+
+function endDirectCall() {
+    const call = state.directCall;
+    if (!call) return;
+
+    if (call.status === "active" || call.status === "ringing") {
+        sendServerEvent({ type: "dm_call_end", target: call.peerId, callId: call.callId });
+    }
+
+    leaveDirectCallVoice();
+    state.directCall = null;
+    removeIncomingCallOverlay();
+    updateDMCallStatusBar("", "");
+    document.getElementById("dm-call-btn").classList.remove("active", "ringing");
+    toast("Arama sonlandirildi.", "info");
+}
+
+function joinDirectCallVoice(callId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    const virtualChId = `dm-call-${callId}`;
+    // Ensure the channel exists in the server for voice rendering
+    if (!server.channels.find(ch => ch.id === virtualChId)) {
+        server.channels.push({ id: virtualChId, name: `Arama-${callId.slice(0, 4)}`, type: "voice" });
+    }
+    state.activeChannelId = virtualChId;
+    joinVoiceChannel(virtualChId);
+}
+
+function leaveDirectCallVoice() {
+    if (state.voiceChannelId && state.voiceChannelId.startsWith("dm-call-")) {
+        leaveVoiceChannel();
+        const server = state.servers.find(s => s.id === state.activeServerId);
+        if (server) {
+            server.channels = server.channels.filter(ch => ch.id !== state.voiceChannelId);
+        }
+    }
+}
+
+function updateDMCallStatusBar(text, className) {
+    const bar = document.getElementById("dm-call-status");
+    if (!bar) return;
+    if (!text) {
+        bar.classList.add("hidden");
+        bar.className = "dm-call-status hidden";
+        bar.innerHTML = "";
+        return;
+    }
+    bar.className = `dm-call-status ${className}`;
+    bar.innerHTML = text + (className === "active" || className === "ringing" ? '<span class="dm-call-status-end" onclick="endDirectCall()">Sonlandir</span>' : "");
+    bar.classList.remove("hidden");
+}
+
+function removeIncomingCallOverlay() {
+    const el = document.getElementById("incoming-call-overlay");
+    if (el) el.classList.add("hidden");
+}
+
+function getPeerDisplaySafe(peerId, name, avatarColor, avatarImage) {
+    const fromLive = typeof getPeerDisplay === "function" ? getPeerDisplay(peerId) : {};
+    return {
+        peerId,
+        name: name || fromLive.name || "Kullanici",
+        avatarColor: avatarColor || fromLive.avatarColor || "#5865f2",
+        avatarImage: avatarImage ?? fromLive.avatarImage ?? null,
+    };
+}
+
+function sendServerEvent(data) {
+    if (state.mesh && state.mesh.ws && state.mesh.ws.readyState === WebSocket.OPEN) {
+        state.mesh.ws.send(JSON.stringify(data));
+    }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     initSetup();
     document.getElementById("server-settings-btn").onclick = openServerSettingsModal;
@@ -3226,9 +3409,35 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // DM overlay interactions
     document.getElementById("dm-close-btn").onclick = () => {
+        if (state.directCall) endDirectCall();
         document.getElementById("dm-overlay").classList.add("hidden");
         state.activeDM = null;
     };
+    const dmCallBtn = document.getElementById("dm-call-btn");
+    if (dmCallBtn) {
+        dmCallBtn.onclick = () => {
+            if (state.directCall) {
+                endDirectCall();
+            } else if (state.activeDM) {
+                startDirectCall(state.activeDM);
+            }
+        };
+    }
+    // Incoming call buttons
+    const acceptBtn = document.getElementById("incoming-call-accept");
+    const declineBtn = document.getElementById("incoming-call-decline");
+    if (acceptBtn) acceptBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (state.directCall) acceptDirectCall(state.directCall.callId);
+    };
+    if (declineBtn) declineBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (state.directCall) declineDirectCall(state.directCall.callId);
+    };
+    // Also close incoming call if user clicks outside
+    document.getElementById("incoming-call-overlay")?.addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) declineDirectCall(state.directCall?.callId);
+    });
     const dmInput = document.getElementById("dm-input");
     if (dmInput) {
         dmInput.addEventListener("keydown", (e) => {
@@ -3410,8 +3619,26 @@ window.onYouTubeIframeAPIReady = function () {
     ytReady = true;
 };
 
+let _musicQueue = null;
+
 function startMusicBot(videoId, startAt) {
-    if (!state.voiceChannelId) return;
+    if (!state.voiceChannelId) {
+        addSystemMessage("❌ Once bir ses kanalina katil.");
+        return;
+    }
+
+    if (!ytReady) {
+        addSystemMessage("⏳ YouTube API yukleniyor, biraz bekle...");
+        _musicQueue = { videoId, startAt };
+        setTimeout(() => {
+            if (_musicQueue && ytReady) {
+                const q = _musicQueue;
+                _musicQueue = null;
+                startMusicBot(q.videoId, q.startAt);
+            }
+        }, 3000);
+        return;
+    }
 
     state.musicBot.active = true;
     state.musicBot.videoId = videoId;
@@ -3421,12 +3648,11 @@ function startMusicBot(videoId, startAt) {
         if (!server.voiceMembers) server.voiceMembers = {};
         if (!server.voiceMembers[state.voiceChannelId]) server.voiceMembers[state.voiceChannelId] = [];
 
-        // Remove old bot if present
         server.voiceMembers[state.voiceChannelId] = server.voiceMembers[state.voiceChannelId].filter(m => m.peer_id !== "bot_music");
 
         server.voiceMembers[state.voiceChannelId].push({
             peer_id: "bot_music",
-            username: "🎵 Müzik Botu",
+            username: "Muzik Botu",
             avatar_color: "#ef4444",
             avatar_image: null
         });
@@ -3437,23 +3663,28 @@ function startMusicBot(videoId, startAt) {
 
     const offset = Math.max(0, (Date.now() - startAt) / 1000);
 
-    if (!state.musicBot.player && ytReady) {
+    if (!state.musicBot.player) {
         state.musicBot.player = new YT.Player("yt-player", {
             height: "1",
             width: "1",
             videoId: videoId,
-            playerVars: { autoplay: 1, controls: 0, showinfo: 0, start: Math.floor(offset) },
+            playerVars: { autoplay: 1, controls: 0, showinfo: 0, modestbranding: 1, start: Math.floor(offset) },
             events: {
                 onReady: (e) => {
                     e.target.setVolume(state.musicBot.volume);
                     e.target.playVideo();
+                },
+                onError: () => {
+                    addSystemMessage("❌ YouTube oynatma hatasi.");
+                    stopMusicBot();
                 }
             }
         });
-    } else if (state.musicBot.player) {
+    } else {
         state.musicBot.player.loadVideoById(videoId, Math.floor(offset));
         state.musicBot.player.setVolume(state.musicBot.volume);
     }
+    addSystemMessage(`▶️ ${server ? server.name + " / " : ""}Muzik caliniyor...`);
 }
 
 function stopMusicBot() {

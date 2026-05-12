@@ -1959,6 +1959,173 @@ body {
   color: var(--red);
 }
 
+.dm-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dm-call-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: all .15s;
+}
+
+.dm-call-btn:hover {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.dm-call-btn.active {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.15);
+}
+
+.dm-call-btn.ringing {
+  animation: pulse 1s ease infinite;
+  color: #f59e0b;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.dm-call-status {
+  padding: 8px 12px;
+  font-size: 12px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.dm-call-status.active {
+  background: rgba(34, 197, 94, 0.1);
+  color: #22c55e;
+}
+
+.dm-call-status.ringing {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+}
+
+.dm-call-status-end {
+  cursor: pointer;
+  color: var(--red);
+  font-weight: 600;
+  margin-left: 8px;
+}
+
+.dm-call-status-end:hover {
+  text-decoration: underline;
+}
+
+/* Incoming Call Overlay */
+.incoming-call-overlay {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 10000;
+  background: rgba(13, 13, 26, 0.95);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  min-width: 260px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  animation: slideIn .3s ease both;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.incoming-call-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.incoming-call-avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #5865f2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 700;
+  color: white;
+}
+
+.incoming-call-name {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.incoming-call-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.incoming-call-buttons {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.incoming-call-btn {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  transition: all .15s;
+}
+
+.incoming-call-accept {
+  background: #22c55e;
+  color: white;
+}
+
+.incoming-call-accept:hover {
+  background: #16a34a;
+}
+
+.incoming-call-decline {
+  background: var(--red);
+  color: white;
+}
+
+.incoming-call-decline:hover {
+  background: #dc2626;
+}
+
+/* Hidden YouTube player for music bot */
+#yt-player {
+  position: fixed !important;
+  top: -9999px !important;
+  left: -9999px !important;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  z-index: -1 !important;
+}
+
 /* ── Hardware GPU Acceleration (60 FPS) ────────────────────────── */
 .modal,
 .dm-overlay,
