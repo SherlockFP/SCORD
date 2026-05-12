@@ -306,7 +306,7 @@ function refreshConnectionBadge() {
     if (_refreshConnectionBadgeTimeout) {
         clearTimeout(_refreshConnectionBadgeTimeout);
     }
-    
+
     _refreshConnectionBadgeTimeout = setTimeout(() => {
         _refreshConnectionBadgeImpl();
     }, 16); // ~60fps
@@ -431,18 +431,18 @@ function updateVoiceSessionMeta() {
         txt = `Host: ${host.username}`;
     }
     meta.textContent = txt;
-    
+
     // Show voice call indicator when in different server
     showVoiceCallIndicator();
 }
 
 function showVoiceCallIndicator() {
     if (!state.voiceChannelId) return;
-    
+
     // Remove existing indicator
     const existing = document.getElementById("voice-call-indicator");
     if (existing) existing.remove();
-    
+
     // Create indicator if not in voice view of current server
     if (document.getElementById("voice-view").classList.contains("hidden")) {
         const indicator = document.createElement("div");
@@ -454,7 +454,7 @@ function showVoiceCallIndicator() {
                 <button id="voice-return-btn" class="voice-return-btn">Aramaya Dön</button>
             </div>
         `;
-        
+
         // Add click handler to return to voice
         indicator.querySelector("#voice-return-btn").onclick = () => {
             const server = state.servers.find(s => s.voiceMembers?.[state.voiceChannelId]);
@@ -462,7 +462,7 @@ function showVoiceCallIndicator() {
                 showVoiceView(server.id, state.voiceChannelId);
             }
         };
-        
+
         // Add to page
         document.body.appendChild(indicator);
     }
@@ -642,12 +642,12 @@ function setStatus(newStatus, customStatus = "", statusEmoji = "") {
     state.customStatus = customStatus;
     state.statusEmoji = statusEmoji;
     state.lastActive = Date.now();
-    
+
     // Save to localStorage
     localStorage.setItem("scord_status", newStatus);
     localStorage.setItem("scord_custom_status", customStatus);
     localStorage.setItem("scord_status_emoji", statusEmoji);
-    
+
     // Broadcast status change to all servers
     if (state.mesh && state.mesh.broadcast) {
         state.mesh.broadcast({
@@ -658,11 +658,11 @@ function setStatus(newStatus, customStatus = "", statusEmoji = "") {
             timestamp: Date.now()
         });
     }
-    
+
     // Update UI
     updateStatusBar();
     updateMemberList();
-    
+
     // Start idle detection if online
     if (newStatus === "online") {
         startIdleDetection();
@@ -676,7 +676,7 @@ function startIdleDetection() {
     state._idleTimer = setInterval(() => {
         const idleTime = Date.now() - state.lastActive;
         const idleThreshold = 5 * 60 * 1000; // 5 minutes
-        
+
         if (idleTime >= idleThreshold && state.status === "online") {
             setStatus("idle", state.customStatus, state.statusEmoji);
         }
@@ -702,7 +702,7 @@ function loadStatusFromStorage() {
     const savedStatus = localStorage.getItem("scord_status") || "online";
     const savedCustomStatus = localStorage.getItem("scord_custom_status") || "";
     const savedStatusEmoji = localStorage.getItem("scord_status_emoji") || "";
-    
+
     state.status = savedStatus;
     state.customStatus = savedCustomStatus;
     state.statusEmoji = savedStatusEmoji;
@@ -711,25 +711,25 @@ function loadStatusFromStorage() {
 function getStatusDisplay(status, customStatus = "", statusEmoji = "") {
     const statusInfo = STATUS_TYPES[status] || STATUS_TYPES.online;
     let display = statusInfo.icon;
-    
+
     if (statusEmoji) {
         display = statusEmoji;
     }
-    
+
     if (customStatus) {
         display += " " + customStatus;
     }
-    
+
     return display;
 }
 
 function updateStatusBar() {
     const statusBar = document.getElementById("status-bar");
     if (!statusBar) return;
-    
+
     const statusInfo = STATUS_TYPES[state.status] || STATUS_TYPES.online;
     let activityHtml = "";
-    
+
     // Add activities
     const activities = [];
     if (state.gameActivity) {
@@ -738,7 +738,7 @@ function updateStatusBar() {
     if (state.spotifyActivity) {
         activities.push(`${state.spotifyActivity.icon} <span style="color: ${state.spotifyActivity.color}">${state.spotifyActivity.song}</span>`);
     }
-    
+
     if (activities.length > 0) {
         activityHtml = `
             <div class="status-activities">
@@ -746,7 +746,7 @@ function updateStatusBar() {
             </div>
         `;
     }
-    
+
     statusBar.innerHTML = `
         <div class="status-indicator" style="--status-color: ${statusInfo.color}" title="Durumu değiştirmek için tıkla">
             <span class="status-dot"></span>
@@ -775,13 +775,13 @@ function updateMemberList() {
 function updateMemberStatusDisplay(memberEl, member) {
     const statusDot = memberEl.querySelector(".member-status-dot");
     const statusText = memberEl.querySelector(".member-status-text");
-    
+
     if (statusDot && member.status) {
         const statusInfo = STATUS_TYPES[member.status] || STATUS_TYPES.online;
         statusDot.style.backgroundColor = statusInfo.color;
         statusDot.title = statusInfo.text;
     }
-    
+
     if (statusText && (member.customStatus || member.statusEmoji)) {
         statusText.textContent = getStatusDisplay(member.status, member.customStatus, member.statusEmoji);
         statusText.classList.remove("hidden");
@@ -837,12 +837,12 @@ function showStatusPicker() {
             </div>
         </div>
     `;
-    
+
     showModal("Durum Ayarları", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">İptal</button>
         <button class="btn-primary" onclick="saveStatusSettings()">Kaydet</button>
     `);
-    
+
     // Add event listeners
     setTimeout(() => {
         const statusOptions = document.querySelectorAll('.status-option');
@@ -852,7 +852,7 @@ function showStatusPicker() {
                 option.classList.add('selected');
             });
         });
-        
+
         const emojiBtn = document.getElementById('status-emoji-btn');
         if (emojiBtn) {
             emojiBtn.addEventListener('click', showStatusEmojiPicker);
@@ -873,12 +873,12 @@ function getStatusDescription(status) {
 function saveStatusSettings() {
     const selectedOption = document.querySelector('.status-option.selected');
     const customStatusInput = document.getElementById('custom-status-input');
-    
+
     if (selectedOption) {
         const newStatus = selectedOption.dataset.status;
         const customStatus = customStatusInput ? customStatusInput.value.trim() : "";
         const statusEmoji = state.statusEmoji; // Keep current emoji
-        
+
         setStatus(newStatus, customStatus, statusEmoji);
         hideModal();
         toast("Durum güncellendi!", "success");
@@ -888,10 +888,10 @@ function saveStatusSettings() {
 function showStatusEmojiPicker() {
     // Simple emoji picker
     const commonEmojis = ["😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "😉", "😊", "😇", "🥰", "😍", "🤩", "😘", "😗", "😚", "🎮", "💻", "📱", "🎧", "📚", "🎨", "🎵", "🎬", "🏃", "💪", "🧠", "💡", "☕", "🍕", "🎯", "🚀", "🌟", "✨", "🔥", "💯"];
-    
+
     const emojiGrid = document.createElement('div');
     emojiGrid.style.cssText = 'display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; padding: 12px; max-height: 200px; overflow-y: auto;';
-    
+
     commonEmojis.forEach(emoji => {
         const emojiBtn = document.createElement('button');
         emojiBtn.textContent = emoji;
@@ -906,7 +906,7 @@ function showStatusEmojiPicker() {
         };
         emojiGrid.appendChild(emojiBtn);
     });
-    
+
     // Position emoji picker
     const emojiBtn = document.getElementById('status-emoji-btn');
     if (emojiBtn) {
@@ -916,13 +916,13 @@ function showStatusEmojiPicker() {
         emojiGrid.style.borderRadius = '8px';
         emojiGrid.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
         emojiGrid.style.zIndex = '1000';
-        
+
         const rect = emojiBtn.getBoundingClientRect();
         emojiGrid.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
         emojiGrid.style.left = rect.left + 'px';
-        
+
         document.body.appendChild(emojiGrid);
-        
+
         // Close on outside click
         setTimeout(() => {
             const closeEmojiPicker = (e) => {
@@ -939,7 +939,7 @@ function showStatusEmojiPicker() {
 // Handle status updates from other users
 function handleStatusUpdate(data) {
     const { from, status, customStatus, statusEmoji, timestamp } = data;
-    
+
     // Update member info across all servers
     state.servers.forEach(server => {
         const member = server.members?.find(m => m.peer_id === from);
@@ -950,7 +950,7 @@ function handleStatusUpdate(data) {
             member.lastStatusUpdate = timestamp;
         }
     });
-    
+
     // Update UI if member is visible
     updateMemberList();
 }
@@ -996,17 +996,17 @@ function clearActivity(type = "all") {
 function addReaction(serverId, channelId, messageId, emoji) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     if (!server.reactions) server.reactions = {};
     const key = `${channelId}-${messageId}`;
     if (!server.reactions[key]) server.reactions[key] = {};
-    
+
     const reaction = server.reactions[key];
     if (!reaction[emoji]) reaction[emoji] = new Set();
-    
+
     // Add user's reaction
     reaction[emoji].add(state.peerId);
-    
+
     // Broadcast reaction
     if (state.mesh && state.mesh.broadcast) {
         state.mesh.broadcast({
@@ -1019,7 +1019,7 @@ function addReaction(serverId, channelId, messageId, emoji) {
             timestamp: Date.now()
         });
     }
-    
+
     // Update UI
     renderMessageReactions(serverId, channelId, messageId);
     saveReactionsToStorage(serverId);
@@ -1028,26 +1028,26 @@ function addReaction(serverId, channelId, messageId, emoji) {
 function removeReaction(serverId, channelId, messageId, emoji) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     if (!server.reactions) server.reactions = {};
     const key = `${channelId}-${messageId}`;
     if (!server.reactions[key]) return;
-    
+
     const reaction = server.reactions[key];
     if (!reaction[emoji]) return;
-    
+
     // Remove user's reaction
     reaction[emoji].delete(state.peerId);
-    
+
     // Clean up empty reactions
     if (reaction[emoji].size === 0) {
         delete reaction[emoji];
     }
-    
+
     if (Object.keys(reaction).length === 0) {
         delete server.reactions[key];
     }
-    
+
     // Broadcast reaction removal
     if (state.mesh && state.mesh.broadcast) {
         state.mesh.broadcast({
@@ -1060,7 +1060,7 @@ function removeReaction(serverId, channelId, messageId, emoji) {
             timestamp: Date.now()
         });
     }
-    
+
     // Update UI
     renderMessageReactions(serverId, channelId, messageId);
     saveReactionsToStorage(serverId);
@@ -1070,15 +1070,15 @@ function handleReactionAdd(data) {
     const { serverId, channelId, messageId, emoji, userId } = data;
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     if (!server.reactions) server.reactions = {};
     const key = `${channelId}-${messageId}`;
     if (!server.reactions[key]) server.reactions[key] = {};
-    
+
     const reaction = server.reactions[key];
     if (!reaction[emoji]) reaction[emoji] = new Set();
     reaction[emoji].add(userId);
-    
+
     renderMessageReactions(serverId, channelId, messageId);
 }
 
@@ -1086,25 +1086,25 @@ function handleReactionRemove(data) {
     const { serverId, channelId, messageId, emoji, userId } = data;
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     if (!server.reactions) server.reactions = {};
     const key = `${channelId}-${messageId}`;
     if (!server.reactions[key]) return;
-    
+
     const reaction = server.reactions[key];
     if (!reaction[emoji]) return;
-    
+
     reaction[emoji].delete(userId);
-    
+
     // Clean up empty reactions
     if (reaction[emoji].size === 0) {
         delete reaction[emoji];
     }
-    
+
     if (Object.keys(reaction).length === 0) {
         delete server.reactions[key];
     }
-    
+
     renderMessageReactions(serverId, channelId, messageId);
 }
 
@@ -1112,16 +1112,16 @@ let _renderMessageReactionsTimeouts = {};
 function renderMessageReactions(serverId, channelId, messageId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     const key = `${channelId}-${messageId}`;
     const reactions = server.reactions?.[key];
     if (!reactions) return;
-    
+
     // Debounce per message to prevent excessive DOM updates
     if (_renderMessageReactionsTimeouts[key]) {
         clearTimeout(_renderMessageReactionsTimeouts[key]);
     }
-    
+
     _renderMessageReactionsTimeouts[key] = setTimeout(() => {
         _renderMessageReactionsImpl(serverId, channelId, messageId);
         delete _renderMessageReactionsTimeouts[key];
@@ -1131,34 +1131,34 @@ function renderMessageReactions(serverId, channelId, messageId) {
 function _renderMessageReactionsImpl(serverId, channelId, messageId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     const key = `${channelId}-${messageId}`;
     const reactions = server.reactions?.[key];
     if (!reactions) return;
-    
+
     const msgEl = document.querySelector(`[data-msg-id="${messageId}"]`);
     if (!msgEl) return;
-    
+
     // Remove existing reaction bar
     const existingBar = msgEl.querySelector('.reaction-bar');
     if (existingBar) existingBar.remove();
-    
+
     // Create reaction bar
     const reactionBar = document.createElement('div');
     reactionBar.className = 'reaction-bar';
-    
+
     Object.entries(reactions).forEach(([emoji, users]) => {
         const pill = document.createElement('div');
         pill.className = 'reaction-pill';
-        
+
         const userReacted = users.has(state.peerId);
         if (userReacted) pill.classList.add('reacted');
-        
+
         pill.innerHTML = `
             <span class="reaction-emoji">${emoji}</span>
             <span class="reaction-count">${users.size}</span>
         `;
-        
+
         pill.onclick = () => {
             if (userReacted) {
                 removeReaction(serverId, channelId, messageId, emoji);
@@ -1166,22 +1166,22 @@ function _renderMessageReactionsImpl(serverId, channelId, messageId) {
                 addReaction(serverId, channelId, messageId, emoji);
             }
         };
-        
+
         pill.oncontextmenu = (e) => {
             e.preventDefault();
             showReactionContextMenu(e, serverId, channelId, messageId, emoji, users);
         };
-        
+
         reactionBar.appendChild(pill);
     });
-    
+
     // Add reaction button
     const addBtn = document.createElement('div');
     addBtn.className = 'reaction-add-btn';
     addBtn.innerHTML = '+';
     addBtn.title = 'Tepki Ekle';
     addBtn.onclick = () => showReactionPicker(serverId, channelId, messageId);
-    
+
     reactionBar.appendChild(addBtn);
     msgEl.appendChild(reactionBar);
 }
@@ -1189,7 +1189,7 @@ function _renderMessageReactionsImpl(serverId, channelId, messageId) {
 function showReactionPicker(serverId, channelId, messageId) {
     // Common reactions
     const commonEmojis = ["👍", "👎", "😄", "❤️", "😢", "😮", "😡", "🎉", "🔥", "👏", "🤔", "👀"];
-    
+
     const picker = document.createElement('div');
     picker.className = 'reaction-picker';
     picker.innerHTML = `
@@ -1203,19 +1203,19 @@ function showReactionPicker(serverId, channelId, messageId) {
             <input type="text" placeholder="Emoji ara..." maxlength="2">
         </div>
     `;
-    
+
     // Position picker
     const msgEl = document.querySelector(`[data-msg-id="${messageId}"]`);
     if (!msgEl) return;
-    
+
     const rect = msgEl.getBoundingClientRect();
     picker.style.position = 'absolute';
     picker.style.top = (rect.bottom + 5) + 'px';
     picker.style.left = rect.left + 'px';
     picker.style.zIndex = '1000';
-    
+
     document.body.appendChild(picker);
-    
+
     // Add event listeners
     const emojiBtns = picker.querySelectorAll('.reaction-emoji-btn');
     emojiBtns.forEach(btn => {
@@ -1225,7 +1225,7 @@ function showReactionPicker(serverId, channelId, messageId) {
             picker.remove();
         });
     });
-    
+
     const searchInput = picker.querySelector('input');
     searchInput.addEventListener('input', (e) => {
         const query = e.target.value;
@@ -1239,7 +1239,7 @@ function showReactionPicker(serverId, channelId, messageId) {
             });
         }
     });
-    
+
     // Close on outside click
     setTimeout(() => {
         const closePicker = (e) => {
@@ -1256,24 +1256,24 @@ function showReactionContextMenu(ev, serverId, channelId, messageId, emoji, user
     closeContextMenu();
     ev.preventDefault();
     ev.stopPropagation();
-    
+
     const menu = document.createElement('div');
     menu.className = 'ctx-menu ctx-menu--reaction';
     menu.style.left = `${Math.min(ev.clientX, window.innerWidth - 200)}px`;
     menu.style.top = `${Math.min(ev.clientY, window.innerHeight - 150)}px`;
-    
+
     const userNames = Array.from(users).map(userId => {
         const member = getCurrentMemberInfo(userId);
         return member?.username || 'Bilinmeyen';
     }).join(', ');
-    
+
     menu.innerHTML = `
         <div class="ctx-section">${emoji} - ${users.size} tepki</div>
         <div class="ctx-item" style="font-size: 12px; color: var(--text-muted); max-width: 200px; word-break: break-all;">
             ${userNames}
         </div>
     `;
-    
+
     document.body.appendChild(menu);
     setTimeout(() => {
         document.addEventListener('click', closeContextMenu, { once: true });
@@ -1283,7 +1283,7 @@ function showReactionContextMenu(ev, serverId, channelId, messageId, emoji, user
 function saveReactionsToStorage(serverId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server || !server.reactions) return;
-    
+
     // Convert Sets to arrays for storage
     const serializable = {};
     Object.entries(server.reactions).forEach(([key, reactions]) => {
@@ -1292,7 +1292,7 @@ function saveReactionsToStorage(serverId) {
             serializable[key][emoji] = Array.from(users);
         });
     });
-    
+
     localStorage.setItem(`scord_reactions_${serverId}`, JSON.stringify(serializable));
 }
 
@@ -1300,13 +1300,13 @@ function loadReactionsFromStorage(serverId) {
     try {
         const saved = localStorage.getItem(`scord_reactions_${serverId}`);
         if (!saved) return;
-        
+
         const server = state.servers.find(s => s.id === serverId);
         if (!server) return;
-        
+
         const data = JSON.parse(saved);
         server.reactions = {};
-        
+
         Object.entries(data).forEach(([key, reactions]) => {
             server.reactions[key] = {};
             Object.entries(reactions).forEach(([emoji, users]) => {
@@ -1322,10 +1322,10 @@ function loadReactionsFromStorage(serverId) {
 function createThread(serverId, channelId, parentMessageId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     if (!server.threads) server.threads = {};
     const threadId = genId();
-    
+
     const thread = {
         id: threadId,
         parentMessageId,
@@ -1335,9 +1335,9 @@ function createThread(serverId, channelId, parentMessageId) {
         createdBy: state.peerId,
         archived: false
     };
-    
+
     server.threads[threadId] = thread;
-    
+
     // Broadcast thread creation
     if (state.mesh && state.mesh.broadcast) {
         state.mesh.broadcast({
@@ -1349,7 +1349,7 @@ function createThread(serverId, channelId, parentMessageId) {
             timestamp: Date.now()
         });
     }
-    
+
     // Open thread view
     openThreadView(serverId, threadId);
     saveThreadsToStorage(serverId);
@@ -1359,9 +1359,9 @@ function handleThreadCreate(data) {
     const { serverId, channelId, threadId, parentMessageId } = data;
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     if (!server.threads) server.threads = {};
-    
+
     server.threads[threadId] = {
         id: threadId,
         parentMessageId,
@@ -1371,7 +1371,7 @@ function handleThreadCreate(data) {
         createdBy: data.createdBy || data.from,
         archived: false
     };
-    
+
     // Update UI to show thread indicator on parent message
     updateThreadIndicator(serverId, channelId, parentMessageId, threadId);
 }
@@ -1379,7 +1379,7 @@ function handleThreadCreate(data) {
 function addThreadMessage(serverId, threadId, text) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server || !server.threads[threadId]) return;
-    
+
     const thread = server.threads[threadId];
     const msg = {
         id: genId(),
@@ -1392,9 +1392,9 @@ function addThreadMessage(serverId, threadId, text) {
         threadId,
         channelId: thread.channelId
     };
-    
+
     thread.messages.push(msg);
-    
+
     // Broadcast thread message
     if (state.mesh && state.mesh.broadcast) {
         state.mesh.broadcast({
@@ -1405,7 +1405,7 @@ function addThreadMessage(serverId, threadId, text) {
             timestamp: Date.now()
         });
     }
-    
+
     // Update UI
     renderThreadMessages(serverId, threadId);
     saveThreadsToStorage(serverId);
@@ -1415,14 +1415,14 @@ function handleThreadMessage(data) {
     const { serverId, threadId, message } = data;
     const server = state.servers.find(s => s.id === serverId);
     if (!server || !server.threads[threadId]) return;
-    
+
     server.threads[threadId].messages.push(message);
-    
+
     // Update UI if thread is open
     if (state.activeThreadId === threadId) {
         renderThreadMessages(serverId, threadId);
     }
-    
+
     // Update thread indicator on parent message
     updateThreadIndicator(serverId, server.threads[threadId].channelId, server.threads[threadId].parentMessageId, threadId);
 }
@@ -1430,22 +1430,22 @@ function handleThreadMessage(data) {
 function openThreadView(serverId, threadId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server || !server.threads[threadId]) return;
-    
+
     state.activeThreadId = threadId;
     state.activeServerId = serverId;
-    
+
     // Hide main views
     document.getElementById("chat-view").classList.add("hidden");
     document.getElementById("voice-view").classList.add("hidden");
     document.getElementById("home-view").classList.add("hidden");
     hideDMMainView(false);
-    
+
     // Show thread view
     const threadView = document.getElementById("thread-view");
     if (!threadView) {
         createThreadViewElement();
     }
-    
+
     document.getElementById("thread-view").classList.remove("hidden");
     renderThreadMessages(serverId, threadId);
     updateThreadHeader(serverId, threadId);
@@ -1474,7 +1474,7 @@ function createThreadViewElement() {
         </div>
     `;
     main.appendChild(threadView);
-    
+
     // Add event listeners
     document.getElementById("thread-send-btn").addEventListener("click", sendThreadMessage);
     document.getElementById("thread-input").addEventListener("keydown", (e) => {
@@ -1488,13 +1488,13 @@ function createThreadViewElement() {
 function renderThreadMessages(serverId, threadId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server || !server.threads[threadId]) return;
-    
+
     const thread = server.threads[threadId];
     const area = document.getElementById("thread-messages-area");
     if (!area) return;
-    
+
     area.innerHTML = "";
-    
+
     // Show parent message
     const parentMsg = findMessageById(serverId, thread.channelId, thread.parentMessageId);
     if (parentMsg) {
@@ -1519,13 +1519,13 @@ function renderThreadMessages(serverId, threadId) {
         `;
         area.appendChild(parentEl);
     }
-    
+
     // Render thread messages
     thread.messages.forEach(msg => {
         const msgEl = createThreadMessageDOM(msg, serverId);
         area.appendChild(msgEl);
     });
-    
+
     // Scroll to bottom
     area.scrollTop = area.scrollHeight;
 }
@@ -1534,7 +1534,7 @@ function createThreadMessageDOM(msg, serverId) {
     const isSelf = msg.authorId === state.peerId;
     const el = document.createElement("div");
     el.className = "thread-message msg-row" + (isSelf ? " msg-row--self" : " msg-row--other");
-    
+
     el.innerHTML = `
         <div class="msg-avatar" style="background: ${msg.avatarColor || '#7c3aed'}; color: white;">
             ${(msg.avatarImage ? `<img src="${msg.avatarImage}" alt="${msg.author}" />` : (msg.author || "?")[0].toUpperCase())}
@@ -1549,18 +1549,18 @@ function createThreadMessageDOM(msg, serverId) {
             </div>
         </div>
     `;
-    
+
     return el;
 }
 
 function updateThreadHeader(serverId, threadId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server || !server.threads[threadId]) return;
-    
+
     const thread = server.threads[threadId];
     const titleEl = document.querySelector(".thread-title-text");
     const subtitleEl = document.querySelector(".thread-subtitle");
-    
+
     if (titleEl) titleEl.textContent = `Thread (${thread.messages.length} mesaj)`;
     if (subtitleEl) subtitleEl.textContent = `Başlatan: ${getUsernameById(thread.createdBy)}`;
 }
@@ -1568,17 +1568,17 @@ function updateThreadHeader(serverId, threadId) {
 function updateThreadIndicator(serverId, channelId, parentMessageId, threadId) {
     const msgEl = document.querySelector(`[data-msg-id="${parentMessageId}"]`);
     if (!msgEl) return;
-    
+
     // Remove existing thread indicator
     const existingIndicator = msgEl.querySelector(".thread-indicator");
     if (existingIndicator) existingIndicator.remove();
-    
+
     // Add thread indicator
     const indicator = document.createElement("div");
     indicator.className = "thread-indicator";
     indicator.innerHTML = `💬 ${getThreadMessageCount(serverId, threadId)} yanıt`;
     indicator.onclick = () => openThreadView(serverId, threadId);
-    
+
     msgEl.appendChild(indicator);
 }
 
@@ -1589,11 +1589,11 @@ function getThreadMessageCount(serverId, threadId) {
 
 function sendThreadMessage() {
     if (!state.activeThreadId) return;
-    
+
     const input = document.getElementById("thread-input");
     const text = input.value.trim();
     if (!text) return;
-    
+
     addThreadMessage(state.activeServerId, state.activeThreadId, text);
     input.value = "";
     input.style.height = "auto";
@@ -1607,18 +1607,18 @@ function closeThreadView() {
 
 function toggleThreadArchive() {
     if (!state.activeThreadId) return;
-    
+
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server || !server.threads[state.activeThreadId]) return;
-    
+
     const thread = server.threads[state.activeThreadId];
     thread.archived = !thread.archived;
-    
+
     const btn = document.querySelector(".thread-archive-btn");
     if (btn) {
         btn.textContent = thread.archived ? "📂 Arşivden Çıkar" : "📁 Arşivle";
     }
-    
+
     saveThreadsToStorage(state.activeServerId);
     toast(thread.archived ? "Thread arşivlendi" : "Thread arşivden çıkarıldı", "info");
 }
@@ -1626,7 +1626,7 @@ function toggleThreadArchive() {
 function saveThreadsToStorage(serverId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server || !server.threads) return;
-    
+
     localStorage.setItem(`scord_threads_${serverId}`, JSON.stringify(server.threads));
 }
 
@@ -1634,10 +1634,10 @@ function loadThreadsFromStorage(serverId) {
     try {
         const saved = localStorage.getItem(`scord_threads_${serverId}`);
         if (!saved) return;
-        
+
         const server = state.servers.find(s => s.id === serverId);
         if (!server) return;
-        
+
         server.threads = JSON.parse(saved);
     } catch (e) {
         console.warn("Failed to load threads from storage:", e);
@@ -1647,7 +1647,7 @@ function loadThreadsFromStorage(serverId) {
 function findMessageById(serverId, channelId, messageId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return null;
-    
+
     const cid = server ? canonicalChannelIdForChat(server, channelId) : channelId;
     const messages = server?.messages?.[cid] || [];
     return messages.find(m => m.id === messageId);
@@ -1666,7 +1666,7 @@ function loadActivitiesFromStorage() {
     try {
         const savedGame = localStorage.getItem("scord_game_activity");
         if (savedGame) state.gameActivity = JSON.parse(savedGame);
-        
+
         const savedSpotify = localStorage.getItem("scord_spotify_activity");
         if (savedSpotify) state.spotifyActivity = JSON.parse(savedSpotify);
     } catch (e) {
@@ -1687,7 +1687,7 @@ function broadcastActivityUpdate() {
 
 function handleActivityUpdate(data) {
     const { from, gameActivity, spotifyActivity, timestamp } = data;
-    
+
     // Update member info across all servers
     state.servers.forEach(server => {
         const member = server.members?.find(m => m.peer_id === from);
@@ -1697,14 +1697,14 @@ function handleActivityUpdate(data) {
             member.lastActivityUpdate = timestamp;
         }
     });
-    
+
     // Update UI if member is visible
     updateMemberList();
 }
 
 function getActivityDisplay(member) {
     const activities = [];
-    
+
     if (member.gameActivity) {
         activities.push({
             type: "playing",
@@ -1713,7 +1713,7 @@ function getActivityDisplay(member) {
             color: member.gameActivity.color
         });
     }
-    
+
     if (member.spotifyActivity) {
         activities.push({
             type: "listening",
@@ -1723,7 +1723,7 @@ function getActivityDisplay(member) {
             color: member.spotifyActivity.color
         });
     }
-    
+
     return activities;
 }
 
@@ -1767,12 +1767,12 @@ function showActivityPicker() {
             </div>
         </div>
     `;
-    
+
     showModal("Aktivite Ayarları", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">İptal</button>
         <button class="btn-primary" onclick="hideModal()">Tamam</button>
     `);
-    
+
     // Add event listeners
     setTimeout(() => {
         const setGameBtn = document.getElementById('set-game-btn');
@@ -1780,7 +1780,7 @@ function showActivityPicker() {
         const setSpotifyBtn = document.getElementById('set-spotify-btn');
         const clearSpotifyBtn = document.getElementById('clear-spotify-btn');
         const quickActivityBtns = document.querySelectorAll('.quick-activity-btn');
-        
+
         if (setGameBtn) {
             setGameBtn.addEventListener('click', () => {
                 const gameInput = document.getElementById('game-name-input');
@@ -1790,20 +1790,20 @@ function showActivityPicker() {
                 }
             });
         }
-        
+
         if (clearGameBtn) {
             clearGameBtn.addEventListener('click', () => {
                 clearActivity('game');
                 toast("Oyun aktivitesi temizlendi!", "info");
             });
         }
-        
+
         if (setSpotifyBtn) {
             setSpotifyBtn.addEventListener('click', () => {
                 const songInput = document.getElementById('song-name-input');
                 const artistInput = document.getElementById('artist-name-input');
                 const albumInput = document.getElementById('album-name-input');
-                
+
                 if (songInput && artistInput && songInput.value.trim() && artistInput.value.trim()) {
                     setSpotifyActivity(
                         songInput.value.trim(),
@@ -1814,14 +1814,14 @@ function showActivityPicker() {
                 }
             });
         }
-        
+
         if (clearSpotifyBtn) {
             clearSpotifyBtn.addEventListener('click', () => {
                 clearActivity('spotify');
                 toast("Spotify aktivitesi temizlendi!", "info");
             });
         }
-        
+
         quickActivityBtns.forEach(btn => {
             btn.addEventListener('click', () => {
                 const activity = btn.dataset.activity;
@@ -2136,11 +2136,11 @@ function startApp() {
     refreshDiscovery();
     initMobileNav();
     setInterval(refreshDiscovery, SCORD_T().DISCOVERY_REFRESH_INTERVAL_MS ?? 15000);
-    
+
     // Initialize status system
     updateStatusBar();
     startIdleDetection();
-    
+
     // Add status bar click event
     const statusBar = document.getElementById("status-bar");
     if (statusBar) {
@@ -2256,17 +2256,17 @@ let searchState = {
 
 function showChatView(serverId, channelId) {
     console.log("[ChatView] Showing chat for server:", serverId, "channel:", channelId);
-    
+
     closeMobileNav();
     hideDMMainView(false);
-    
+
     const server = state.servers.find(s => s.id === serverId);
     if (!server) {
         console.error("[ChatView] Server not found:", serverId);
         toast("Sunucu bulunamadı.", "error");
         return;
     }
-    
+
     const channel = server.channels.find(c => c.id === channelId);
     if (!channel) {
         console.error("[ChatView] Channel not found:", channelId);
@@ -2282,19 +2282,19 @@ function showChatView(serverId, channelId) {
     }
 
     const wasInVoice = !!state.voiceChannelId;
-    
+
     state.activeServerId = serverId;
     state.activeChannelId = channelId;
     updateChannelSidebar(serverId);
     renderMessages(serverId, channelId);
-    renderMembersPanel(serverId);
+    updateMembersPanel(serverId);
     applyChannelBackground(serverId, channelId);
 
     // Ensure chat view is visible
     const homeView = document.getElementById("home-view");
     const chatView = document.getElementById("chat-view");
     const voiceView = document.getElementById("voice-view");
-    
+
     if (homeView) homeView.classList.add("hidden");
     if (chatView) chatView.classList.remove("hidden");
     if (voiceView) voiceView.classList.add("hidden");
@@ -2307,12 +2307,12 @@ function showChatView(serverId, channelId) {
 
     // Auto-focus chat input
     setTimeout(() => document.getElementById("chat-input")?.focus(), 100);
-    
+
     // If we were in voice and this is a voice channel, show voice view instead
     if (wasInVoice && channel.type === "voice") {
         showVoiceView(serverId, channelId);
     }
-    
+
     console.log("[ChatView] Chat view displayed successfully");
 }
 
@@ -2329,7 +2329,7 @@ function showVoiceView(serverId, channelId) {
         // Only switch channels if different
         leaveVoiceChannel();
     }
-    
+
     state.activeServerId = serverId;
     // Don't set activeChannelId for voice channels to preserve DM functionality
     // state.activeChannelId = channelId; // Commented out to allow DM while in voice
@@ -2358,7 +2358,7 @@ function renderServerRail() {
     if (_renderServerRailTimeout) {
         clearTimeout(_renderServerRailTimeout);
     }
-    
+
     _renderServerRailTimeout = setTimeout(() => {
         _renderServerRailImpl();
     }, 16); // ~60fps
@@ -2576,12 +2576,12 @@ function stopCameraShare() {
 let _updateChannelSidebarTimeout = null;
 function updateChannelSidebar(serverId) {
     console.log("[Sidebar] Updating for server:", serverId);
-    
+
     // Debounce to prevent excessive re-renders
     if (_updateChannelSidebarTimeout) {
         clearTimeout(_updateChannelSidebarTimeout);
     }
-    
+
     _updateChannelSidebarTimeout = setTimeout(() => {
         _updateChannelSidebarImpl(serverId);
     }, 16); // ~60fps
@@ -2600,7 +2600,7 @@ function _updateChannelSidebarImpl(serverId) {
         renderHomeSidebar();
         return;
     }
-    
+
     const server = state.servers.find(s => s.id === serverId);
     if (!server) {
         console.error("[Sidebar] Server not found in state:", serverId);
@@ -2820,12 +2820,12 @@ function createChannelItem(channel, serverId) {
 let _updateMembersPanelTimeout = null;
 function updateMembersPanel(serverId) {
     console.log("[Members] Updating panel for server:", serverId);
-    
+
     // Debounce to prevent excessive re-renders
     if (_updateMembersPanelTimeout) {
         clearTimeout(_updateMembersPanelTimeout);
     }
-    
+
     _updateMembersPanelTimeout = setTimeout(() => {
         _updateMembersPanelImpl(serverId);
     }, 16); // ~60fps
@@ -2841,9 +2841,9 @@ function _updateMembersPanelImpl(serverId) {
         document.getElementById("member-count"),
         document.getElementById("voice-member-count")
     ].filter(c => c);
-    
+
     lists.forEach(l => l.innerHTML = "");
-    
+
     if (!server) {
         console.error("[Members] Server not found:", serverId);
         lists.forEach(list => {
@@ -2966,12 +2966,12 @@ function updatePeerCountBadge(serverId) {
 let _renderMessagesTimeout = null;
 function renderMessages(serverId, channelId) {
     console.log("[Messages] Rendering for server:", serverId, "channel:", channelId);
-    
+
     // Debounce to prevent excessive re-renders
     if (_renderMessagesTimeout) {
         clearTimeout(_renderMessagesTimeout);
     }
-    
+
     _renderMessagesTimeout = setTimeout(() => {
         _renderMessagesImpl(serverId, channelId);
     }, 16); // ~60fps
@@ -2980,12 +2980,12 @@ function renderMessages(serverId, channelId) {
 function _renderMessagesImpl(serverId, channelId) {
     const server = state.servers.find(s => s.id === serverId);
     const area = document.getElementById("messages-area");
-    
+
     if (!area) {
         console.error("[Messages] messages-area element not found!");
         return;
     }
-    
+
     if (!server) {
         console.error("[Messages] Server not found:", serverId);
         area.innerHTML = `<div class="messages-welcome">
@@ -2995,7 +2995,7 @@ function _renderMessagesImpl(serverId, channelId) {
         </div>`;
         return;
     }
-    
+
     const cid = canonicalChannelIdForChat(server, channelId);
     const all = server?.messages?.[cid] || [];
     const loadWrap = document.getElementById("messages-load-more-wrap");
@@ -3507,7 +3507,7 @@ function mergeMessageHistoryIntoServer(server, incoming) {
 
 async function createServer(name) {
     console.log("[Create] Creating server:", name);
-    
+
     const res = await scordFetch(`${API_BASE}/rooms`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3518,11 +3518,11 @@ async function createServer(name) {
         toast("Sunucu oluşturulamadı.", "error");
         return;
     }
-    
+
     const created = await res.json();
     const room_id = created.room_id;
     const inviteCode = created.invite_code || "";
-    
+
     console.log("[Create] Server created:", room_id);
 
     const server = {
@@ -3615,14 +3615,14 @@ async function submitAddChannel(serverId, type) {
 /* ── Join existing server ─────────────────────────────────── */
 async function joinServer(roomId) {
     console.log("[Join] Joining server:", roomId);
-    
+
     // Check room exists
     const rooms = await fetch(`${API_BASE}/rooms`).then(r => r.json());
     const room = rooms.find(r => r.room_id === roomId);
-    if (!room) { 
+    if (!room) {
         console.error("[Join] Room not found:", roomId);
-        toast("Sunucu bulunamadı.", "error"); 
-        return; 
+        toast("Sunucu bulunamadı.", "error");
+        return;
     }
 
     // Check not already joined
@@ -3757,57 +3757,57 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         updateVoiceSessionMeta();
         return;
     }
-    
+
     if (data.type === "status_update") {
         handleStatusUpdate({ from: fromPeerId, ...data });
         return;
     }
-    
+
     if (data.type === "activity_update") {
         handleActivityUpdate({ from: fromPeerId, ...data });
         return;
     }
-    
+
     if (data.type === "reaction_add") {
         handleReactionAdd(data);
         return;
     }
-    
+
     if (data.type === "reaction_remove") {
         handleReactionRemove(data);
         return;
     }
-    
+
     if (data.type === "thread_create") {
         handleThreadCreate(data);
         return;
     }
-    
+
     if (data.type === "thread_message") {
         handleThreadMessage(data);
         return;
     }
-    
+
     if (data.type === "msg_edit") {
         handleMessageEdit(data);
         return;
     }
-    
+
     if (data.type === "roles_update") {
         handleRolesUpdate(data);
         return;
     }
-    
+
     if (data.type === "channel_categories_update") {
         handleChannelCategoriesUpdate(data);
         return;
     }
-    
+
     if (data.type === "server_boost_update") {
         handleServerBoostUpdate(data);
         return;
     }
-    
+
     if (data.type === "custom_emojis_update") {
         handleCustomEmojisUpdate(data);
         return;
@@ -3833,8 +3833,13 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         if (inactive && shouldShowChatToast(msg)) {
             toast(`${msg.author}: ${(msg.text || "").slice(0, 60)}`, "info");
         }
-        if (!inactive && msg.authorId !== state.peerId) {
-            announceA11y(`${msg.author} yazdı`);
+        if (msg.authorId !== state.peerId) {
+            if (state.notifSettings?.messageSound !== false) {
+                playSound(660, 100); // Quick chirp for chat
+            }
+            if (!inactive) {
+                announceA11y(`${msg.author} yazdı`);
+            }
         }
     } else if (data.type === "dm" || data.type === "dm_relay") {
         if (data.type === "dm_relay" && data.target && data.target !== state.peerId) {
@@ -3850,6 +3855,11 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
             renderDMMessages(fromPeerId);
         } else if (state.notifSettings?.dm !== false) {
             toast(`Özel Mesaj (DM) - ${data.payload.author}: ${(data.payload.text || "").slice(0, 60)}`, "info");
+        }
+        if (data.payload.authorId !== state.peerId) {
+            if (state.notifSettings?.messageSound !== false) {
+                playSound(880, 150); // Slightly higher/longer chirp for DM
+            }
         }
     } else if (data.type === "identity_announce" || data.type === "profile_update") {
         const payload = data.type === "identity_announce" ? data : data.payload;
@@ -4418,17 +4428,17 @@ function shouldShowChatToast(msg) {
         const u = (state.username || "").trim();
         if (!u) return false;
         const t = msg.text || "";
-        
+
         // Check for @user mention
         const mentionRegex = new RegExp(`(^|\\s)@${escapeRegExp(u)}(?!\\w)`, "i");
         if (mentionRegex.test(t)) return true;
-        
+
         // Check for @everyone
         if (/@everyone/i.test(t)) return true;
-        
+
         // Check for @here (only if user is in voice channel)
         if (/@here/i.test(t) && state.voiceChannelId) return true;
-        
+
         return false;
     }
     return true;
@@ -5346,13 +5356,13 @@ function renderVoiceParticipants(serverId, channelId) {
 let _updateVoiceSpeakingUiTimeouts = {};
 function updateVoiceSpeakingUi(peerId, isSpeaking, channelId = state.voiceChannelId || state.activeChannelId) {
     if (!peerId) return;
-    
+
     // Debounce per peer to prevent excessive DOM updates
     const key = `${peerId}_${isSpeaking}`;
     if (_updateVoiceSpeakingUiTimeouts[key]) {
         clearTimeout(_updateVoiceSpeakingUiTimeouts[key]);
     }
-    
+
     _updateVoiceSpeakingUiTimeouts[key] = setTimeout(() => {
         _updateVoiceSpeakingUiImpl(peerId, isSpeaking, channelId);
         delete _updateVoiceSpeakingUiTimeouts[key];
@@ -5433,7 +5443,10 @@ function openScreenOverlay(peerId, username) {
 
     const syncSrc = () => {
         if (!overlay.isConnected) return;
-        bigVideo.srcObject = video.srcObject || null;
+        if (bigVideo.srcObject !== (video.srcObject || null)) {
+            bigVideo.srcObject = video.srcObject || null;
+            console.log("[Overlay] srcObject synced");
+        }
         const currentStream = bigVideo.srcObject;
         if (!currentStream) {
             closeOverlay();
@@ -5716,10 +5729,16 @@ function openSettingsModal() {
               Özel mesaj (DM) bildirimi
             </label>
           </div>
-          <div class="form-group">
+          <div class="form-group" style="margin-bottom:12px">
             <label class="modal-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
               <input type="checkbox" id="notif-join" ${state.notifSettings?.join !== false ? 'checked' : ''}>
               Ses kanalına katılma bildirimi
+            </label>
+          </div>
+          <div class="form-group">
+            <label class="modal-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="notif-message-sound" ${state.notifSettings?.messageSound !== false ? 'checked' : ''}>
+              Mesaj sesleri (bildirim sesi)
             </label>
           </div>
         </div>
@@ -6000,10 +6019,10 @@ function showMsgContextMenu(msg, x, y) {
 function deleteChatMessage(msg) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server?.messages?.[msg.channelId]) return;
-    
+
     // Add to edit history before deleting
     addMessageToHistory(server.id, msg.channelId, msg, 'delete');
-    
+
     server.messages[msg.channelId] = server.messages[msg.channelId].filter(m => m.id !== msg.id);
     server.pinned_messages = (server.pinned_messages || []).filter(m => m.id !== msg.id);
     meshBroadcastReliable({ type: "msg_delete", payload: { channelId: msg.channelId, msgId: msg.id } });
@@ -6015,11 +6034,11 @@ function deleteChatMessage(msg) {
 function addMessageToHistory(serverId, channelId, message, action) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     if (!server.messageHistory) server.messageHistory = {};
     const key = `${channelId}-${message.id}`;
     if (!server.messageHistory[key]) server.messageHistory[key] = [];
-    
+
     const historyEntry = {
         action, // 'edit' or 'delete'
         timestamp: Date.now(),
@@ -6027,7 +6046,7 @@ function addMessageToHistory(serverId, channelId, message, action) {
         author: message.author,
         authorId: message.authorId
     };
-    
+
     server.messageHistory[key].push(historyEntry);
     saveMessageHistoryToStorage(serverId);
 }
@@ -6035,15 +6054,15 @@ function addMessageToHistory(serverId, channelId, message, action) {
 function editMessage(serverId, channelId, messageId, newText) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server?.messages?.[channelId]) return;
-    
+
     const messageIndex = server.messages[channelId].findIndex(m => m.id === messageId);
     if (messageIndex === -1) return;
-    
+
     const originalMessage = server.messages[channelId][messageIndex];
-    
+
     // Add to history
     addMessageToHistory(serverId, channelId, originalMessage, 'edit');
-    
+
     // Update message
     server.messages[channelId][messageIndex] = {
         ...originalMessage,
@@ -6051,7 +6070,7 @@ function editMessage(serverId, channelId, messageId, newText) {
         edited: true,
         editedAt: Date.now()
     };
-    
+
     // Broadcast edit
     if (state.mesh) {
         state.mesh.broadcast({
@@ -6063,7 +6082,7 @@ function editMessage(serverId, channelId, messageId, newText) {
             timestamp: Date.now()
         });
     }
-    
+
     // Update UI
     renderMessages(serverId, channelId);
     saveMessageHistoryToStorage(serverId);
@@ -6074,15 +6093,15 @@ function handleMessageEdit(data) {
     const { serverId, channelId, messageId, newText } = data;
     const server = state.servers.find(s => s.id === serverId);
     if (!server?.messages?.[channelId]) return;
-    
+
     const messageIndex = server.messages[channelId].findIndex(m => m.id === messageId);
     if (messageIndex === -1) return;
-    
+
     const originalMessage = server.messages[channelId][messageIndex];
-    
+
     // Add to history
     addMessageToHistory(serverId, channelId, originalMessage, 'edit');
-    
+
     // Update message
     server.messages[channelId][messageIndex] = {
         ...originalMessage,
@@ -6090,7 +6109,7 @@ function handleMessageEdit(data) {
         edited: true,
         editedAt: Date.now()
     };
-    
+
     // Update UI if this channel is active
     if (state.activeServerId === serverId && state.activeChannelId === channelId) {
         renderMessages(serverId, channelId);
@@ -6100,25 +6119,25 @@ function handleMessageEdit(data) {
 function showMessageHistory(serverId, channelId, messageId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server?.messageHistory) return;
-    
+
     const key = `${channelId}-${messageId}`;
     const history = server.messageHistory[key] || [];
     if (history.length === 0) return;
-    
+
     const body = document.createElement('div');
     body.className = 'message-history-modal';
-    
+
     const historyList = document.createElement('div');
     historyList.className = 'history-list';
-    
+
     history.forEach((entry, index) => {
         const item = document.createElement('div');
         item.className = 'history-item';
-        
+
         const actionIcon = entry.action === 'edit' ? '✏️' : '🗑️';
         const actionText = entry.action === 'edit' ? 'Düzenlendi' : 'Silindi';
         const actionColor = entry.action === 'edit' ? '#f39c12' : '#ef4444';
-        
+
         item.innerHTML = `
             <div class="history-item-header">
                 <div class="history-action" style="color: ${actionColor}">
@@ -6133,12 +6152,12 @@ function showMessageHistory(serverId, channelId, messageId) {
                 <div class="history-text">${parseMessageText(entry.message.text, serverId)}</div>
             </div>
         `;
-        
+
         historyList.appendChild(item);
     });
-    
+
     body.appendChild(historyList);
-    
+
     showModal(
         `<div class="history-modal-header">
             <div class="history-modal-title">📜 Mesaj Geçmişi</div>
@@ -6152,30 +6171,30 @@ function showMessageHistory(serverId, channelId, messageId) {
 function startMessageEdit(msg) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server?.messages?.[msg.channelId]) return;
-    
+
     const messageIndex = server.messages[msg.channelId].findIndex(m => m.id === msg.id);
     if (messageIndex === -1) return;
-    
+
     const messageEl = document.querySelector(`[data-msg-id="${msg.id}"]`);
     if (!messageEl) return;
-    
+
     const textEl = messageEl.querySelector('.msg-text');
     if (!textEl) return;
-    
+
     // Create edit input
     const editInput = document.createElement('textarea');
     editInput.className = 'message-edit-input';
     editInput.value = msg.text || '';
     editInput.rows = 1;
-    
+
     // Replace text with input
     textEl.innerHTML = '';
     textEl.appendChild(editInput);
-    
+
     // Focus and select text
     editInput.focus();
     editInput.select();
-    
+
     // Save on Enter, cancel on Escape
     const saveEdit = () => {
         const newText = editInput.value.trim();
@@ -6186,11 +6205,11 @@ function startMessageEdit(msg) {
             textEl.innerHTML = parseMessageText(msg.text, state.activeServerId);
         }
     };
-    
+
     const cancelEdit = () => {
         textEl.innerHTML = parseMessageText(msg.text, state.activeServerId);
     };
-    
+
     editInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -6200,9 +6219,9 @@ function startMessageEdit(msg) {
             cancelEdit();
         }
     });
-    
+
     editInput.addEventListener('blur', saveEdit, { once: true });
-    
+
     // Auto-resize
     editInput.addEventListener('input', () => {
         editInput.style.height = 'auto';
@@ -6213,7 +6232,7 @@ function startMessageEdit(msg) {
 function saveMessageHistoryToStorage(serverId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server || !server.messageHistory) return;
-    
+
     localStorage.setItem(`scord_message_history_${serverId}`, JSON.stringify(server.messageHistory));
 }
 
@@ -6221,10 +6240,10 @@ function loadMessageHistoryFromStorage(serverId) {
     try {
         const saved = localStorage.getItem(`scord_message_history_${serverId}`);
         if (!saved) return;
-        
+
         const server = state.servers.find(s => s.id === serverId);
         if (!server) return;
-        
+
         server.messageHistory = JSON.parse(saved);
     } catch (e) {
         console.warn("Failed to load message history from storage:", e);
@@ -6430,11 +6449,13 @@ function saveSettings() {
     const chatLevel = document.getElementById("notif-chat-level")?.value || "all";
     const notifDm = document.getElementById("notif-dm")?.checked ?? true;
     const notifJoin = document.getElementById("notif-join")?.checked ?? true;
+    const notifMsgSound = document.getElementById("notif-message-sound")?.checked ?? true;
     state.notifSettings = {
         chat: chatLevel !== "none",
         dm: notifDm,
         join: notifJoin,
         chatLevel,
+        messageSound: notifMsgSound
     };
     localStorage.setItem("scord_notif_settings", JSON.stringify(state.notifSettings));
 
@@ -7770,7 +7791,7 @@ function showPinnedMessages() {
 
     const body = document.createElement("div");
     body.className = "pinned-messages-modal";
-    
+
     if (pins.length === 0) {
         body.innerHTML = `
             <div class="pinned-empty">
@@ -7782,14 +7803,14 @@ function showPinnedMessages() {
     } else {
         const pinsList = document.createElement("div");
         pinsList.className = "pinned-list";
-        
+
         pins.forEach(m => {
             const item = document.createElement("div");
             item.className = "pinned-item";
-            
+
             const isAuthor = m.authorId === state.peerId;
             const canMod = ["owner", "admin", "mod"].includes(getMyEffectiveRole(server));
-            
+
             item.innerHTML = `
                 <div class="pinned-item-header">
                     <div class="pinned-item-author">
@@ -7825,7 +7846,7 @@ function showPinnedMessages() {
                     </div>
                 ` : ''}
             `;
-            
+
             // Add reactions if they exist
             if (m.id && server.reactions) {
                 const key = `${m.channelId}-${m.id}`;
@@ -7833,7 +7854,7 @@ function showPinnedMessages() {
                 if (reactions && Object.keys(reactions).length > 0) {
                     const reactionBar = document.createElement("div");
                     reactionBar.className = "pinned-reactions";
-                    
+
                     Object.entries(reactions).forEach(([emoji, users]) => {
                         const pill = document.createElement("div");
                         pill.className = "pinned-reaction-pill";
@@ -7843,14 +7864,14 @@ function showPinnedMessages() {
                         `;
                         reactionBar.appendChild(pill);
                     });
-                    
+
                     item.appendChild(reactionBar);
                 }
             }
-            
+
             pinsList.appendChild(item);
         });
-        
+
         body.appendChild(pinsList);
     }
 
@@ -7867,14 +7888,14 @@ function showPinnedMessages() {
 function unpinMessage(messageId) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const msg = findMessageById(state.activeServerId, state.activeChannelId, messageId);
     if (!msg) return;
-    
+
     // Update local state
     msg.isPinned = false;
     server.pinned_messages = (server.pinned_messages || []).filter(m => m.id !== messageId);
-    
+
     // Broadcast unpin
     if (state.mesh) {
         state.mesh.broadcast({
@@ -7882,12 +7903,12 @@ function unpinMessage(messageId) {
             payload: { msgId: messageId, isPinned: false, msg }
         });
     }
-    
+
     // Update UI
     renderMessages(state.activeServerId, state.activeChannelId);
     savePinnedMessagesToStorage(state.activeServerId);
     toast("Mesaj sabitlemesi kaldırıldı", "info");
-    
+
     // Refresh pinned modal if open
     const modal = document.querySelector('.pinned-messages-modal');
     if (modal) {
@@ -7898,7 +7919,7 @@ function unpinMessage(messageId) {
 function savePinnedMessagesToStorage(serverId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server || !server.pinned_messages) return;
-    
+
     localStorage.setItem(`scord_pinned_${serverId}`, JSON.stringify(server.pinned_messages));
 }
 
@@ -7906,10 +7927,10 @@ function loadPinnedMessagesFromStorage(serverId) {
     try {
         const saved = localStorage.getItem(`scord_pinned_${serverId}`);
         if (!saved) return;
-        
+
         const server = state.servers.find(s => s.id === serverId);
         if (!server) return;
-        
+
         server.pinned_messages = JSON.parse(saved);
     } catch (e) {
         console.warn("Failed to load pinned messages from storage:", e);
@@ -8368,7 +8389,7 @@ function updateUnreadBadges() {
     if (_updateUnreadBadgesTimeout) {
         clearTimeout(_updateUnreadBadgesTimeout);
     }
-    
+
     _updateUnreadBadgesTimeout = setTimeout(() => {
         _updateUnreadBadgesImpl();
     }, 16); // ~60fps
@@ -8413,16 +8434,16 @@ function handleTypingMessage(fromPeerId, username, channelId) {
     if (channelId !== state.activeChannelId) return;
     if (!state.typingPeers) state.typingPeers = {};
     state.typingPeers[fromPeerId] = username;
-    
+
     // Debounce to prevent excessive DOM updates
     if (_handleTypingMessageTimeout) {
         clearTimeout(_handleTypingMessageTimeout);
     }
-    
+
     _handleTypingMessageTimeout = setTimeout(() => {
         _handleTypingMessageImpl();
     }, 16); // ~60fps
-    
+
     clearTimeout(state._typingTimers?.[fromPeerId]);
     if (!state._typingTimers) state._typingTimers = {};
     state._typingTimers[fromPeerId] = setTimeout(() => {
@@ -8548,7 +8569,7 @@ function saveServerToStorage(server) {
     try {
         const savedServers = loadServersFromStorage();
         const existingIndex = savedServers.findIndex(s => s.id === server.id);
-        
+
         const serverToSave = {
             id: server.id,
             name: server.name,
@@ -8561,18 +8582,18 @@ function saveServerToStorage(server) {
             channel_backgrounds: server.channel_backgrounds,
             lastJoined: Date.now()
         };
-        
+
         if (existingIndex !== -1) {
             savedServers[existingIndex] = serverToSave;
         } else {
             savedServers.push(serverToSave);
         }
-        
+
         // Keep only last 50 servers
         if (savedServers.length > 50) {
             savedServers.splice(0, savedServers.length - 50);
         }
-        
+
         localStorage.setItem('scord_saved_servers', JSON.stringify(savedServers));
         console.log("[Storage] Server saved:", server.name);
     } catch (e) {
@@ -8604,10 +8625,10 @@ function removeServerFromStorage(serverId) {
 /*  Invite code: copy & join  */
 async function joinByInviteCode(code) {
     console.log("[Invite] Joining by code:", code);
-    
+
     if (!code || code.trim().length < 4) return toast("Geçersiz davet kodu.", "error");
     code = code.trim().toUpperCase();
-    
+
     try {
         const res = await scordFetch(`/api/rooms/join/${code}`);
         if (!res.ok) {
@@ -8615,23 +8636,23 @@ async function joinByInviteCode(code) {
             toast("Geçersiz veya süresi dolmuş davet kodu.", "error");
             return;
         }
-        
+
         const data = await res.json();
         console.log("[Invite] Response data:", data);
-        
+
         if (data.error || !data.room_id) {
             console.error("[Invite] Error in response:", data.error);
             toast("Geçersiz veya süresi dolmuş davet kodu.", "error");
             return;
         }
-        
+
         const peerList = (data.peers || []).map(p => ({
             peer_id: p.peer_id,
             username: p.username,
             avatar_color: p.avatar_color,
             avatar_image: p.avatar_image ?? null,
         }));
-        
+
         if (!peerList.some(m => m.peer_id === state.peerId)) {
             peerList.push({
                 peer_id: state.peerId,
@@ -8640,7 +8661,7 @@ async function joinByInviteCode(code) {
                 avatar_image: state.avatarImage,
             });
         }
-        
+
         const server = {
             id: data.room_id,
             name: data.name,
@@ -8658,10 +8679,10 @@ async function joinByInviteCode(code) {
             unread: {},
             channel_backgrounds: data.channel_backgrounds || {},
         };
-        
+
         // Save server to localStorage for persistence
         saveServerToStorage(server);
-        
+
         const dupIdx = state.servers.findIndex(s => s.id === server.id);
         if (dupIdx !== -1) {
             console.log("[Invite] Updating existing server");
@@ -8676,7 +8697,7 @@ async function joinByInviteCode(code) {
             console.log("[Invite] Adding new server");
             state.servers.push(server);
         }
-        
+
         renderServerRail();
         switchToServer(server.id);
         toast(`"${server.name}" sunucusuna katıldın!`, "success");
@@ -8755,7 +8776,7 @@ async function joinDiscoveryRoom(roomId, inviteCode) {
 
 function switchToServer(serverId) {
     console.log("[Switch] Switching to server:", serverId);
-    
+
     const server = state.servers.find(s => s.id === serverId);
     if (!server) {
         console.error("[Switch] Server not found:", serverId);
@@ -9655,7 +9676,7 @@ function renderMembersSettings(server) {
 function showRoleManagementModal() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const modalContent = `
         <div class="role-management-modal">
             <div class="role-management-header">
@@ -9672,12 +9693,12 @@ function showRoleManagementModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Rol Yönetimi", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
         <button class="btn-primary" onclick="saveRoleChanges()">Kaydet</button>
     `);
-    
+
     // Initialize tabs
     initializeRoleTabs();
     loadRolesContent();
@@ -9686,14 +9707,14 @@ function showRoleManagementModal() {
 function initializeRoleTabs() {
     const tabs = document.querySelectorAll('.role-tab');
     const content = document.getElementById('role-content');
-    
+
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
             tabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            
+
             const tabName = tab.getAttribute('data-tab');
-            switch(tabName) {
+            switch (tabName) {
                 case 'roles':
                     loadRolesContent();
                     break;
@@ -9711,12 +9732,12 @@ function initializeRoleTabs() {
 function loadRolesContent() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const content = document.getElementById('role-content');
     const roles = server.roles || {};
-    
+
     let html = '<div class="roles-list">';
-    
+
     // Add default roles
     const defaultRoles = [
         { id: 'owner', name: 'Owner', color: '#f43f5e', icon: '👑', description: 'Sunucu sahibi - Tüm izinler' },
@@ -9724,7 +9745,7 @@ function loadRolesContent() {
         { id: 'mod', name: 'Moderatör', color: '#f59e0b', icon: '🔨', description: 'Moderatör - Bazı izinler' },
         { id: 'member', name: 'Üye', color: '#6b7280', icon: '👤', description: 'Standart üye - Temel izinler' }
     ];
-    
+
     defaultRoles.forEach(role => {
         const isUsed = Object.values(roles).some(r => r.id === role.id);
         html += `
@@ -9740,7 +9761,7 @@ function loadRolesContent() {
             </div>
         `;
     });
-    
+
     // Add custom roles
     Object.entries(roles).forEach(([roleId, roleData]) => {
         if (!defaultRoles.find(r => r.id === roleId)) {
@@ -9761,21 +9782,21 @@ function loadRolesContent() {
             `;
         }
     });
-    
+
     html += `
         <button class="add-role-btn" onclick="createNewRole()">
             <span class="add-role-icon">+</span>
             <span class="add-role-text">Yeni Rol Oluştur</span>
         </button>
     </div>`;
-    
+
     content.innerHTML = html;
 }
 
 function loadPermissionsContent() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const permissions = [
         { id: 'send_messages', name: 'Mesaj Gönder', icon: '💬' },
         { id: 'delete_own_messages', name: 'Kendi Mesajını Sil', icon: '🗑️' },
@@ -9787,12 +9808,12 @@ function loadPermissionsContent() {
         { id: 'kick_members', name: 'Üyeleri At', icon: '👢' },
         { id: 'ban_members', name: 'Üyeleri Yasakla', icon: '🚫' }
     ];
-    
+
     const content = document.getElementById('role-content');
     const roles = server.roles || {};
-    
+
     let html = '<div class="permissions-grid">';
-    
+
     permissions.forEach(perm => {
         html += `
             <div class="permission-item">
@@ -9804,15 +9825,15 @@ function loadPermissionsContent() {
                     <div class="permission-label">Bu izne sahip olan roller:</div>
                     <div class="permission-role-list">
                         ${Object.entries(roles).map(([roleId, roleData]) => {
-                            const hasPermission = roleData.permissions?.includes(perm.id);
-                            return `<span class="permission-role ${hasPermission ? 'has-permission' : ''}">${roleData.name || roleId}</span>`;
-                        }).join('')}
+            const hasPermission = roleData.permissions?.includes(perm.id);
+            return `<span class="permission-role ${hasPermission ? 'has-permission' : ''}">${roleData.name || roleId}</span>`;
+        }).join('')}
                     </div>
                 </div>
             </div>
         `;
     });
-    
+
     html += '</div>';
     content.innerHTML = html;
 }
@@ -9820,16 +9841,16 @@ function loadPermissionsContent() {
 function loadRoleMembersContent() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const content = document.getElementById('role-content');
     const roles = server.roles || {};
     const members = server.members || [];
-    
+
     let html = '<div class="role-members-list">';
-    
+
     Object.entries(roles).forEach(([roleId, roleData]) => {
         const roleMembers = members.filter(m => server.peer_roles?.[m.peer_id] === roleId);
-        
+
         html += `
             <div class="role-group">
                 <div class="role-group-header">
@@ -9856,7 +9877,7 @@ function loadRoleMembersContent() {
             </div>
         `;
     });
-    
+
     html += '</div>';
     content.innerHTML = html;
 }
@@ -9864,13 +9885,13 @@ function loadRoleMembersContent() {
 function createNewRole() {
     const roleName = prompt('Yeni rol adı:');
     if (!roleName) return;
-    
+
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const roleId = 'custom_' + Date.now();
-    const roleColor = '#' + Math.floor(Math.random()*16777215).toString(16);
-    
+    const roleColor = '#' + Math.floor(Math.random() * 16777215).toString(16);
+
     if (!server.roles) server.roles = {};
     server.roles[roleId] = {
         name: roleName,
@@ -9878,7 +9899,7 @@ function createNewRole() {
         permissions: [],
         icon: '🎨'
     };
-    
+
     loadRolesContent();
     toast('Yeni rol oluşturuldu', 'success');
 }
@@ -9886,36 +9907,36 @@ function createNewRole() {
 function editRole(roleId) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server || !server.roles?.[roleId]) return;
-    
+
     const role = server.roles[roleId];
     const newName = prompt('Rol adını düzenle:', role.name);
     if (!newName || newName === role.name) return;
-    
+
     const newColor = prompt('Rol rengi (hex formatında):', role.color);
     if (!newColor) return;
-    
+
     role.name = newName;
     role.color = newColor;
-    
+
     loadRolesContent();
     toast('Rol güncellendi', 'success');
 }
 
 function deleteRole(roleId) {
     if (!confirm('Bu rolü silmek istediğinizden emin misiniz?')) return;
-    
+
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server || !server.roles?.[roleId]) return;
-    
+
     delete server.roles[roleId];
-    
+
     // Remove role from all members
     Object.keys(server.peer_roles || {}).forEach(peerId => {
         if (server.peer_roles[peerId] === roleId) {
             delete server.peer_roles[peerId];
         }
     });
-    
+
     loadRolesContent();
     toast('Rol silindi', 'success');
 }
@@ -9923,19 +9944,19 @@ function deleteRole(roleId) {
 function changeMemberRole(peerId) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const member = server.members.find(m => m.peer_id === peerId);
     if (!member) return;
-    
+
     const roles = server.roles || {};
     const roleOptions = Object.entries(roles).map(([id, data]) => `<option value="${id}">${data.name || id}</option>`).join('');
-    
+
     const newRole = prompt(`Rol seçin (${member.username}):`, roleOptions);
     if (!newRole) return;
-    
+
     server.peer_roles = server.peer_roles || {};
     server.peer_roles[peerId] = newRole;
-    
+
     loadRoleMembersContent();
     updateMembersPanel(state.activeServerId);
     toast(`${member.username} rolü güncellendi`, 'success');
@@ -9954,10 +9975,10 @@ function getMemberStatusText(peerId) {
 function saveRoleChanges() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     // Save roles to server state and potentially to backend
     localStorage.setItem(`scord_roles_${server.id}`, JSON.stringify(server.roles));
-    
+
     // Broadcast role changes to other members
     if (state.mesh) {
         state.mesh.broadcast({
@@ -9967,7 +9988,7 @@ function saveRoleChanges() {
             peer_roles: server.peer_roles
         });
     }
-    
+
     toast('Rol değişiklikleri kaydedildi', 'success');
 }
 
@@ -9975,10 +9996,10 @@ function handleRolesUpdate(data) {
     const { serverId, roles, peer_roles } = data;
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     server.roles = roles || {};
     server.peer_roles = peer_roles || {};
-    
+
     // Update UI if this server is active
     if (state.activeServerId === serverId) {
         updateMembersPanel(serverId);
@@ -9990,10 +10011,10 @@ function loadRolesFromStorage(serverId) {
     try {
         const saved = localStorage.getItem(`scord_roles_${serverId}`);
         if (!saved) return;
-        
+
         const server = state.servers.find(s => s.id === serverId);
         if (!server) return;
-        
+
         server.roles = JSON.parse(saved);
     } catch (e) {
         console.warn("Failed to load roles from storage:", e);
@@ -10808,7 +10829,7 @@ function channelCategoryLabel(ch, fallback) {
 function showChannelCategoriesModal() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const modalContent = `
         <div class="channel-categories-modal">
             <div class="categories-header">
@@ -10825,12 +10846,12 @@ function showChannelCategoriesModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Kanal Kategorileri", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
         <button class="btn-primary" onclick="saveChannelCategories()">Kaydet</button>
     `);
-    
+
     // Initialize tabs
     initializeCategoriesTabs();
     loadCategoriesContent();
@@ -10839,14 +10860,14 @@ function showChannelCategoriesModal() {
 function initializeCategoriesTabs() {
     const tabs = document.querySelectorAll('.categories-tab');
     const content = document.getElementById('categories-content');
-    
+
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
             tabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            
+
             const tabName = tab.getAttribute('data-tab');
-            switch(tabName) {
+            switch (tabName) {
                 case 'categories':
                     loadCategoriesContent();
                     break;
@@ -10864,14 +10885,14 @@ function initializeCategoriesTabs() {
 function loadCategoriesContent() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const content = document.getElementById('categories-content');
     const channels = server.channels || [];
-    
+
     // Group channels by category
     const categories = new Map();
     const uncategorized = [];
-    
+
     channels.forEach(ch => {
         if (ch.category) {
             if (!categories.has(ch.category)) categories.set(ch.category, []);
@@ -10880,9 +10901,9 @@ function loadCategoriesContent() {
             uncategorized.push(ch);
         }
     });
-    
+
     let html = '<div class="categories-list">';
-    
+
     // Add categories
     categories.forEach((categoryChannels, categoryName) => {
         html += `
@@ -10909,7 +10930,7 @@ function loadCategoriesContent() {
             </div>
         `;
     });
-    
+
     // Add uncategorized channels
     if (uncategorized.length > 0) {
         html += `
@@ -10932,26 +10953,26 @@ function loadCategoriesContent() {
             </div>
         `;
     }
-    
+
     html += `
         <button class="add-category-btn" onclick="createNewCategory()">
             <span class="add-category-icon">+</span>
             <span class="add-category-text">Yeni Kategori Oluştur</span>
         </button>
     </div>`;
-    
+
     content.innerHTML = html;
 }
 
 function loadChannelsContent() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const content = document.getElementById('categories-content');
     const channels = server.channels || [];
-    
+
     let html = '<div class="channels-list">';
-    
+
     channels.forEach(ch => {
         html += `
             <div class="channel-config-item">
@@ -10970,7 +10991,7 @@ function loadChannelsContent() {
             </div>
         `;
     });
-    
+
     html += '</div>';
     content.innerHTML = html;
 }
@@ -10978,12 +10999,12 @@ function loadChannelsContent() {
 function loadCategoryPermissionsContent() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const content = document.getElementById('categories-content');
     const roles = server.roles || {};
-    
+
     let html = '<div class="category-permissions-list">';
-    
+
     const permissions = [
         { id: 'view_category', name: 'Kategoriyi Gör', icon: '👁️' },
         { id: 'manage_category', name: 'Kategoriyi Yönet', icon: '⚙️' },
@@ -10991,7 +11012,7 @@ function loadCategoryPermissionsContent() {
         { id: 'delete_channels', name: 'Kanal Sil', icon: '❌' },
         { id: 'move_channels', name: 'Kanal Taşı', icon: '🔄' }
     ];
-    
+
     Object.entries(roles).forEach(([roleId, roleData]) => {
         html += `
             <div class="role-permission-item">
@@ -11020,7 +11041,7 @@ function loadCategoryPermissionsContent() {
             </div>
         `;
     });
-    
+
     html += '</div>';
     content.innerHTML = html;
 }
@@ -11028,20 +11049,20 @@ function loadCategoryPermissionsContent() {
 function createNewCategory() {
     const categoryName = prompt('Yeni kategori adı:');
     if (!categoryName) return;
-    
+
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     if (!server.channelCategories) server.channelCategories = {};
     const categoryId = 'cat_' + Date.now();
-    
+
     server.channelCategories[categoryId] = {
         name: categoryName,
         description: '',
-        color: '#' + Math.floor(Math.random()*16777215).toString(16),
+        color: '#' + Math.floor(Math.random() * 16777215).toString(16),
         permissions: []
     };
-    
+
     loadCategoriesContent();
     toast('Yeni kategori oluşturuldu', 'success');
 }
@@ -11049,27 +11070,27 @@ function createNewCategory() {
 function editCategory(categoryId) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server?.channelCategories?.[categoryId]) return;
-    
+
     const category = server.channelCategories[categoryId];
     const newName = prompt('Kategori adını düzenle:', category.name);
     if (!newName || newName === category.name) return;
-    
+
     const newColor = prompt('Kategori rengi (hex formatında):', category.color);
     if (!newColor) return;
-    
+
     category.name = newName;
     category.color = newColor;
-    
+
     loadCategoriesContent();
     toast('Kategori güncellendi', 'success');
 }
 
 function deleteCategory(categoryId) {
     if (!confirm('Bu kategoriyi silmek istediğinizden emin misiniz?')) return;
-    
+
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server?.channelCategories?.[categoryId]) return;
-    
+
     // Move channels to uncategorized
     const category = server.channelCategories[categoryId];
     server.channels?.forEach(ch => {
@@ -11077,9 +11098,9 @@ function deleteCategory(categoryId) {
             delete ch.category;
         }
     });
-    
+
     delete server.channelCategories[categoryId];
-    
+
     loadCategoriesContent();
     toast('Kategori silindi', 'success');
 }
@@ -11087,14 +11108,14 @@ function deleteCategory(categoryId) {
 function addChannelToCategory(channelId) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const categories = Object.keys(server.channelCategories || {});
     if (categories.length === 0) return;
-    
+
     const categoryOptions = categories.map(id => `<option value="${id}">${server.channelCategories[id].name}</option>`).join('');
     const selectedCategory = prompt('Kategori seçin:', categoryOptions);
     if (!selectedCategory) return;
-    
+
     const channel = server.channels.find(ch => ch.id === channelId);
     if (channel) {
         channel.category = selectedCategory;
@@ -11107,7 +11128,7 @@ function addChannelToCategory(channelId) {
 function removeChannelFromCategory(channelId) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const channel = server.channels.find(ch => ch.id === channelId);
     if (channel) {
         delete channel.category;
@@ -11134,10 +11155,10 @@ function toggleRoleCategoryPermissions(roleId) {
 function updateRoleCategoryPermission(roleId, permissionId, hasPermission) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server?.roles?.[roleId]) return;
-    
+
     const role = server.roles[roleId];
     if (!role.categoryPermissions) role.categoryPermissions = [];
-    
+
     if (hasPermission) {
         role.categoryPermissions.push(permissionId);
     } else {
@@ -11148,10 +11169,10 @@ function updateRoleCategoryPermission(roleId, permissionId, hasPermission) {
 function saveChannelCategories() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     // Save categories to server state and localStorage
     localStorage.setItem(`scord_channel_categories_${server.id}`, JSON.stringify(server.channelCategories));
-    
+
     // Broadcast category changes to other members
     if (state.mesh) {
         state.mesh.broadcast({
@@ -11161,7 +11182,7 @@ function saveChannelCategories() {
             channels: server.channels
         });
     }
-    
+
     // Update UI
     updateChannelSidebar(server.id);
     toast('Kanal kategorileri kaydedildi', 'success');
@@ -11171,10 +11192,10 @@ function handleChannelCategoriesUpdate(data) {
     const { serverId, categories, channels } = data;
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     server.channelCategories = categories || {};
     server.channels = channels || server.channels;
-    
+
     // Update UI if this server is active
     if (state.activeServerId === serverId) {
         updateChannelSidebar(serverId);
@@ -11186,10 +11207,10 @@ function loadChannelCategoriesFromStorage(serverId) {
     try {
         const saved = localStorage.getItem(`scord_channel_categories_${serverId}`);
         if (!saved) return;
-        
+
         const server = state.servers.find(s => s.id === serverId);
         if (!server) return;
-        
+
         server.channelCategories = JSON.parse(saved);
     } catch (e) {
         console.warn("Failed to load channel categories from storage:", e);
@@ -11200,12 +11221,12 @@ function loadChannelCategoriesFromStorage(serverId) {
 function showServerBoostModal() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const currentBoosts = server.boosts || 0;
     const maxBoosts = 10;
     const boostLevel = Math.min(Math.floor(currentBoosts / 2), 5);
     const boostProgress = (currentBoosts % 2) * 50;
-    
+
     const modalContent = `
         <div class="server-boost-modal">
             <div class="boost-header">
@@ -11244,7 +11265,7 @@ function showServerBoostModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Sunucu Boost'la", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -11314,7 +11335,7 @@ function getBoostBenefits(level) {
             { icon: '🌟', name: 'Özel sunucu URL', unlocked: true }
         ]
     };
-    
+
     const currentBenefits = benefits[level] || benefits[0];
     return currentBenefits.map(benefit => `
         <div class="benefit-item ${benefit.unlocked ? 'unlocked' : 'locked'}">
@@ -11331,7 +11352,7 @@ function getBoostPackages(currentBoosts) {
         { id: 'boost_3', name: '3 Boost', price: '₺79.99', boosts: 3, color: '#3b82f6', popular: true },
         { id: 'boost_5', name: '5 Boost', price: '₺129.99', boosts: 5, color: '#1e40af', best: true }
     ];
-    
+
     return packages.map(pkg => `
         <div class="package-item ${pkg.popular ? 'popular' : ''} ${pkg.best ? 'best' : ''}">
             ${pkg.popular ? '<div class="package-badge popular">POPÜLER</div>' : ''}
@@ -11350,11 +11371,11 @@ function getBoostPackages(currentBoosts) {
 
 function getBoostHistory(server) {
     const history = server.boostHistory || [];
-    
+
     if (history.length === 0) {
         return '<div class="history-empty">Henüz boost geçmişi yok.</div>';
     }
-    
+
     return history.slice(0, 10).map(entry => `
         <div class="history-item">
             <div class="history-info">
@@ -11369,21 +11390,21 @@ function getBoostHistory(server) {
 function purchaseBoost(packageId, boostCount) {
     // This would integrate with payment system
     toast('Boost satın alma yakında gelecek', 'info');
-    
+
     // Simulate boost purchase for demo
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     if (!server.boosts) server.boosts = 0;
     server.boosts += boostCount;
-    
+
     if (!server.boostHistory) server.boostHistory = [];
     server.boostHistory.push({
         action: `${boostCount} Boost satın alındı`,
         details: `${packageId} paketi`,
         timestamp: Date.now()
     });
-    
+
     saveServerBoostsToStorage(state.activeServerId);
     showServerBoostModal();
     toast(`${boostCount} boost başarıyla eklendi!`, 'success');
@@ -11392,7 +11413,7 @@ function purchaseBoost(packageId, boostCount) {
 function saveServerBoostsToStorage(serverId) {
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     localStorage.setItem(`scord_server_boosts_${serverId}`, JSON.stringify({
         boosts: server.boosts || 0,
         boostHistory: server.boostHistory || []
@@ -11403,10 +11424,10 @@ function loadServerBoostsFromStorage(serverId) {
     try {
         const saved = localStorage.getItem(`scord_server_boosts_${serverId}`);
         if (!saved) return;
-        
+
         const server = state.servers.find(s => s.id === serverId);
         if (!server) return;
-        
+
         const boostData = JSON.parse(saved);
         server.boosts = boostData.boosts || 0;
         server.boostHistory = boostData.boostHistory || [];
@@ -11419,10 +11440,10 @@ function handleServerBoostUpdate(data) {
     const { serverId, boosts, boostHistory } = data;
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     server.boosts = boosts || 0;
     server.boostHistory = boostHistory || [];
-    
+
     // Update UI if this server is active
     if (state.activeServerId === serverId) {
         // Update boost display in server settings
@@ -11433,7 +11454,7 @@ function handleServerBoostUpdate(data) {
 function updateServerBoostDisplay(server) {
     const currentBoosts = server.boosts || 0;
     const boostLevel = Math.min(Math.floor(currentBoosts / 2), 5);
-    
+
     // Update boost badge in server sidebar
     const serverItem = document.querySelector(`[data-server-id="${server.id}"]`);
     if (serverItem) {
@@ -11453,7 +11474,7 @@ function updateServerBoostDisplay(server) {
 function showCustomEmojiModal() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const modalContent = `
         <div class="custom-emoji-modal">
             <div class="emoji-header">
@@ -11470,12 +11491,12 @@ function showCustomEmojiModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Özel Emojiler", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
         <button class="btn-primary" onclick="saveCustomEmojis()">Kaydet</button>
     `);
-    
+
     // Initialize tabs
     initializeEmojiTabs();
     loadEmojisContent();
@@ -11484,14 +11505,14 @@ function showCustomEmojiModal() {
 function initializeEmojiTabs() {
     const tabs = document.querySelectorAll('.emoji-tab');
     const content = document.getElementById('emoji-content');
-    
+
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
             tabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            
+
             const tabName = tab.getAttribute('data-tab');
-            switch(tabName) {
+            switch (tabName) {
                 case 'emojis':
                     loadEmojisContent();
                     break;
@@ -11509,13 +11530,13 @@ function initializeEmojiTabs() {
 function loadEmojisContent() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const content = document.getElementById('emoji-content');
     const customEmojis = server.customEmojis || [];
     const defaultEmojis = EMOJIS.slice(0, 48); // Show first 48 default emojis
-    
+
     let html = '<div class="emoji-grid">';
-    
+
     // Add custom emojis first
     customEmojis.forEach(emoji => {
         html += `
@@ -11527,7 +11548,7 @@ function loadEmojisContent() {
             </div>
         `;
     });
-    
+
     // Add default emojis
     defaultEmojis.forEach(emoji => {
         html += `
@@ -11539,14 +11560,14 @@ function loadEmojisContent() {
             </div>
         `;
     });
-    
+
     html += '</div>';
     content.innerHTML = html;
 }
 
 function loadUploadContent() {
     const content = document.getElementById('emoji-content');
-    
+
     const html = `
         <div class="emoji-upload">
             <div class="upload-area" id="emoji-upload-area">
@@ -11570,9 +11591,9 @@ function loadUploadContent() {
             </div>
         </div>
     `;
-    
+
     content.innerHTML = html;
-    
+
     // Setup drag and drop
     setupEmojiDragAndDrop();
 }
@@ -11580,12 +11601,12 @@ function loadUploadContent() {
 function loadManageContent() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     const content = document.getElementById('emoji-content');
     const customEmojis = server.customEmojis || [];
-    
+
     let html = '<div class="emoji-manage-list">';
-    
+
     customEmojis.forEach((emoji, index) => {
         html += `
             <div class="emoji-manage-item">
@@ -11603,11 +11624,11 @@ function loadManageContent() {
             </div>
         `;
     });
-    
+
     if (customEmojis.length === 0) {
         html += '<div class="emoji-empty">Henüz özel emoji yok.</div>';
     }
-    
+
     html += '</div>';
     content.innerHTML = html;
 }
@@ -11616,20 +11637,20 @@ function handleEmojiFileSelect(event) {
     const files = event.target.files;
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     if (!server.customEmojis) server.customEmojis = [];
-    
+
     Array.from(files).forEach(file => {
         if (file.size > 512 * 1024) { // 512KB limit
             toast(`${file.name} dosyası çok büyük (maks: 512KB)`, 'error');
             return;
         }
-        
+
         const reader = new FileReader();
         reader.onload = (e) => {
             const emojiName = prompt(`Emoji adı (${file.name}):`, file.name.split('.')[0]);
             if (!emojiName) return;
-            
+
             // Convert to base64 for storage
             const base64 = e.target.result;
             const emoji = {
@@ -11637,14 +11658,14 @@ function handleEmojiFileSelect(event) {
                 url: base64,
                 createdAt: Date.now()
             };
-            
+
             server.customEmojis.push(emoji);
             toast(`${emojiName} emoji eklendi`, 'success');
         };
-        
+
         reader.readAsDataURL(file);
     });
-    
+
     // Clear file input
     event.target.value = '';
 }
@@ -11652,25 +11673,25 @@ function handleEmojiFileSelect(event) {
 function setupEmojiDragAndDrop() {
     const uploadArea = document.getElementById('emoji-upload-area');
     if (!uploadArea) return;
-    
+
     uploadArea.addEventListener('dragover', (e) => {
         e.preventDefault();
         uploadArea.classList.add('drag-over');
     });
-    
+
     uploadArea.addEventListener('dragleave', () => {
         uploadArea.classList.remove('drag-over');
     });
-    
+
     uploadArea.addEventListener('drop', (e) => {
         e.preventDefault();
         uploadArea.classList.remove('drag-over');
-        
+
         const files = e.dataTransfer.files;
         const fakeEvent = { target: { files } };
         handleEmojiFileSelect(fakeEvent);
     });
-    
+
     uploadArea.addEventListener('click', () => {
         document.getElementById('emoji-file-input').click();
     });
@@ -11679,11 +11700,11 @@ function setupEmojiDragAndDrop() {
 function insertEmoji(emoji, name) {
     const messageInput = document.getElementById('message-input');
     if (!messageInput) return;
-    
+
     const cursorPos = messageInput.selectionStart;
     const textBefore = messageInput.value.substring(0, cursorPos);
     const textAfter = messageInput.value.substring(cursorPos);
-    
+
     messageInput.value = textBefore + emoji + textAfter;
     messageInput.focus();
     messageInput.setSelectionRange(cursorPos + emoji.length, cursorPos + emoji.length);
@@ -11692,11 +11713,11 @@ function insertEmoji(emoji, name) {
 function editCustomEmoji(index) {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server?.customEmojis?.[index]) return;
-    
+
     const emoji = server.customEmojis[index];
     const newName = prompt('Emoji adını düzenle:', emoji.name);
     if (!newName || newName === emoji.name) return;
-    
+
     emoji.name = newName;
     loadManageContent();
     toast('Emoji güncellendi', 'success');
@@ -11704,13 +11725,13 @@ function editCustomEmoji(index) {
 
 function deleteCustomEmoji(index) {
     if (!confirm('Bu emojiyi silmek istediğinizden emin misiniz?')) return;
-    
+
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server?.customEmojis?.[index]) return;
-    
+
     const emoji = server.customEmojis[index];
     server.customEmojis.splice(index, 1);
-    
+
     loadManageContent();
     toast(`${emoji.name} emoji silindi`, 'success');
 }
@@ -11718,10 +11739,10 @@ function deleteCustomEmoji(index) {
 function saveCustomEmojis() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (!server) return;
-    
+
     // Save custom emojis to server state and localStorage
     localStorage.setItem(`scord_custom_emojis_${server.id}`, JSON.stringify(server.customEmojis || []));
-    
+
     // Broadcast emoji changes to other members
     if (state.mesh) {
         state.mesh.broadcast({
@@ -11730,7 +11751,7 @@ function saveCustomEmojis() {
             customEmojis: server.customEmojis
         });
     }
-    
+
     toast('Özel emojiler kaydedildi', 'success');
 }
 
@@ -11738,9 +11759,9 @@ function handleCustomEmojisUpdate(data) {
     const { serverId, customEmojis } = data;
     const server = state.servers.find(s => s.id === serverId);
     if (!server) return;
-    
+
     server.customEmojis = customEmojis || [];
-    
+
     // Update UI if this server is active
     if (state.activeServerId === serverId) {
         loadEmojisContent();
@@ -11751,10 +11772,10 @@ function loadCustomEmojisFromStorage(serverId) {
     try {
         const saved = localStorage.getItem(`scord_custom_emojis_${serverId}`);
         if (!saved) return;
-        
+
         const server = state.servers.find(s => s.id === serverId);
         if (!server) return;
-        
+
         server.customEmojis = JSON.parse(saved);
     } catch (e) {
         console.warn("Failed to load custom emojis from storage:", e);
@@ -11779,12 +11800,12 @@ function showThemeSettingsModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Tema Ayarları", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">İptal</button>
         <button class="btn-primary" onclick="saveThemeSettings()">Kaydet</button>
     `);
-    
+
     // Initialize tabs
     initializeThemeTabs();
     loadThemePresetsContent();
@@ -11793,14 +11814,14 @@ function showThemeSettingsModal() {
 function initializeThemeTabs() {
     const tabs = document.querySelectorAll('.theme-tab');
     const content = document.getElementById('theme-content');
-    
+
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
             tabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            
+
             const tabName = tab.getAttribute('data-tab');
-            switch(tabName) {
+            switch (tabName) {
                 case 'presets':
                     loadThemePresetsContent();
                     break;
@@ -11818,7 +11839,7 @@ function initializeThemeTabs() {
 function loadThemePresetsContent() {
     const content = document.getElementById('theme-content');
     const currentTheme = state.theme || 'sapphire';
-    
+
     const themes = [
         { id: 'sapphire', name: 'Safir', icon: '💎', colors: ['#0f172a', '#1e293b', '#334155', '#64748b', '#94a3b8', '#cbd5e1', '#f1f5f9'] },
         { id: 'emerald', name: 'Zümrüt', icon: '💚', colors: ['#064e3b', '#047857', '#059669', '#10b981', '#34d399', '#6ee7b7', '#a7f3d0'] },
@@ -11828,9 +11849,9 @@ function loadThemePresetsContent() {
         { id: 'light', name: 'Açık', icon: '☀️', colors: ['#ffffff', '#f5f5f5', '#e5e5e5', '#d4d4d4', '#a3a3a3', '#737373', '#525252'] },
         { id: 'auto', name: 'Otomatik', icon: '🔄', colors: ['#ffffff', '#f5f5f5', '#e5e5e5', '#d4d4d4', '#a3a3a3', '#737373', '#525252'] }
     ];
-    
+
     let html = '<div class="theme-presets-grid">';
-    
+
     themes.forEach(theme => {
         const isActive = currentTheme === theme.id;
         html += `
@@ -11848,16 +11869,16 @@ function loadThemePresetsContent() {
             </div>
         `;
     });
-    
+
     html += '</div>';
     content.innerHTML = html;
 }
 
 function loadThemeColorsContent() {
     const content = document.getElementById('theme-content');
-    
+
     const currentColors = getThemeColors();
-    
+
     const html = `
         <div class="theme-colors">
             <div class="color-group">
@@ -11909,13 +11930,13 @@ function loadThemeColorsContent() {
             </div>
         </div>
     `;
-    
+
     content.innerHTML = html;
 }
 
 function loadThemeAdvancedContent() {
     const content = document.getElementById('theme-content');
-    
+
     const html = `
         <div class="theme-advanced">
             <div class="advanced-group">
@@ -11974,7 +11995,7 @@ function loadThemeAdvancedContent() {
             </div>
         </div>
     `;
-    
+
     content.innerHTML = html;
 }
 
@@ -11995,13 +12016,13 @@ function getThemeColors() {
 function selectTheme(themeId) {
     state.theme = themeId;
     applyTheme(themeId);
-    
+
     // Update UI
     loadThemePresetsContent();
-    
+
     // Save to localStorage
     localStorage.setItem('scord_theme', themeId);
-    
+
     toast(`${themeId} teması uygulandı`, 'success');
 }
 
@@ -12080,15 +12101,15 @@ function applyTheme(themeId) {
             '--border': '#d4d4d4'
         }
     };
-    
+
     const theme = themes[themeId];
     if (!theme) return;
-    
+
     // Apply theme colors
     Object.entries(theme).forEach(([property, value]) => {
         document.documentElement.style.setProperty(property, value);
     });
-    
+
     // Update document class
     document.documentElement.className = themeId;
 }
@@ -12096,7 +12117,7 @@ function applyTheme(themeId) {
 function updateThemeColor(property, value) {
     const cssProperty = `--${property.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
     document.documentElement.style.setProperty(cssProperty, value);
-    
+
     // Save custom theme
     saveCustomTheme();
 }
@@ -12105,11 +12126,11 @@ function updateMessageDensity(density) {
     if (!state.settings) state.settings = {};
     state.settings.messageDensity = density;
     localStorage.setItem('scord_message_density', density);
-    
+
     // Update UI classes
     document.body.className = document.body.className.replace(/message-density-\w+/g, '');
     document.body.classList.add(`message-density-${density}`);
-    
+
     toast(`Mesaj yoğunluğu: ${density}`, 'success');
 }
 
@@ -12117,11 +12138,11 @@ function updateEmojiSize(size) {
     if (!state.settings) state.settings = {};
     state.settings.emojiSize = size;
     localStorage.setItem('scord_emoji_size', size);
-    
+
     // Update UI classes
     document.body.className = document.body.className.replace(/emoji-size-\w+/g, '');
     document.body.classList.add(`emoji-size-${size}`);
-    
+
     toast(`Emoji boyutu: ${size}`, 'success');
 }
 
@@ -12129,14 +12150,14 @@ function updateAnimations(enabled) {
     if (!state.settings) state.settings = {};
     state.settings.animations = enabled;
     localStorage.setItem('scord_animations', enabled);
-    
+
     // Update UI classes
     if (enabled) {
         document.body.classList.remove('no-animations');
     } else {
         document.body.classList.add('no-animations');
     }
-    
+
     toast(`Animasyonlar: ${enabled ? 'etkin' : 'devre dışı'}`, 'success');
 }
 
@@ -12144,32 +12165,32 @@ function updateAutoTheme(enabled) {
     if (!state.settings) state.settings = {};
     state.settings.theme = enabled ? 'auto' : 'dark';
     localStorage.setItem('scord_theme', enabled ? 'auto' : 'dark');
-    
+
     if (enabled) {
         setupAutoTheme();
     } else {
         removeAutoTheme();
     }
-    
+
     toast(`Otomatik tema: ${enabled ? 'etkin' : 'devre dışı'}`, 'success');
 }
 
 function setupAutoTheme() {
     const hour = new Date().getHours();
     const isDark = hour < 6 || hour >= 18;
-    
+
     if (isDark) {
         applyTheme('dark');
     } else {
         applyTheme('light');
     }
-    
+
     // Update every minute
     state.autoThemeInterval = setInterval(() => {
         const currentHour = new Date().getHours();
         const shouldBeDark = currentHour < 6 || currentHour >= 18;
         const isCurrentlyDark = document.documentElement.classList.contains('dark');
-        
+
         if (shouldBeDark !== isCurrentlyDark) {
             if (shouldBeDark) {
                 applyTheme('dark');
@@ -12197,7 +12218,7 @@ function loadCustomTheme() {
     try {
         const saved = localStorage.getItem('scord_custom_theme');
         if (!saved) return;
-        
+
         const customTheme = JSON.parse(saved);
         Object.entries(customTheme).forEach(([property, value]) => {
             document.documentElement.style.setProperty(property, value);
@@ -12210,10 +12231,10 @@ function loadCustomTheme() {
 function saveThemeSettings() {
     // Save all theme settings
     saveCustomTheme();
-    
+
     // Save settings
     localStorage.setItem('scord_settings', JSON.stringify(state.settings || {}));
-    
+
     toast('Tema ayarları kaydedildi', 'success');
     hideModal();
 }
@@ -12236,12 +12257,12 @@ function showNotificationSettingsModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Bildirim Ayarları", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">İptal</button>
         <button class="btn-primary" onclick="saveNotificationSettings()">Kaydet</button>
     `);
-    
+
     // Initialize tabs
     initializeNotificationTabs();
     loadNotificationGeneralContent();
@@ -12250,14 +12271,14 @@ function showNotificationSettingsModal() {
 function initializeNotificationTabs() {
     const tabs = document.querySelectorAll('.notification-tab');
     const content = document.getElementById('notification-content');
-    
+
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
             tabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            
+
             const tabName = tab.getAttribute('data-tab');
-            switch(tabName) {
+            switch (tabName) {
                 case 'general':
                     loadNotificationGeneralContent();
                     break;
@@ -12275,7 +12296,7 @@ function initializeNotificationTabs() {
 function loadNotificationGeneralContent() {
     const content = document.getElementById('notification-content');
     const settings = state.notifSettings || {};
-    
+
     const html = `
         <div class="notification-general">
             <div class="notification-group">
@@ -12331,14 +12352,14 @@ function loadNotificationGeneralContent() {
             </div>
         </div>
     `;
-    
+
     content.innerHTML = html;
 }
 
 function loadNotificationDesktopContent() {
     const content = document.getElementById('notification-content');
     const settings = state.notifSettings || {};
-    
+
     const html = `
         <div class="notification-desktop">
             <div class="notification-group">
@@ -12401,9 +12422,9 @@ function loadNotificationDesktopContent() {
             </div>
         </div>
     `;
-    
+
     content.innerHTML = html;
-    
+
     // Update volume display
     const volumeSlider = document.getElementById('notification-volume');
     const volumeValue = document.getElementById('volume-value');
@@ -12419,7 +12440,7 @@ function loadNotificationPushContent() {
     const settings = state.notifSettings || {};
     const pushSupported = 'Notification' in window && 'serviceWorker' in navigator;
     const pushEnabled = settings.pushEnabled || false;
-    
+
     const html = `
         <div class="notification-push">
             <div class="notification-group">
@@ -12463,29 +12484,29 @@ function loadNotificationPushContent() {
             </div>
         </div>
     `;
-    
+
     content.innerHTML = html;
 }
 
 function updateNotificationSetting(key, value) {
     if (!state.notifSettings) state.notifSettings = {};
     state.notifSettings[key] = value;
-    
+
     // Save to localStorage
     localStorage.setItem('scord_notif_settings', JSON.stringify(state.notifSettings));
-    
+
     // Apply settings immediately
     if (key === 'desktop') {
         if (value) {
             requestNotificationPermission();
         }
     }
-    
+
     if (key === 'sound') {
         state.settings.soundEnabled = value;
         localStorage.setItem('scord_sound_enabled', value);
     }
-    
+
     if (key === 'volume') {
         updateNotificationVolume(value);
     }
@@ -12514,7 +12535,7 @@ function togglePushNotifications(enabled) {
         toast('Push bildirimleri devre dışı bırakıldı', 'info');
         return;
     }
-    
+
     // Enable push notifications
     if ('serviceWorker' in navigator && 'PushManager' in window) {
         navigator.serviceWorker.ready.then(registration => {
@@ -12541,17 +12562,17 @@ function urlBase64ToUint8Array(base64String) {
     const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
     const rawData = window.atob(base64);
     const outputArray = new Uint8Array(rawData.length);
-    
+
     for (let i = 0; i < rawData.length; ++i) {
         outputArray[i] = rawData.charCodeAt(i);
     }
-    
+
     return outputArray;
 }
 
 function sendTestNotification() {
     const settings = state.notifSettings || {};
-    
+
     // Send desktop notification
     if (settings.desktop !== false && 'Notification' in window && Notification.permission === 'granted') {
         new Notification('SCORD - Test Bildirimi', {
@@ -12561,7 +12582,7 @@ function sendTestNotification() {
             tag: 'test-notification'
         });
     }
-    
+
     // Send push notification
     if (settings.pushEnabled && state.pushSubscription) {
         fetch('/api/push/test', {
@@ -12578,25 +12599,25 @@ function sendTestNotification() {
             console.error('Push notification error:', error);
         });
     }
-    
+
     // Play notification sound
     if (settings.sound !== false) {
         playNotificationSound(settings.notificationSound || 'default', settings.volume || 50);
     }
-    
+
     toast('Test bildirimi gönderildi', 'success');
 }
 
 function playNotificationSound(soundType, volume = 50) {
     if (!state.settings?.soundEnabled) return;
-    
+
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
-    
+
     oscillator.connect(gainNode);
     gainNode.connect(audioContext.destination);
-    
+
     // Set sound based on type
     switch (soundType) {
         case 'ding':
@@ -12615,7 +12636,7 @@ function playNotificationSound(soundType, volume = 50) {
             oscillator.frequency.value = 440;
             oscillator.type = 'sine';
     }
-    
+
     gainNode.gain.value = volume / 100;
     oscillator.start();
     oscillator.stop(audioContext.currentTime + 0.2);
@@ -12628,14 +12649,14 @@ function updateNotificationVolume(volume) {
 
 function createNotification(title, body, options = {}) {
     const settings = state.notifSettings || {};
-    
+
     // Check if notifications are enabled
     if (settings.desktop === false) return;
-    
+
     // Check notification level
     if (settings.chatLevel === 'none') return;
     if (settings.chatLevel === 'mentions' && !options.isMention) return;
-    
+
     // Create desktop notification
     if ('Notification' in window && Notification.permission === 'granted') {
         const notification = new Notification(title, {
@@ -12646,10 +12667,10 @@ function createNotification(title, body, options = {}) {
             requireInteraction: options.requireInteraction || false,
             silent: settings.sound === false
         });
-        
+
         // Auto close after 5 seconds
         setTimeout(() => notification.close(), 5000);
-        
+
         // Handle click
         notification.onclick = () => {
             window.focus();
@@ -12657,12 +12678,12 @@ function createNotification(title, body, options = {}) {
             if (options.onClick) options.onClick();
         };
     }
-    
+
     // Play sound
     if (settings.sound !== false) {
         playNotificationSound(settings.notificationSound || 'default', settings.volume || 50);
     }
-    
+
     // Update badge
     if (settings.badge !== false) {
         updateBadge();
@@ -12688,7 +12709,7 @@ function clearBadge() {
 function saveNotificationSettings() {
     // Save notification settings
     localStorage.setItem('scord_notif_settings', JSON.stringify(state.notifSettings || {}));
-    
+
     toast('Bildirim ayarları kaydedildi', 'success');
     hideModal();
 }
@@ -12716,7 +12737,7 @@ function initializeKeyboardShortcuts() {
         'Ctrl+Shift+E': showCustomEmojiModal,
         'Ctrl+Shift+T': showThemeSettingsModal,
         'Ctrl+Shift+N': showNotificationSettingsModal,
-        
+
         // Message shortcuts
         'Ctrl+Enter': sendMessage,
         'Shift+Enter': addNewLineToMessage,
@@ -12727,30 +12748,30 @@ function initializeKeyboardShortcuts() {
         'Ctrl+Shift+S': toggleStrikethrough,
         'Ctrl+E': toggleCode,
         'Ctrl+Shift+E': toggleCodeBlock,
-        
+
         // Search shortcuts
         'Ctrl+F': focusSearchInput,
         'Ctrl+Shift+F': searchInCurrentChannel,
         'Ctrl+G': goToMessage,
         'Ctrl+Shift+G': goToNextUnread,
-        
+
         // Channel shortcuts
         'Alt+ArrowUp': moveToPreviousChannel,
         'Alt+ArrowDown': moveToNextChannel,
         'Alt+ArrowLeft': moveToPreviousServer,
         'Alt+ArrowRight': moveToNextServer,
-        
+
         // Voice shortcuts
         'Ctrl+M': toggleMicrophone,
         'Ctrl+Shift+M': toggleDeafen,
         'Ctrl+Shift+S': startScreenShare,
         'Ctrl+Shift+C': startCameraShare,
-        
+
         // Settings shortcuts
         'Ctrl+Comma': openSettingsModal,
         'Ctrl+Shift+P': openProfileSettings,
         'Ctrl+Shift+U': showUserSettings,
-        
+
         // Utility shortcuts
         'Escape': closeCurrentModal,
         'Ctrl+Shift+L': toggleDarkMode,
@@ -12760,30 +12781,30 @@ function initializeKeyboardShortcuts() {
         'F1': showKeyboardShortcutsModal,
         'F11': toggleFullscreen
     };
-    
+
     // Add event listeners
     document.addEventListener('keydown', (e) => {
         const key = getKeyString(e);
         const shortcut = shortcuts[key];
-        
+
         if (shortcut) {
             e.preventDefault();
             shortcut(e);
         }
     });
-    
+
     // Store shortcuts for reference
     state.keyboardShortcuts = shortcuts;
 }
 
 function getKeyString(e) {
     const parts = [];
-    
+
     if (e.ctrlKey) parts.push('Ctrl');
     if (e.altKey) parts.push('Alt');
     if (e.shiftKey) parts.push('Shift');
     if (e.metaKey) parts.push('Meta');
-    
+
     // Handle special keys
     const specialKeys = {
         'Enter': 'Enter',
@@ -12813,10 +12834,10 @@ function getKeyString(e) {
         'F11': 'F11',
         'F12': 'F12'
     };
-    
+
     const key = specialKeys[e.key] || e.key;
     parts.push(key);
-    
+
     return parts.join('+');
 }
 
@@ -12831,9 +12852,9 @@ function showQuickSwitcher() {
             </div>
         </div>
     `;
-    
+
     showModal("Hızlı Geçiş", modalContent, '', true); // No footer, closable with Escape
-    
+
     // Focus input
     const input = document.getElementById('quick-switcher-input');
     if (input) {
@@ -12841,7 +12862,7 @@ function showQuickSwitcher() {
         input.addEventListener('input', handleQuickSwitcherSearch);
         input.addEventListener('keydown', handleQuickSwitcherNavigation);
     }
-    
+
     // Load initial results
     loadQuickSwitcherResults('');
 }
@@ -12854,7 +12875,7 @@ function handleQuickSwitcherSearch(e) {
 function handleQuickSwitcherNavigation(e) {
     const results = document.querySelectorAll('.quick-switcher-item');
     const currentIndex = Array.from(results).findIndex(item => item.classList.contains('selected'));
-    
+
     if (e.key === 'ArrowDown') {
         e.preventDefault();
         const nextIndex = currentIndex < results.length - 1 ? currentIndex + 1 : 0;
@@ -12880,15 +12901,15 @@ function selectQuickSwitcherItem(results, index) {
 function loadQuickSwitcherResults(query) {
     const resultsContainer = document.getElementById('quick-switcher-results');
     if (!resultsContainer) return;
-    
+
     let html = '';
     let hasResults = false;
-    
+
     // Search servers
-    const matchingServers = state.servers.filter(server => 
+    const matchingServers = state.servers.filter(server =>
         server.name.toLowerCase().includes(query)
     );
-    
+
     if (matchingServers.length > 0) {
         html += '<div class="quick-switcher-section">Sunucular</div>';
         matchingServers.forEach(server => {
@@ -12904,14 +12925,14 @@ function loadQuickSwitcherResults(query) {
         });
         hasResults = true;
     }
-    
+
     // Search channels
     const currentServer = state.servers.find(s => s.id === state.activeServerId);
     if (currentServer) {
-        const matchingChannels = currentServer.channels.filter(channel => 
+        const matchingChannels = currentServer.channels.filter(channel =>
             channel.name.toLowerCase().includes(query)
         );
-        
+
         if (matchingChannels.length > 0) {
             if (hasResults) html += '<div class="quick-switcher-divider"></div>';
             html += '<div class="quick-switcher-section">Kanallar</div>';
@@ -12930,18 +12951,18 @@ function loadQuickSwitcherResults(query) {
             hasResults = true;
         }
     }
-    
+
     // Search users
     const allUsers = new Set();
     state.servers.forEach(server => {
         Object.keys(server.peer_roles || {}).forEach(userId => allUsers.add(userId));
     });
-    
+
     const matchingUsers = Array.from(allUsers).filter(userId => {
         const user = state.peerInfo?.[userId];
         return user && user.username && user.username.toLowerCase().includes(query);
     });
-    
+
     if (matchingUsers.length > 0) {
         if (hasResults) html += '<div class="quick-switcher-divider"></div>';
         html += '<div class="quick-switcher-section">Kullanıcılar</div>';
@@ -12960,63 +12981,75 @@ function loadQuickSwitcherResults(query) {
             }
         });
     }
-    
+
     if (!hasResults) {
         html = '<div class="quick-switcher-empty">Sonuç bulunamadı</div>';
     }
-    
+
     resultsContainer.innerHTML = html;
 }
 
 function showKeyboardShortcutsModal() {
     const shortcuts = [
-        { category: 'Gezinme', shortcuts: [
-            { key: 'Ctrl+K', description: 'Hızlı geçiş menüsünü aç' },
-            { key: 'Ctrl+N', description: 'Yeni oluştur menüsünü aç' },
-            { key: 'Alt+↑/↓', description: 'Kanallar arasında gezin' },
-            { key: 'Alt+←/→', description: 'Sunucular arasında gezin' }
-        ]},
-        { category: 'Mesajlaşma', shortcuts: [
-            { key: 'Ctrl+Enter', description: 'Mesajı gönder' },
-            { key: 'Shift+Enter', description: 'Yeni satır ekle' },
-            { key: 'Ctrl+I', description: 'İtalik yap' },
-            { key: 'Ctrl+B', description: 'Kalın yap' },
-            { key: 'Ctrl+U', description: 'Altı çizili yap' }
-        ]},
-        { category: 'Arama', shortcuts: [
-            { key: 'Ctrl+F', description: 'Arama kutusuna odaklan' },
-            { key: 'Ctrl+Shift+F', description: 'Mevcut kanalda ara' },
-            { key: 'Ctrl+G', description: 'Mesaja git' },
-            { key: 'Ctrl+Shift+G', description: 'Sonraki okunmamışa git' }
-        ]},
-        { category: 'Sesli', shortcuts: [
-            { key: 'Ctrl+M', description: 'Mikrofonu aç/kapat' },
-            { key: 'Ctrl+Shift+M', description: 'Sesi kapat/aç' },
-            { key: 'Ctrl+Shift+S', description: 'Ekran paylaşımını başlat' },
-            { key: 'Ctrl+Shift+C', description: 'Kamera paylaşımını başlat' }
-        ]},
-        { category: 'Ayarlar', shortcuts: [
-            { key: 'Ctrl+,', description: 'Ayarları aç' },
-            { key: 'Ctrl+Shift+T', description: 'Tema ayarlarını aç' },
-            { key: 'Ctrl+Shift+N', description: 'Bildirim ayarlarını aç' },
-            { key: 'Ctrl+Shift+L', description: 'Koyu/açık mod değiştir' }
-        ]},
-        { category: 'Yardımcı', shortcuts: [
-            { key: 'Escape', description: 'Mevcut modalı kapat' },
-            { key: 'F1', description: 'Klavye kısayollarını göster' },
-            { key: 'F11', description: 'Tam ekran modu' }
-        ]}
+        {
+            category: 'Gezinme', shortcuts: [
+                { key: 'Ctrl+K', description: 'Hızlı geçiş menüsünü aç' },
+                { key: 'Ctrl+N', description: 'Yeni oluştur menüsünü aç' },
+                { key: 'Alt+↑/↓', description: 'Kanallar arasında gezin' },
+                { key: 'Alt+←/→', description: 'Sunucular arasında gezin' }
+            ]
+        },
+        {
+            category: 'Mesajlaşma', shortcuts: [
+                { key: 'Ctrl+Enter', description: 'Mesajı gönder' },
+                { key: 'Shift+Enter', description: 'Yeni satır ekle' },
+                { key: 'Ctrl+I', description: 'İtalik yap' },
+                { key: 'Ctrl+B', description: 'Kalın yap' },
+                { key: 'Ctrl+U', description: 'Altı çizili yap' }
+            ]
+        },
+        {
+            category: 'Arama', shortcuts: [
+                { key: 'Ctrl+F', description: 'Arama kutusuna odaklan' },
+                { key: 'Ctrl+Shift+F', description: 'Mevcut kanalda ara' },
+                { key: 'Ctrl+G', description: 'Mesaja git' },
+                { key: 'Ctrl+Shift+G', description: 'Sonraki okunmamışa git' }
+            ]
+        },
+        {
+            category: 'Sesli', shortcuts: [
+                { key: 'Ctrl+M', description: 'Mikrofonu aç/kapat' },
+                { key: 'Ctrl+Shift+M', description: 'Sesi kapat/aç' },
+                { key: 'Ctrl+Shift+S', description: 'Ekran paylaşımını başlat' },
+                { key: 'Ctrl+Shift+C', description: 'Kamera paylaşımını başlat' }
+            ]
+        },
+        {
+            category: 'Ayarlar', shortcuts: [
+                { key: 'Ctrl+,', description: 'Ayarları aç' },
+                { key: 'Ctrl+Shift+T', description: 'Tema ayarlarını aç' },
+                { key: 'Ctrl+Shift+N', description: 'Bildirim ayarlarını aç' },
+                { key: 'Ctrl+Shift+L', description: 'Koyu/açık mod değiştir' }
+            ]
+        },
+        {
+            category: 'Yardımcı', shortcuts: [
+                { key: 'Escape', description: 'Mevcut modalı kapat' },
+                { key: 'F1', description: 'Klavye kısayollarını göster' },
+                { key: 'F11', description: 'Tam ekran modu' }
+            ]
+        }
     ];
-    
+
     let html = '<div class="keyboard-shortcuts-list">';
-    
+
     shortcuts.forEach(category => {
         html += `
             <div class="shortcut-category">
                 <div class="shortcut-category-title">${category.category}</div>
                 <div class="shortcut-items">
         `;
-        
+
         category.shortcuts.forEach(shortcut => {
             html += `
                 <div class="shortcut-item">
@@ -13025,15 +13058,15 @@ function showKeyboardShortcutsModal() {
                 </div>
             `;
         });
-        
+
         html += `
                 </div>
             </div>
         `;
     });
-    
+
     html += '</div>';
-    
+
     showModal("Klavye Kısayolları", html, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -13068,7 +13101,7 @@ function addNewLineToMessage(e) {
         const start = input.selectionStart;
         const end = input.selectionEnd;
         const value = input.value;
-        
+
         input.value = value.substring(0, start) + '\n' + value.substring(end);
         input.selectionStart = input.selectionEnd = start + 1;
     }
@@ -13106,11 +13139,11 @@ function toggleCodeBlock() {
 function toggleMessageFormat(format) {
     const input = document.getElementById('message-input');
     if (!input) return;
-    
+
     const start = input.selectionStart;
     const end = input.selectionEnd;
     const selectedText = input.value.substring(start, end);
-    
+
     let formattedText = '';
     switch (format) {
         case 'italic':
@@ -13132,7 +13165,7 @@ function toggleMessageFormat(format) {
             formattedText = `\`\`\`\n${selectedText}\n\`\`\``;
             break;
     }
-    
+
     input.value = input.value.substring(0, start) + formattedText + input.value.substring(end);
     input.selectionStart = start + 1;
     input.selectionEnd = start + formattedText.length - 1;
@@ -13268,11 +13301,11 @@ function showVoiceRecordingModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Ses Kaydı", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
-    
+
     // Initialize tabs
     initializeVoiceRecordingTabs();
     loadVoiceRecordingContent();
@@ -13281,14 +13314,14 @@ function showVoiceRecordingModal() {
 function initializeVoiceRecordingTabs() {
     const tabs = document.querySelectorAll('.voice-recording-tab');
     const content = document.getElementById('voice-recording-content');
-    
+
     tabs.forEach(tab => {
         tab.addEventListener('click', () => {
             tabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            
+
             const tabName = tab.getAttribute('data-tab');
-            switch(tabName) {
+            switch (tabName) {
                 case 'record':
                     loadVoiceRecordingContent();
                     break;
@@ -13305,7 +13338,7 @@ function initializeVoiceRecordingTabs() {
 
 function loadVoiceRecordingContent() {
     const content = document.getElementById('voice-recording-content');
-    
+
     const html = `
         <div class="voice-recording-interface">
             <div class="recording-controls">
@@ -13357,7 +13390,7 @@ function loadVoiceRecordingContent() {
             </div>
         </div>
     `;
-    
+
     content.innerHTML = html;
 }
 
@@ -13365,16 +13398,16 @@ function loadVoiceHistoryContent() {
     const content = document.getElementById('voice-recording-content');
     const recordings = getVoiceRecordings();
     const calls = getCallHistory();
-    
+
     let html = '<div class="voice-history">';
-    
+
     // Recent recordings
     html += `
         <div class="history-section">
             <div class="history-title">🎙️ Son Kayıtlar</div>
             <div class="history-list">
     `;
-    
+
     if (recordings.length > 0) {
         recordings.slice(0, 5).forEach(recording => {
             html += `
@@ -13395,7 +13428,7 @@ function loadVoiceHistoryContent() {
     } else {
         html += '<div class="history-empty">Henüz kayıt yok</div>';
     }
-    
+
     html += `
             </div>
         </div>
@@ -13403,7 +13436,7 @@ function loadVoiceHistoryContent() {
             <div class="history-title">📞 Arama Geçmişi</div>
             <div class="history-list">
     `;
-    
+
     if (calls.length > 0) {
         calls.slice(0, 5).forEach(call => {
             const icon = call.type === 'incoming' ? '📞' : '📱';
@@ -13422,19 +13455,19 @@ function loadVoiceHistoryContent() {
     } else {
         html += '<div class="history-empty">Arama geçmişi yok</div>';
     }
-    
+
     html += `
             </div>
         </div>
     </div>`;
-    
+
     content.innerHTML = html;
 }
 
 function loadVoiceSettingsContent() {
     const content = document.getElementById('voice-recording-content');
     const settings = getVoiceRecordingSettings();
-    
+
     const html = `
         <div class="voice-settings">
             <div class="settings-group">
@@ -13505,7 +13538,7 @@ function loadVoiceSettingsContent() {
             </div>
         </div>
     `;
-    
+
     content.innerHTML = html;
 }
 
@@ -13518,42 +13551,42 @@ let isPaused = false;
 
 async function startVoiceRecording() {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
+        const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: getVoiceRecordingSettings().noiseSuppression,
                 sampleRate: getSampleRate()
             }
         });
-        
+
         const quality = document.getElementById('recording-quality')?.value || 'medium';
         const format = document.getElementById('recording-format')?.value || 'webm';
-        
+
         mediaRecorder = new MediaRecorder(stream, {
             mimeType: getMimeType(format)
         });
-        
+
         recordingChunks = [];
         recordingStartTime = Date.now();
         isPaused = false;
-        
+
         mediaRecorder.ondataavailable = (event) => {
             if (event.data.size > 0) {
                 recordingChunks.push(event.data);
             }
         };
-        
+
         mediaRecorder.onstop = () => {
             handleRecordingComplete();
         };
-        
+
         mediaRecorder.start(100); // Collect data every 100ms
-        
+
         // Update UI
         updateRecordingUI('recording');
         startRecordingTimer();
         startVisualizer(stream);
-        
+
         toast('Kayıt başlatıldı', 'success');
     } catch (error) {
         console.error('Recording error:', error);
@@ -13566,7 +13599,7 @@ function stopVoiceRecording() {
         mediaRecorder.stop();
         mediaRecorder.stream.getTracks().forEach(track => track.stop());
     }
-    
+
     stopRecordingTimer();
     stopVisualizer();
     updateRecordingUI('stopped');
@@ -13591,7 +13624,7 @@ function pauseVoiceRecording() {
 function handleRecordingComplete() {
     const blob = new Blob(recordingChunks, { type: getMimeType() });
     const duration = Date.now() - recordingStartTime;
-    
+
     // Save recording
     const recording = {
         id: generateId(),
@@ -13602,14 +13635,14 @@ function handleRecordingComplete() {
         quality: document.getElementById('recording-quality')?.value || 'medium',
         format: document.getElementById('recording-format')?.value || 'webm'
     };
-    
+
     saveVoiceRecording(recording);
-    
+
     // Auto send if enabled
     if (document.getElementById('auto-send')?.checked) {
         sendVoiceRecording(recording.id);
     }
-    
+
     toast('Kayıt tamamlandı', 'success');
     updateRecordingUI('ready');
 }
@@ -13619,8 +13652,8 @@ function updateRecordingUI(status) {
     const stopBtn = document.getElementById('stop-recording-btn');
     const pauseBtn = document.getElementById('pause-recording-btn');
     const statusEl = document.getElementById('recording-status');
-    
-    switch(status) {
+
+    switch (status) {
         case 'recording':
             startBtn.style.display = 'none';
             stopBtn.style.display = 'block';
@@ -13662,7 +13695,7 @@ function startRecordingTimer() {
         if (timerEl) {
             timerEl.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
         }
-        
+
         // Check max duration
         const maxDuration = getVoiceRecordingSettings().maxDuration * 60000;
         if (elapsed >= maxDuration) {
@@ -13689,28 +13722,28 @@ function startVisualizer(stream) {
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
     analyser = audioContext.createAnalyser();
     const source = audioContext.createMediaStreamSource(stream);
-    
+
     analyser.fftSize = 256;
     const bufferLength = analyser.frequencyBinCount;
     dataArray = new Uint8Array(bufferLength);
-    
+
     source.connect(analyser);
-    
+
     function draw() {
         animationId = requestAnimationFrame(draw);
-        
+
         analyser.getByteFrequencyData(dataArray);
-        
+
         const bars = document.querySelectorAll('.visualizer-bar');
         const step = Math.floor(dataArray.length / bars.length);
-        
+
         bars.forEach((bar, index) => {
             const value = dataArray[index * step];
             const height = Math.max(4, (value / 255) * 40);
             bar.style.height = height + 'px';
         });
     }
-    
+
     draw();
 }
 
@@ -13719,12 +13752,12 @@ function stopVisualizer() {
         cancelAnimationFrame(animationId);
         animationId = null;
     }
-    
+
     if (audioContext) {
         audioContext.close();
         audioContext = null;
     }
-    
+
     // Reset bars
     document.querySelectorAll('.visualizer-bar').forEach(bar => {
         bar.style.height = '4px';
@@ -13735,12 +13768,12 @@ function stopVisualizer() {
 function saveVoiceRecording(recording) {
     const recordings = getVoiceRecordings();
     recordings.push(recording);
-    
+
     // Keep only last 50 recordings
     if (recordings.length > 50) {
         recordings.shift();
     }
-    
+
     localStorage.setItem('scord_voice_recordings', JSON.stringify(recordings.map(r => ({
         id: r.id,
         name: r.name,
@@ -13765,7 +13798,7 @@ function getVoiceRecordings() {
 function playVoiceRecording(recordingId) {
     const recordings = getVoiceRecordings();
     const recording = recordings.find(r => r.id === recordingId);
-    
+
     if (recording && recording.dataUrl) {
         const audio = new Audio(recording.dataUrl);
         audio.play();
@@ -13776,7 +13809,7 @@ function playVoiceRecording(recordingId) {
 function sendVoiceRecording(recordingId) {
     const recordings = getVoiceRecordings();
     const recording = recordings.find(r => r.id === recordingId);
-    
+
     if (recording && recording.dataUrl) {
         // Send voice message to current channel
         const message = {
@@ -13786,7 +13819,7 @@ function sendVoiceRecording(recordingId) {
             duration: recording.duration,
             dataUrl: recording.dataUrl
         };
-        
+
         // This would integrate with the existing message sending system
         toast('Sesli mesaj gönderildi', 'success');
     }
@@ -13796,7 +13829,7 @@ function deleteVoiceRecording(recordingId) {
     if (confirm('Bu kaydı silmek istediğinizden emin misiniz?')) {
         const recordings = getVoiceRecordings();
         const index = recordings.findIndex(r => r.id === recordingId);
-        
+
         if (index !== -1) {
             recordings.splice(index, 1);
             localStorage.setItem('scord_voice_recordings', JSON.stringify(recordings));
@@ -13819,12 +13852,12 @@ function getCallHistory() {
 function saveCallToHistory(call) {
     const calls = getCallHistory();
     calls.push(call);
-    
+
     // Keep only last 100 calls
     if (calls.length > 100) {
         calls.shift();
     }
-    
+
     localStorage.setItem('scord_call_history', JSON.stringify(calls));
 }
 
@@ -13861,7 +13894,7 @@ function updateVoiceSetting(key, value) {
 
 function getSampleRate() {
     const quality = document.getElementById('recording-quality')?.value || 'medium';
-    switch(quality) {
+    switch (quality) {
         case 'low': return 8000;
         case 'medium': return 16000;
         case 'high': return 44100;
@@ -13870,7 +13903,7 @@ function getSampleRate() {
 }
 
 function getMimeType(format) {
-    switch(format) {
+    switch (format) {
         case 'webm': return 'audio/webm';
         case 'mp3': return 'audio/mpeg';
         case 'wav': return 'audio/wav';
@@ -14051,7 +14084,7 @@ function showScreenRecordingModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Ekran Kaydı", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -14069,59 +14102,59 @@ let isScreenRecordingPaused = false;
 async function startScreenRecording() {
     try {
         const constraints = await getRecordingConstraints();
-        
+
         // Get display media
         screenRecordingStream = await navigator.mediaDevices.getDisplayMedia(constraints);
-        
+
         // Add audio if requested
         if (document.getElementById('record-microphone')?.checked) {
-            const audioStream = await navigator.mediaDevices.getUserMedia({ 
+            const audioStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true
                 }
             });
-            
+
             // Add audio tracks to the main stream
             audioStream.getAudioTracks().forEach(track => {
                 screenRecordingStream.addTrack(track);
             });
         }
-        
+
         const format = document.getElementById('video-format')?.value || 'webm';
-        
+
         screenMediaRecorder = new MediaRecorder(screenRecordingStream, {
             mimeType: getVideoMimeType(format)
         });
-        
+
         screenRecordingChunks = [];
         screenRecordingStartTime = Date.now();
         isScreenRecordingPaused = false;
-        
+
         screenMediaRecorder.ondataavailable = (event) => {
             if (event.data.size > 0) {
                 screenRecordingChunks.push(event.data);
             }
         };
-        
+
         screenMediaRecorder.onstop = () => {
             handleScreenRecordingComplete();
         };
-        
+
         screenMediaRecorder.start(100); // Collect data every 100ms
-        
+
         // Show preview
         showRecordingPreview(screenRecordingStream);
-        
+
         // Update UI
         updateScreenRecordingUI('recording');
         startScreenRecordingTimer();
-        
+
         // Handle stream end
         screenRecordingStream.getVideoTracks()[0].addEventListener('ended', () => {
             stopScreenRecording();
         });
-        
+
         toast('Ekran kaydı başlatıldı', 'success');
     } catch (error) {
         console.error('Screen recording error:', error);
@@ -14133,12 +14166,12 @@ function stopScreenRecording() {
     if (screenMediaRecorder && screenMediaRecorder.state !== 'inactive') {
         screenMediaRecorder.stop();
     }
-    
+
     if (screenRecordingStream) {
         screenRecordingStream.getTracks().forEach(track => track.stop());
         screenRecordingStream = null;
     }
-    
+
     stopScreenRecordingTimer();
     hideRecordingPreview();
     updateScreenRecordingUI('stopped');
@@ -14165,9 +14198,9 @@ async function getRecordingConstraints() {
     const frameRate = parseInt(document.getElementById('frame-rate')?.value || '30');
     const recordScreen = document.getElementById('record-screen')?.checked !== false;
     const recordCamera = document.getElementById('record-camera')?.checked;
-    
+
     let videoConstraints = {};
-    
+
     if (recordScreen && selectedScreenSource === 'entire') {
         videoConstraints = {
             width: { ideal: getVideoWidth(quality) },
@@ -14182,7 +14215,7 @@ async function getRecordingConstraints() {
             frameRate: { ideal: frameRate }
         };
     }
-    
+
     const constraints = {
         video: recordScreen || recordCamera ? videoConstraints : false,
         audio: document.getElementById('record-system-audio')?.checked ? {
@@ -14190,12 +14223,12 @@ async function getRecordingConstraints() {
             noiseSuppression: true
         } : false
     };
-    
+
     return constraints;
 }
 
 function getVideoWidth(quality) {
-    switch(quality) {
+    switch (quality) {
         case '360p': return 640;
         case '720p': return 1280;
         case '1080p': return 1920;
@@ -14205,7 +14238,7 @@ function getVideoWidth(quality) {
 }
 
 function getVideoHeight(quality) {
-    switch(quality) {
+    switch (quality) {
         case '360p': return 360;
         case '720p': return 720;
         case '1080p': return 1080;
@@ -14215,7 +14248,7 @@ function getVideoHeight(quality) {
 }
 
 function getVideoMimeType(format) {
-    switch(format) {
+    switch (format) {
         case 'webm': return 'video/webm';
         case 'mp4': return 'video/mp4';
         case 'mov': return 'video/quicktime';
@@ -14226,7 +14259,7 @@ function getVideoMimeType(format) {
 function showRecordingPreview(stream) {
     const preview = document.getElementById('screen-recording-preview');
     const video = document.getElementById('preview-video');
-    
+
     if (preview && video) {
         preview.style.display = 'block';
         video.srcObject = stream;
@@ -14236,7 +14269,7 @@ function showRecordingPreview(stream) {
 function hideRecordingPreview() {
     const preview = document.getElementById('screen-recording-preview');
     const video = document.getElementById('preview-video');
-    
+
     if (preview && video) {
         preview.style.display = 'none';
         video.srcObject = null;
@@ -14248,8 +14281,8 @@ function updateScreenRecordingUI(status) {
     const stopBtn = document.getElementById('stop-screen-recording-btn');
     const pauseBtn = document.getElementById('pause-screen-recording-btn');
     const statusEl = document.getElementById('screen-recording-status');
-    
-    switch(status) {
+
+    switch (status) {
         case 'recording':
             startBtn.style.display = 'none';
             stopBtn.style.display = 'block';
@@ -14305,7 +14338,7 @@ function stopScreenRecordingTimer() {
 function handleScreenRecordingComplete() {
     const blob = new Blob(screenRecordingChunks, { type: getVideoMimeType() });
     const duration = Date.now() - screenRecordingStartTime;
-    
+
     // Save recording
     const recording = {
         id: generateId(),
@@ -14323,12 +14356,12 @@ function handleScreenRecordingComplete() {
             systemAudio: document.getElementById('record-system-audio')?.checked
         }
     };
-    
+
     saveScreenRecording(recording);
-    
+
     toast('Ekran kaydı tamamlandı', 'success');
     updateScreenRecordingUI('ready');
-    
+
     // Show download option
     showRecordingDownloadOptions(recording);
 }
@@ -14336,12 +14369,12 @@ function handleScreenRecordingComplete() {
 function saveScreenRecording(recording) {
     const recordings = getScreenRecordings();
     recordings.push(recording);
-    
+
     // Keep only last 20 recordings
     if (recordings.length > 20) {
         recordings.shift();
     }
-    
+
     localStorage.setItem('scord_screen_recordings', JSON.stringify(recordings.map(r => ({
         id: r.id,
         name: r.name,
@@ -14400,7 +14433,7 @@ function showRecordingDownloadOptions(recording) {
             </div>
         </div>
     `;
-    
+
     showModal("Kayıt Seçenekleri", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -14409,7 +14442,7 @@ function showRecordingDownloadOptions(recording) {
 function downloadScreenRecording(recordingId) {
     const recordings = getScreenRecordings();
     const recording = recordings.find(r => r.id === recordingId);
-    
+
     if (recording && recording.dataUrl) {
         const a = document.createElement('a');
         a.href = recording.dataUrl;
@@ -14417,7 +14450,7 @@ function downloadScreenRecording(recordingId) {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        
+
         toast('Kayıt indiriliyor', 'success');
     }
 }
@@ -14425,7 +14458,7 @@ function downloadScreenRecording(recordingId) {
 function shareScreenRecording(recordingId) {
     const recordings = getScreenRecordings();
     const recording = recordings.find(r => r.id === recordingId);
-    
+
     if (recording && recording.dataUrl) {
         // Share to current channel
         const message = {
@@ -14437,7 +14470,7 @@ function shareScreenRecording(recordingId) {
             format: recording.format,
             dataUrl: recording.dataUrl
         };
-        
+
         // This would integrate with the existing message sending system
         toast('Ekran kaydı paylaşıldı', 'success');
     }
@@ -14446,7 +14479,7 @@ function shareScreenRecording(recordingId) {
 function playScreenRecording(recordingId) {
     const recordings = getScreenRecordings();
     const recording = recordings.find(r => r.id === recordingId);
-    
+
     if (recording && recording.dataUrl) {
         // Open video in new tab or modal
         const videoWindow = window.open('', '_blank');
@@ -14466,7 +14499,7 @@ function playScreenRecording(recordingId) {
                 </body>
             </html>
         `);
-        
+
         toast('Kayıt oynatılıyor', 'info');
     }
 }
@@ -14491,14 +14524,14 @@ function updateScreenSelectionUI(selection) {
     document.querySelectorAll('.screen-option').forEach(option => {
         option.classList.remove('selected');
     });
-    
+
     const selectedOption = Array.from(document.querySelectorAll('.screen-option')).find(option => {
         const preview = option.querySelector('.screen-preview');
-        return preview.classList.contains(`${selection}-screen`) || 
-               preview.classList.contains(`${selection}-window`) || 
-               preview.classList.contains(`${selection}-area`);
+        return preview.classList.contains(`${selection}-screen`) ||
+            preview.classList.contains(`${selection}-window`) ||
+            preview.classList.contains(`${selection}-area`);
     });
-    
+
     if (selectedOption) {
         selectedOption.classList.add('selected');
     }
@@ -14549,11 +14582,11 @@ function showFileSharingModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Dosya Paylaşımı", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
-    
+
     // Initialize file upload
     initializeFileUpload();
     loadRecentFiles();
@@ -14563,36 +14596,36 @@ function initializeFileUpload() {
     const uploadZone = document.getElementById('upload-zone');
     const fileInput = document.getElementById('file-input');
     const uploadArea = document.getElementById('file-upload-area');
-    
+
     if (!uploadZone || !fileInput || !uploadArea) return;
-    
+
     // Click to upload
     uploadZone.addEventListener('click', () => {
         fileInput.click();
     });
-    
+
     // File selection
     fileInput.addEventListener('change', (e) => {
         handleFileSelection(e.target.files);
     });
-    
+
     // Drag and drop
     uploadArea.addEventListener('dragover', (e) => {
         e.preventDefault();
         uploadArea.classList.add('drag-over');
     });
-    
+
     uploadArea.addEventListener('dragleave', (e) => {
         e.preventDefault();
         uploadArea.classList.remove('drag-over');
     });
-    
+
     uploadArea.addEventListener('drop', (e) => {
         e.preventDefault();
         uploadArea.classList.remove('drag-over');
         handleFileSelection(e.dataTransfer.files);
     });
-    
+
     // Paste support
     document.addEventListener('paste', (e) => {
         const files = e.clipboardData?.files;
@@ -14606,23 +14639,23 @@ let selectedFiles = [];
 
 function handleFileSelection(files) {
     selectedFiles = Array.from(files);
-    
+
     if (selectedFiles.length === 0) return;
-    
+
     // Check file size limits
     const maxSize = 100 * 1024 * 1024; // 100MB
     const oversizedFiles = selectedFiles.filter(file => file.size > maxSize);
-    
+
     if (oversizedFiles.length > 0) {
         toast(`${oversizedFiles.length} dosya boyut limitini aşıyor (max 100MB)`, 'error');
         selectedFiles = selectedFiles.filter(file => file.size <= maxSize);
     }
-    
+
     if (selectedFiles.length === 0) return;
-    
+
     // Show preview section
     document.getElementById('file-preview-section').style.display = 'block';
-    
+
     // Generate previews
     generateFilePreviews();
 }
@@ -14630,16 +14663,16 @@ function handleFileSelection(files) {
 function generateFilePreviews() {
     const previewsContainer = document.getElementById('file-previews');
     if (!previewsContainer) return;
-    
+
     let html = '';
-    
+
     selectedFiles.forEach((file, index) => {
         const preview = generateFilePreview(file, index);
         html += preview;
     });
-    
+
     previewsContainer.innerHTML = html;
-    
+
     // Generate actual previews for images
     selectedFiles.forEach((file, index) => {
         if (file.type.startsWith('image/')) {
@@ -14658,7 +14691,7 @@ function generateFilePreview(file, index) {
     const fileType = getFileType(file);
     const fileSize = formatFileSize(file.size);
     const fileIcon = getFileIcon(file);
-    
+
     return `
         <div class="file-preview-item" data-index="${index}">
             <div class="file-preview-content">
@@ -14784,7 +14817,7 @@ function formatFileSize(bytes) {
 
 function removeFile(index) {
     selectedFiles = selectedFiles.filter((_, i) => i !== index);
-    
+
     if (selectedFiles.length === 0) {
         clearFileSelection();
     } else {
@@ -14800,9 +14833,9 @@ function clearFileSelection() {
 
 async function uploadFiles() {
     if (selectedFiles.length === 0) return;
-    
+
     const uploadPromises = selectedFiles.map((file, index) => uploadSingleFile(file, index));
-    
+
     try {
         await Promise.all(uploadPromises);
         toast('Dosyalar başarıyla yüklendi', 'success');
@@ -14820,23 +14853,23 @@ async function uploadSingleFile(file, index) {
         const progressContainer = document.getElementById(`file-progress-${index}`);
         const progressFill = progressContainer?.querySelector('.progress-fill');
         const progressText = progressContainer?.querySelector('.progress-text');
-        
+
         if (progressContainer) {
             progressContainer.style.display = 'block';
         }
-        
+
         // Simulate upload progress
         let progress = 0;
         const interval = setInterval(() => {
             progress += Math.random() * 30;
             if (progress > 100) progress = 100;
-            
+
             if (progressFill) progressFill.style.width = progress + '%';
             if (progressText) progressText.textContent = Math.round(progress) + '%';
-            
+
             if (progress >= 100) {
                 clearInterval(interval);
-                
+
                 // Save file to storage
                 saveUploadedFile(file);
                 resolve();
@@ -14856,15 +14889,15 @@ function saveUploadedFile(file) {
             timestamp: Date.now(),
             dataUrl: e.target.result
         };
-        
+
         const uploadedFiles = getUploadedFiles();
         uploadedFiles.unshift(uploadedFile);
-        
+
         // Keep only last 50 files
         if (uploadedFiles.length > 50) {
             uploadedFiles.pop();
         }
-        
+
         localStorage.setItem('scord_uploaded_files', JSON.stringify(uploadedFiles));
     };
     reader.readAsDataURL(file);
@@ -14883,14 +14916,14 @@ function getUploadedFiles() {
 function loadRecentFiles() {
     const recentFilesList = document.getElementById('recent-files-list');
     if (!recentFilesList) return;
-    
+
     const uploadedFiles = getUploadedFiles();
-    
+
     if (uploadedFiles.length === 0) {
         recentFilesList.innerHTML = '<div class="recent-files-empty">Henüz dosya yüklenmedi</div>';
         return;
     }
-    
+
     let html = '';
     uploadedFiles.slice(0, 10).forEach(file => {
         html += `
@@ -14912,16 +14945,16 @@ function loadRecentFiles() {
             </div>
         `;
     });
-    
+
     recentFilesList.innerHTML = html;
 }
 
 function downloadFile(fileId, event) {
     if (event) event.stopPropagation();
-    
+
     const uploadedFiles = getUploadedFiles();
     const file = uploadedFiles.find(f => f.id === fileId);
-    
+
     if (file && file.dataUrl) {
         const a = document.createElement('a');
         a.href = file.dataUrl;
@@ -14929,17 +14962,17 @@ function downloadFile(fileId, event) {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        
+
         toast('Dosya indiriliyor', 'success');
     }
 }
 
 function shareFile(fileId, event) {
     if (event) event.stopPropagation();
-    
+
     const uploadedFiles = getUploadedFiles();
     const file = uploadedFiles.find(f => f.id === fileId);
-    
+
     if (file) {
         // Share to current channel
         const message = {
@@ -14950,7 +14983,7 @@ function shareFile(fileId, event) {
             size: file.size,
             dataUrl: file.dataUrl
         };
-        
+
         // This would integrate with the existing message sending system
         toast('Dosya paylaşıldı', 'success');
     }
@@ -14958,11 +14991,11 @@ function shareFile(fileId, event) {
 
 function deleteFile(fileId, event) {
     if (event) event.stopPropagation();
-    
+
     if (confirm('Bu dosyayı silmek istediğinizden emin misiniz?')) {
         const uploadedFiles = getUploadedFiles();
         const index = uploadedFiles.findIndex(f => f.id === fileId);
-        
+
         if (index !== -1) {
             uploadedFiles.splice(index, 1);
             localStorage.setItem('scord_uploaded_files', JSON.stringify(uploadedFiles));
@@ -14976,11 +15009,11 @@ function deleteFile(fileId, event) {
 function showFileViewer(fileId) {
     const uploadedFiles = getUploadedFiles();
     const file = uploadedFiles.find(f => f.id === fileId);
-    
+
     if (!file) return;
-    
+
     let content = '';
-    
+
     if (file.type.startsWith('image/')) {
         content = `
             <div class="file-viewer-image">
@@ -15018,7 +15051,7 @@ function showFileViewer(fileId) {
             </div>
         `;
     }
-    
+
     const modalContent = `
         <div class="file-viewer">
             <div class="file-viewer-header">
@@ -15033,7 +15066,7 @@ function showFileViewer(fileId) {
             </div>
         </div>
     `;
-    
+
     showModal("Dosya Görüntüleyici", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -15091,9 +15124,9 @@ function showGifPickerModal() {
             </div>
         </div>
     `;
-    
+
     showModal("GIF Seçici", modalContent, '', true); // No footer, closable with Escape
-    
+
     // Initialize GIF picker
     initializeGifPicker();
     loadTrendingGifs();
@@ -15102,7 +15135,7 @@ function showGifPickerModal() {
 function initializeGifPicker() {
     const searchInput = document.getElementById('gif-search-input');
     const categoryTabs = document.querySelectorAll('.category-tab');
-    
+
     // Search on Enter
     if (searchInput) {
         searchInput.addEventListener('keypress', (e) => {
@@ -15110,7 +15143,7 @@ function initializeGifPicker() {
                 searchGifs();
             }
         });
-        
+
         // Search on input with debounce
         let searchTimeout;
         searchInput.addEventListener('input', () => {
@@ -15122,18 +15155,18 @@ function initializeGifPicker() {
             }, 500);
         });
     }
-    
+
     // Category tabs
     categoryTabs.forEach(tab => {
         tab.addEventListener('click', () => {
             categoryTabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            
+
             const category = tab.getAttribute('data-category');
             loadCategoryGifs(category);
         });
     });
-    
+
     // Initialize selected GIF
     state.selectedGif = null;
 }
@@ -15142,7 +15175,7 @@ let selectedGif = null;
 
 function loadTrendingGifs() {
     showGifLoading();
-    
+
     // Simulate API call with mock data
     setTimeout(() => {
         const trendingGifs = getMockGifs('trending');
@@ -15153,14 +15186,14 @@ function loadTrendingGifs() {
 function searchGifs() {
     const searchInput = document.getElementById('gif-search-input');
     const query = searchInput?.value.trim();
-    
+
     if (!query) {
         loadTrendingGifs();
         return;
     }
-    
+
     showGifLoading();
-    
+
     // Simulate API call with mock data
     setTimeout(() => {
         const searchResults = getMockGifs('search', query);
@@ -15170,7 +15203,7 @@ function searchGifs() {
 
 function loadCategoryGifs(category) {
     showGifLoading();
-    
+
     // Simulate API call with mock data
     setTimeout(() => {
         const categoryGifs = getMockGifs(category);
@@ -15182,7 +15215,7 @@ function showGifLoading() {
     const loading = document.getElementById('gif-loading');
     const grid = document.getElementById('gif-grid');
     const empty = document.getElementById('gif-empty');
-    
+
     if (loading) loading.style.display = 'flex';
     if (grid) grid.style.display = 'none';
     if (empty) empty.style.display = 'none';
@@ -15192,20 +15225,20 @@ function displayGifResults(gifs) {
     const loading = document.getElementById('gif-loading');
     const grid = document.getElementById('gif-grid');
     const empty = document.getElementById('gif-empty');
-    
+
     if (loading) loading.style.display = 'none';
-    
+
     if (gifs.length === 0) {
         if (grid) grid.style.display = 'none';
         if (empty) empty.style.display = 'flex';
         return;
     }
-    
+
     if (empty) empty.style.display = 'none';
     if (grid) {
         grid.style.display = 'grid';
         grid.innerHTML = '';
-        
+
         gifs.forEach(gif => {
             const gifElement = createGifElement(gif);
             grid.appendChild(gifElement);
@@ -15217,43 +15250,43 @@ function createGifElement(gif) {
     const div = document.createElement('div');
     div.className = 'gif-item';
     div.setAttribute('data-gif-id', gif.id);
-    
+
     const img = document.createElement('img');
     img.src = gif.thumbnail;
     img.alt = gif.title;
     img.loading = 'lazy';
-    
+
     // Handle click
     div.addEventListener('click', () => selectGif(gif));
-    
+
     // Handle hover preview
     div.addEventListener('mouseenter', () => showGifPreview(gif));
     div.addEventListener('mouseleave', hideGifPreview);
-    
+
     div.appendChild(img);
     return div;
 }
 
 function selectGif(gif) {
     selectedGif = gif;
-    
+
     // Update UI
     document.querySelectorAll('.gif-item').forEach(item => {
         item.classList.remove('selected');
     });
-    
+
     const selectedItem = document.querySelector(`[data-gif-id="${gif.id}"]`);
     if (selectedItem) {
         selectedItem.classList.add('selected');
     }
-    
+
     // Enable send button
     const sendBtn = document.getElementById('send-gif-btn');
     if (sendBtn) {
         sendBtn.disabled = false;
         sendBtn.textContent = 'GIF Gönder';
     }
-    
+
     // Show preview
     showGifPreview(gif);
 }
@@ -15263,7 +15296,7 @@ function showGifPreview(gif) {
     const previewImage = document.getElementById('preview-image');
     const previewTitle = document.getElementById('preview-title');
     const previewDimensions = document.getElementById('preview-dimensions');
-    
+
     if (preview && previewImage && previewTitle && previewDimensions) {
         preview.style.display = 'flex';
         previewImage.src = gif.url;
@@ -15278,7 +15311,7 @@ function hideGifPreview() {
         // Keep preview if a GIF is selected
         return;
     }
-    
+
     if (preview) {
         preview.style.display = 'none';
     }
@@ -15286,7 +15319,7 @@ function hideGifPreview() {
 
 function sendSelectedGif() {
     if (!selectedGif) return;
-    
+
     // Send GIF to current channel
     const message = {
         type: 'gif',
@@ -15297,33 +15330,33 @@ function sendSelectedGif() {
         width: selectedGif.width,
         height: selectedGif.height
     };
-    
+
     // This would integrate with the existing message sending system
     toast('GIF gönderildi', 'success');
-    
+
     // Save to recent GIFs
     saveRecentGif(selectedGif);
-    
+
     hideModal();
 }
 
 function saveRecentGif(gif) {
     const recentGifs = getRecentGifs();
-    
+
     // Remove if already exists
     const index = recentGifs.findIndex(g => g.id === gif.id);
     if (index !== -1) {
         recentGifs.splice(index, 1);
     }
-    
+
     // Add to beginning
     recentGifs.unshift(gif);
-    
+
     // Keep only last 20
     if (recentGifs.length > 20) {
         recentGifs.pop();
     }
-    
+
     localStorage.setItem('scord_recent_gifs', JSON.stringify(recentGifs));
 }
 
@@ -15346,35 +15379,35 @@ function getMockGifs(category, query = '') {
         { id: 't3', title: 'Yes!', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
         { id: 't4', title: 'Facepalm', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
         { id: 't5', title: 'Celebration', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
-        
+
         // Reactions
         { id: 'r1', title: 'Laughing', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
         { id: 'r2', title: 'Crying', url: 'https://media.giphy.com/media/l41lGvinE5Vw/giphy.gif', thumbnail: 'https://media.giphy.com/media/l41lGvinE5Vw/giphy.gif', width: 480, height: 270 },
         { id: 'r3', title: 'Angry', url: 'https://media.giphy.com/media/3o6fJgOdwvUIa3dGxK/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6fJgOdwvUIa3dGxK/giphy.gif', width: 480, height: 270 },
         { id: 'r4', title: 'Love', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
         { id: 'r5', title: 'Wow', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
-        
+
         // Memes
         { id: 'm1', title: 'Distracted Boyfriend', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
         { id: 'm2', title: 'This is Fine', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
         { id: 'm3', title: 'Change My Mind', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
         { id: 'm4', title: 'Drake Hotline Bling', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
         { id: 'm5', title: 'Two Buttons', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
-        
+
         // Gaming
         { id: 'g1', title: 'Gaming Moment', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
         { id: 'g2', title: 'Victory Royale', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
         { id: 'g3', title: 'Rage Quit', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
         { id: 'g4', title: 'Epic Win', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
         { id: 'g5', title: 'GG WP', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
-        
+
         // Anime
         { id: 'a1', title: 'Anime Dance', url: 'https://media.giphy.com/media/3o7TKTD1NUq1q7CB5C/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7TKTD1NUq1q7CB5C/giphy.gif', width: 480, height: 270 },
         { id: 'a2', title: 'Sweat Drop', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
         { id: 'a3', title: 'Anime Cry', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
         { id: 'a4', title: 'Power Up', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
         { id: 'a5', title: 'Anime Fight', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
-        
+
         // Cute
         { id: 'c1', title: 'Cute Cat', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
         { id: 'c2', title: 'Puppy Love', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
@@ -15382,7 +15415,7 @@ function getMockGifs(category, query = '') {
         { id: 'c4', title: 'Cute Bunny', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
         { id: 'c5', title: 'Happy Puppy', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 }
     ];
-    
+
     // Filter by category
     let filteredGifs = [];
     switch (category) {
@@ -15406,14 +15439,14 @@ function getMockGifs(category, query = '') {
             break;
         case 'search':
             // Simple search simulation
-            filteredGifs = mockGifs.filter(g => 
+            filteredGifs = mockGifs.filter(g =>
                 g.title.toLowerCase().includes(query.toLowerCase())
             );
             break;
         default:
             filteredGifs = mockGifs;
     }
-    
+
     // Shuffle and return subset
     return filteredGifs.sort(() => Math.random() - 0.5).slice(0, 12);
 }
@@ -15436,18 +15469,18 @@ function createGifMessage(gif) {
 // Recent GIFs modal
 function showRecentGifsModal() {
     const recentGifs = getRecentGifs();
-    
+
     if (recentGifs.length === 0) {
         toast('Henüz GIF kullanılmadı', 'info');
         return;
     }
-    
+
     let content = `
         <div class="recent-gifs-modal">
             <div class="recent-gifs-title">🎬 Son GIF'ler</div>
             <div class="recent-gifs-grid">
     `;
-    
+
     recentGifs.forEach(gif => {
         content += `
             <div class="recent-gif-item" onclick="shareGif('${gif.id}')">
@@ -15459,12 +15492,12 @@ function showRecentGifsModal() {
             </div>
         `;
     });
-    
+
     content += `
             </div>
         </div>
     `;
-    
+
     showModal("Son GIF'ler", content, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -15473,7 +15506,7 @@ function showRecentGifsModal() {
 function shareGif(gifId) {
     const recentGifs = getRecentGifs();
     const gif = recentGifs.find(g => g.id === gifId);
-    
+
     if (gif) {
         selectGif(gif);
         sendSelectedGif();
@@ -15581,9 +15614,9 @@ function showGameInviteModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Oyun Daveti", modalContent, '', true);
-    
+
     // Initialize game invite system
     initializeGameInvite();
     loadGames();
@@ -15592,25 +15625,25 @@ function showGameInviteModal() {
 function initializeGameInvite() {
     const searchInput = document.getElementById('game-search-input');
     const categoryTabs = document.querySelectorAll('.category-tab');
-    
+
     // Search functionality
     if (searchInput) {
         searchInput.addEventListener('input', () => {
             filterGames();
         });
     }
-    
+
     // Category tabs
     categoryTabs.forEach(tab => {
         tab.addEventListener('click', () => {
             categoryTabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
-            
+
             const category = tab.getAttribute('data-category');
             filterGamesByCategory(category);
         });
     });
-    
+
     // Initialize selected game
     state.selectedGame = null;
 }
@@ -15762,12 +15795,12 @@ function getMockGames() {
 function displayGames(games) {
     const gameGrid = document.getElementById('game-grid');
     if (!gameGrid) return;
-    
+
     let html = '';
     games.forEach(game => {
         html += createGameElement(game);
     });
-    
+
     gameGrid.innerHTML = html;
 }
 
@@ -15787,30 +15820,30 @@ function createGameElement(game) {
 function selectGame(gameId) {
     const games = getMockGames();
     const game = games.find(g => g.id === gameId);
-    
+
     if (!game) return;
-    
+
     selectedGame = game;
-    
+
     // Update UI
     document.querySelectorAll('.game-item').forEach(item => {
         item.classList.remove('selected');
     });
-    
+
     const selectedItem = document.querySelector(`[data-game-id="${gameId}"]`);
     if (selectedItem) {
         selectedItem.classList.add('selected');
     }
-    
+
     // Show invite details
     showInviteDetails(game);
-    
+
     // Enable send button
     const sendBtn = document.getElementById('send-invite-btn');
     if (sendBtn) {
         sendBtn.disabled = false;
     }
-    
+
     // Update preview
     updateGamePreview(game);
 }
@@ -15821,18 +15854,18 @@ function showInviteDetails(game) {
     const selectedGameGenre = document.getElementById('selected-game-genre');
     const selectedGamePlayers = document.getElementById('selected-game-players');
     const selectedGameImage = document.getElementById('selected-game-image');
-    
+
     if (inviteDetails) {
         inviteDetails.style.display = 'block';
     }
-    
+
     if (selectedGameTitle) selectedGameTitle.textContent = game.name;
     if (selectedGameGenre) selectedGameGenre.textContent = game.genre;
     if (selectedGamePlayers) selectedGamePlayers.textContent = game.players;
     if (selectedGameImage) {
         selectedGameImage.innerHTML = `<div class="game-icon-large">${game.icon}</div>`;
     }
-    
+
     // Set default invite message
     const inviteMessage = document.getElementById('invite-message');
     if (inviteMessage) {
@@ -15844,13 +15877,13 @@ function updateGamePreview(game) {
     const preview = document.getElementById('selected-game-preview');
     const previewTitle = document.getElementById('preview-game-title');
     const previewMode = document.getElementById('preview-game-mode');
-    
+
     if (preview) {
         preview.style.display = 'block';
     }
-    
+
     if (previewTitle) previewTitle.textContent = game.name;
-    
+
     // Update mode based on settings
     updateGameModePreview();
 }
@@ -15859,10 +15892,10 @@ function updateGameModePreview() {
     const previewMode = document.getElementById('preview-game-mode');
     const gameMode = document.getElementById('game-mode')?.value || 'casual';
     const playerLimit = document.getElementById('player-limit')?.value || '2';
-    
+
     if (previewMode) {
-        const modeText = gameMode === 'casual' ? 'Gayriresmi' : 
-                        gameMode === 'ranked' ? 'Sıralı' : 'Turnuva';
+        const modeText = gameMode === 'casual' ? 'Gayriresmi' :
+            gameMode === 'ranked' ? 'Sıralı' : 'Turnuva';
         const playerText = playerLimit === 'unlimited' ? 'Sınırsız' : `${playerLimit} Oyuncu`;
         previewMode.textContent = `${modeText} • ${playerText}`;
     }
@@ -15879,36 +15912,36 @@ function filterGames() {
     const searchInput = document.getElementById('game-search-input');
     const query = searchInput?.value.toLowerCase() || '';
     const games = getMockGames();
-    
-    const filtered = games.filter(game => 
+
+    const filtered = games.filter(game =>
         game.name.toLowerCase().includes(query) ||
         game.genre.toLowerCase().includes(query) ||
         game.description.toLowerCase().includes(query)
     );
-    
+
     displayGames(filtered);
 }
 
 function filterGamesByCategory(category) {
     const games = getMockGames();
-    
+
     let filtered = games;
     if (category !== 'all') {
         filtered = games.filter(game => game.category === category);
     }
-    
+
     displayGames(filtered);
 }
 
 function sendGameInvite() {
     if (!selectedGame) return;
-    
+
     const gameMode = document.getElementById('game-mode')?.value || 'casual';
     const playerLimit = document.getElementById('player-limit')?.value || '2';
     const privateGame = document.getElementById('private-game')?.checked || false;
     const voiceChat = document.getElementById('voice-chat')?.checked || false;
     const inviteMessage = document.getElementById('invite-message')?.value || '';
-    
+
     // Create invite
     const invite = {
         id: generateId(),
@@ -15925,10 +15958,10 @@ function sendGameInvite() {
         status: 'pending',
         hostId: state.peerId
     };
-    
+
     // Save invite
     saveGameInvite(invite);
-    
+
     // Send to current channel
     const message = {
         type: 'game-invite',
@@ -15940,22 +15973,22 @@ function sendGameInvite() {
         message: inviteMessage,
         timestamp: invite.timestamp
     };
-    
+
     // This would integrate with the existing message sending system
     toast('Oyun daveti gönderildi', 'success');
-    
+
     hideModal();
 }
 
 function saveGameInvite(invite) {
     const invites = getGameInvites();
     invites.push(invite);
-    
+
     // Keep only last 50 invites
     if (invites.length > 50) {
         invites.shift();
     }
-    
+
     localStorage.setItem('scord_game_invites', JSON.stringify(invites));
 }
 
@@ -15995,18 +16028,18 @@ function createGameInviteMessage(invite) {
 function acceptGameInvite(inviteId) {
     const invites = getGameInvites();
     const invite = invites.find(i => i.id === inviteId);
-    
+
     if (invite) {
         // Update invite status
         invite.status = 'accepted';
         invite.acceptedAt = Date.now();
         invite.acceptedById = state.peerId;
-        
+
         localStorage.setItem('scord_game_invites', JSON.stringify(invites));
-        
+
         // Launch game or join session
         toast(`${invite.gameName} daveti kabul edildi!`, 'success');
-        
+
         // This would integrate with actual game launching
         setTimeout(() => {
             toast('Oyun başlatılıyor...', 'info');
@@ -16017,15 +16050,15 @@ function acceptGameInvite(inviteId) {
 function declineGameInvite(inviteId) {
     const invites = getGameInvites();
     const invite = invites.find(i => i.id === inviteId);
-    
+
     if (invite) {
         // Update invite status
         invite.status = 'declined';
         invite.declinedAt = Date.now();
         invite.declinedById = state.peerId;
-        
+
         localStorage.setItem('scord_game_invites', JSON.stringify(invites));
-        
+
         toast('Oyun daveti reddedildi', 'info');
     }
 }
@@ -16033,22 +16066,22 @@ function declineGameInvite(inviteId) {
 // Recent game invites modal
 function showRecentGameInvitesModal() {
     const invites = getGameInvites();
-    
+
     if (invites.length === 0) {
         toast('Henüz oyun daveti yok', 'info');
         return;
     }
-    
+
     let content = `
         <div class="recent-game-invites-modal">
             <div class="recent-invites-title">🎮 Son Oyun Davetleri</div>
             <div class="recent-invites-list">
     `;
-    
+
     invites.slice(0, 10).forEach(invite => {
-        const statusIcon = invite.status === 'accepted' ? '✅' : 
-                          invite.status === 'declined' ? '❌' : '⏳';
-        
+        const statusIcon = invite.status === 'accepted' ? '✅' :
+            invite.status === 'declined' ? '❌' : '⏳';
+
         content += `
             <div class="recent-invite-item">
                 <div class="invite-game-icon">${invite.gameIcon}</div>
@@ -16061,12 +16094,12 @@ function showRecentGameInvitesModal() {
             </div>
         `;
     });
-    
+
     content += `
             </div>
         </div>
     `;
-    
+
     showModal("Son Oyun Davetleri", content, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -16117,11 +16150,11 @@ function showCalendarModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Takvim", modalContent, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
-    
+
     // Initialize calendar
     initializeCalendar();
 }
@@ -16137,42 +16170,42 @@ function initializeCalendar() {
 function renderCalendar() {
     const year = currentMonth.getFullYear();
     const month = currentMonth.getMonth();
-    
+
     // Update month display
-    const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 
-                       'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+    const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+        'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
     document.getElementById('current-month').textContent = `${monthNames[month]} ${year}`;
-    
+
     // Get first day of month and number of days
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
     const daysInMonth = lastDay.getDate();
-    
+
     // Adjust for Monday as first day (0 = Monday, 6 = Sunday)
     let startDay = firstDay.getDay() - 1;
     if (startDay === -1) startDay = 6;
-    
+
     const calendarDays = document.getElementById('calendar-days');
     if (!calendarDays) return;
-    
+
     let html = '';
-    
+
     // Add empty cells for days before month starts
     for (let i = 0; i < startDay; i++) {
         html += '<div class="calendar-day empty"></div>';
     }
-    
+
     // Add days of the month
     const events = getEvents();
     const today = new Date();
-    
+
     for (let day = 1; day <= daysInMonth; day++) {
         const date = new Date(year, month, day);
         const dateStr = formatDateForStorage(date);
         const dayEvents = events.filter(event => event.date === dateStr);
         const isToday = date.toDateString() === today.toDateString();
         const isSelected = date.toDateString() === selectedDate.toDateString();
-        
+
         html += `
             <div class="calendar-day ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''} ${dayEvents.length > 0 ? 'has-events' : ''}" 
                  onclick="selectDate(${year}, ${month}, ${day})">
@@ -16181,7 +16214,7 @@ function renderCalendar() {
             </div>
         `;
     }
-    
+
     calendarDays.innerHTML = html;
 }
 
@@ -16206,12 +16239,12 @@ function selectDate(year, month, day) {
 function showDayEvents() {
     const dateStr = formatDateForStorage(selectedDate);
     const events = getEvents().filter(event => event.date === dateStr);
-    
+
     if (events.length === 0) {
         toast('Bu gün için etkinlik yok', 'info');
         return;
     }
-    
+
     let content = `
         <div class="day-events-modal">
             <div class="day-events-header">
@@ -16219,7 +16252,7 @@ function showDayEvents() {
             </div>
             <div class="day-events-list">
     `;
-    
+
     events.forEach(event => {
         content += `
             <div class="event-item">
@@ -16236,12 +16269,12 @@ function showDayEvents() {
             </div>
         `;
     });
-    
+
     content += `
             </div>
         </div>
     `;
-    
+
     showModal("Günlük Etkinlikler", content, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -16307,7 +16340,7 @@ function showCreateEventModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Etkinlik Oluştur", modalContent, '', true);
 }
 
@@ -16319,12 +16352,12 @@ function createEvent() {
     const type = document.getElementById('event-type')?.value;
     const reminder = document.getElementById('event-reminder')?.checked || false;
     const recurring = document.getElementById('event-recurring')?.checked || false;
-    
+
     if (!title || !date || !time) {
         toast('Lütfen zorunlu alanları doldurun', 'error');
         return;
     }
-    
+
     const event = {
         id: generateId(),
         title: title,
@@ -16338,13 +16371,13 @@ function createEvent() {
         createdAt: Date.now(),
         participants: []
     };
-    
+
     // Save event
     saveEvent(event);
-    
+
     // Show success message
     toast('Etkinlik oluşturuldu', 'success');
-    
+
     // Close modal and refresh calendar
     hideModal();
     renderCalendar();
@@ -16354,19 +16387,19 @@ function createEvent() {
 function saveEvent(event) {
     const events = getEvents();
     events.push(event);
-    
+
     // Sort events by date and time
     events.sort((a, b) => {
         const dateA = new Date(a.date + ' ' + a.time);
         const dateB = new Date(b.date + ' ' + b.time);
         return dateA - dateB;
     });
-    
+
     // Keep only last 100 events
     if (events.length > 100) {
         events.splice(0, events.length - 100);
     }
-    
+
     localStorage.setItem('scord_events', JSON.stringify(events));
 }
 
@@ -16384,28 +16417,28 @@ function loadUpcomingEvents() {
     const events = getEvents();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const upcomingEvents = events.filter(event => {
         const eventDate = new Date(event.date);
         return eventDate >= today;
     }).slice(0, 5);
-    
+
     const container = document.getElementById('upcoming-events');
     if (!container) return;
-    
+
     if (upcomingEvents.length === 0) {
         container.innerHTML = '<div class="no-events">Yaklaşan etkinlik yok</div>';
         return;
     }
-    
+
     let html = '';
     upcomingEvents.forEach(event => {
         const eventDate = new Date(event.date);
-        const dateStr = eventDate.toLocaleDateString('tr-TR', { 
-            day: 'numeric', 
-            month: 'short' 
+        const dateStr = eventDate.toLocaleDateString('tr-TR', {
+            day: 'numeric',
+            month: 'short'
         });
-        
+
         html += `
             <div class="upcoming-event-item" onclick="showEventDetails('${event.id}')">
                 <div class="event-date">${dateStr}</div>
@@ -16416,24 +16449,24 @@ function loadUpcomingEvents() {
             </div>
         `;
     });
-    
+
     container.innerHTML = html;
 }
 
 function showEventDetails(eventId) {
     const events = getEvents();
     const event = events.find(e => e.id === eventId);
-    
+
     if (!event) return;
-    
+
     const eventDate = new Date(event.date);
-    const dateStr = eventDate.toLocaleDateString('tr-TR', { 
+    const dateStr = eventDate.toLocaleDateString('tr-TR', {
         weekday: 'long',
         year: 'numeric',
         month: 'long',
         day: 'numeric'
     });
-    
+
     const typeLabels = {
         meeting: '📅 Toplantı',
         game: '🎮 Oyun Gecesi',
@@ -16442,7 +16475,7 @@ function showEventDetails(eventId) {
         birthday: '🎂 Doğum Günü',
         other: '📝 Diğer'
     };
-    
+
     const content = `
         <div class="event-details-modal">
             <div class="event-details-header">
@@ -16488,7 +16521,7 @@ function showEventDetails(eventId) {
             </div>
         </div>
     `;
-    
+
     showModal("Etkinlik Detayları", content, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -16497,24 +16530,24 @@ function showEventDetails(eventId) {
 function joinEvent(eventId) {
     const events = getEvents();
     const event = events.find(e => e.id === eventId);
-    
+
     if (!event) return;
-    
+
     // Check if already joined
     if (event.participants?.includes(state.peerId)) {
         toast('Bu etkinliğe zaten katıldınız', 'info');
         return;
     }
-    
+
     // Add participant
     if (!event.participants) event.participants = [];
     event.participants.push(state.peerId);
-    
+
     // Save updated event
     localStorage.setItem('scord_events', JSON.stringify(events));
-    
+
     toast('Etkinliğe katıldınız!', 'success');
-    
+
     // Refresh displays
     loadUpcomingEvents();
 }
@@ -16522,9 +16555,9 @@ function joinEvent(eventId) {
 function editEvent(eventId) {
     const events = getEvents();
     const event = events.find(e => e.id === eventId);
-    
+
     if (!event) return;
-    
+
     // Pre-fill form with event data
     const modalContent = `
         <div class="create-event-modal">
@@ -16585,16 +16618,16 @@ function editEvent(eventId) {
             </div>
         </div>
     `;
-    
+
     showModal("Etkinlik Düzenle", modalContent, '', true);
 }
 
 function updateEvent(eventId) {
     const events = getEvents();
     const eventIndex = events.findIndex(e => e.id === eventId);
-    
+
     if (eventIndex === -1) return;
-    
+
     const title = document.getElementById('event-title')?.value.trim();
     const date = document.getElementById('event-date')?.value;
     const time = document.getElementById('event-time')?.value;
@@ -16602,12 +16635,12 @@ function updateEvent(eventId) {
     const type = document.getElementById('event-type')?.value;
     const reminder = document.getElementById('event-reminder')?.checked || false;
     const recurring = document.getElementById('event-recurring')?.checked || false;
-    
+
     if (!title || !date || !time) {
         toast('Lütfen zorunlu alanları doldurun', 'error');
         return;
     }
-    
+
     // Update event
     events[eventIndex] = {
         ...events[eventIndex],
@@ -16620,12 +16653,12 @@ function updateEvent(eventId) {
         recurring: recurring,
         updatedAt: Date.now()
     };
-    
+
     // Save updated events
     localStorage.setItem('scord_events', JSON.stringify(events));
-    
+
     toast('Etkinlik güncellendi', 'success');
-    
+
     hideModal();
     renderCalendar();
     loadUpcomingEvents();
@@ -16633,17 +16666,17 @@ function updateEvent(eventId) {
 
 function deleteEvent(eventId) {
     if (!confirm('Bu etkinliği silmek istediğinizden emin misiniz?')) return;
-    
+
     const events = getEvents();
     const eventIndex = events.findIndex(e => e.id === eventId);
-    
+
     if (eventIndex === -1) return;
-    
+
     events.splice(eventIndex, 1);
     localStorage.setItem('scord_events', JSON.stringify(events));
-    
+
     toast('Etkinlik silindi', 'success');
-    
+
     hideModal();
     renderCalendar();
     loadUpcomingEvents();
@@ -16664,12 +16697,12 @@ function formatDateForInput(date) {
 // Event message display
 function createEventMessage(event) {
     const eventDate = new Date(event.date);
-    const dateStr = eventDate.toLocaleDateString('tr-TR', { 
+    const dateStr = eventDate.toLocaleDateString('tr-TR', {
         weekday: 'long',
         month: 'long',
         day: 'numeric'
     });
-    
+
     const typeLabels = {
         meeting: '📅 Toplantı',
         game: '🎮 Oyun Gecesi',
@@ -16678,7 +16711,7 @@ function createEventMessage(event) {
         birthday: '🎂 Doğum Günü',
         other: '📝 Etkinlik'
     };
-    
+
     return `
         <div class="message-event">
             <div class="event-container">
@@ -16773,16 +16806,16 @@ function showCreatePollModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Anket Oluştur", modalContent, '', true);
 }
 
 function updatePollType() {
     const pollType = document.getElementById('poll-type')?.value;
     const optionsContainer = document.getElementById('poll-options');
-    
+
     if (!optionsContainer) return;
-    
+
     if (pollType === 'rating') {
         // For rating polls, show star rating options
         optionsContainer.innerHTML = `
@@ -16830,7 +16863,7 @@ function updatePollType() {
 function addPollOption() {
     const optionsContainer = document.getElementById('poll-options');
     if (!optionsContainer) return;
-    
+
     const optionCount = optionsContainer.querySelectorAll('.poll-option-item').length;
     const newOption = document.createElement('div');
     newOption.className = 'poll-option-item';
@@ -16838,14 +16871,14 @@ function addPollOption() {
         <input type="text" class="option-input" placeholder="Seçenek ${optionCount + 1}" maxlength="100">
         <button class="btn-remove" onclick="removePollOption(this)">✕</button>
     `;
-    
+
     optionsContainer.appendChild(newOption);
 }
 
 function removePollOption(button) {
     const optionItem = button.parentElement;
     const optionsContainer = optionItem.parentElement;
-    
+
     // Keep at least 2 options
     if (optionsContainer.querySelectorAll('.poll-option-item').length > 2) {
         optionItem.remove();
@@ -16860,14 +16893,14 @@ function createPoll() {
     const anonymous = document.getElementById('poll-anonymous')?.checked || false;
     const publicResults = document.getElementById('poll-public-results')?.checked || false;
     const duration = document.getElementById('poll-duration')?.value || '';
-    
+
     if (!question) {
         toast('Lütfen anket sorusunu girin', 'error');
         return;
     }
-    
+
     let options = [];
-    
+
     if (pollType === 'rating') {
         // For rating polls, create star rating options
         const selectedScale = document.querySelector('input[name="rating-scale"]:checked')?.value || '5';
@@ -16894,12 +16927,12 @@ function createPoll() {
             }
         });
     }
-    
+
     if (options.length < 2) {
         toast('En az 2 seçenek girin', 'error');
         return;
     }
-    
+
     const poll = {
         id: generateId(),
         question: question,
@@ -16914,10 +16947,10 @@ function createPoll() {
         totalVotes: 0,
         voters: []
     };
-    
+
     // Save poll
     savePoll(poll);
-    
+
     // Send poll message
     const message = {
         type: 'poll',
@@ -16930,22 +16963,22 @@ function createPoll() {
         expiresAt: poll.expiresAt,
         totalVotes: poll.totalVotes
     };
-    
+
     // This would integrate with the existing message sending system
     toast('Anket oluşturuldu', 'success');
-    
+
     hideModal();
 }
 
 function savePoll(poll) {
     const polls = getPolls();
     polls.push(poll);
-    
+
     // Keep only last 100 polls
     if (polls.length > 100) {
         polls.shift();
     }
-    
+
     localStorage.setItem('scord_polls', JSON.stringify(polls));
 }
 
@@ -16964,7 +16997,7 @@ function createPollMessage(poll) {
     const isExpired = poll.expiresAt && Date.now() > poll.expiresAt;
     const hasVoted = poll.voters?.includes(state.peerId);
     const canViewResults = poll.publicResults || hasVoted || isExpired;
-    
+
     let content = `
         <div class="message-poll">
             <div class="poll-container">
@@ -16979,11 +17012,11 @@ function createPollMessage(poll) {
                 
                 <div class="poll-options">
     `;
-    
+
     poll.options.forEach(option => {
         const percentage = poll.totalVotes > 0 ? Math.round((option.votes / poll.totalVotes) * 100) : 0;
         const hasVotedForOption = option.voters?.includes(state.peerId);
-        
+
         content += `
             <div class="poll-option ${hasVotedForOption ? 'voted' : ''}" onclick="voteInPoll('${poll.id}', '${option.id}')">
                 <div class="poll-option-content">
@@ -17008,7 +17041,7 @@ function createPollMessage(poll) {
             </div>
         `;
     });
-    
+
     content += `
                 </div>
                 
@@ -17028,7 +17061,7 @@ function createPollMessage(poll) {
             </div>
         </div>
     `;
-    
+
     return content;
 }
 
@@ -17044,12 +17077,12 @@ function getPollTypeLabel(type) {
 function getTimeRemaining(expiresAt) {
     const now = Date.now();
     const remaining = expiresAt - now;
-    
+
     if (remaining <= 0) return 'Sona erdi';
-    
+
     const hours = Math.floor(remaining / 3600000);
     const minutes = Math.floor((remaining % 3600000) / 60000);
-    
+
     if (hours > 24) {
         const days = Math.floor(hours / 24);
         return `${days} gün`;
@@ -17066,10 +17099,10 @@ function voteInPoll(pollId, optionId) {
     if (!currentPollVotes[pollId]) {
         currentPollVotes[pollId] = [];
     }
-    
+
     const poll = getPolls().find(p => p.id === pollId);
     if (!poll) return;
-    
+
     if (poll.type === 'single') {
         // Single choice - replace previous selection
         currentPollVotes[pollId] = [optionId];
@@ -17082,7 +17115,7 @@ function voteInPoll(pollId, optionId) {
             currentPollVotes[pollId].splice(index, 1);
         }
     }
-    
+
     // Update UI to show selection
     updatePollSelectionUI(pollId);
 }
@@ -17090,12 +17123,12 @@ function voteInPoll(pollId, optionId) {
 function updatePollSelectionUI(pollId) {
     const pollContainer = document.querySelector(`[data-poll-id="${pollId}"]`);
     if (!pollContainer) return;
-    
+
     const poll = getPolls().find(p => p.id === pollId);
     if (!poll) return;
-    
+
     const selectedOptions = currentPollVotes[pollId] || [];
-    
+
     poll.options.forEach(option => {
         const optionElement = pollContainer.querySelector(`[data-option-id="${option.id}"]`);
         if (optionElement) {
@@ -17111,33 +17144,33 @@ function updatePollSelectionUI(pollId) {
 function submitPollVote(pollId) {
     const polls = getPolls();
     const poll = polls.find(p => p.id === pollId);
-    
+
     if (!poll) return;
-    
+
     const selectedOptions = currentPollVotes[pollId] || [];
-    
+
     if (selectedOptions.length === 0) {
         toast('Lütfen en az bir seçenek seçin', 'error');
         return;
     }
-    
+
     if (poll.type === 'single' && selectedOptions.length > 1) {
         toast('Tek seçim anketinde sadece bir seçenek seçebilirsiniz', 'error');
         return;
     }
-    
+
     // Check if already voted
     if (poll.voters?.includes(state.peerId)) {
         toast('Bu ankete zaten oy verdiniz', 'info');
         return;
     }
-    
+
     // Check if expired
     if (poll.expiresAt && Date.now() > poll.expiresAt) {
         toast('Bu anket sona ermiş', 'error');
         return;
     }
-    
+
     // Record vote
     selectedOptions.forEach(optionId => {
         const option = poll.options.find(o => o.id === optionId);
@@ -17147,20 +17180,20 @@ function submitPollVote(pollId) {
             option.voters.push(state.peerId);
         }
     });
-    
+
     poll.totalVotes++;
     if (!poll.voters) poll.voters = [];
     poll.voters.push(state.peerId);
-    
+
     // Save updated poll
     localStorage.setItem('scord_polls', JSON.stringify(polls));
-    
+
     // Clear current votes
     delete currentPollVotes[pollId];
-    
+
     // Show success message
     toast('Oyunuz kaydedildi', 'success');
-    
+
     // Update poll display
     updatePollDisplay(pollId);
 }
@@ -17184,17 +17217,17 @@ function updatePollDisplay(pollId) {
 function showPollResultsModal(pollId) {
     const polls = getPolls();
     const poll = polls.find(p => p.id === pollId);
-    
+
     if (!poll) return;
-    
+
     const isExpired = poll.expiresAt && Date.now() > poll.expiresAt;
     const canViewResults = poll.publicResults || isExpired;
-    
+
     if (!canViewResults) {
         toast('Sonuçları görme yetkiniz yok', 'error');
         return;
     }
-    
+
     let content = `
         <div class="poll-results-modal">
             <div class="poll-results-header">
@@ -17221,14 +17254,14 @@ function showPollResultsModal(pollId) {
                 
                 <div class="poll-results-options">
     `;
-    
+
     // Sort options by votes
     const sortedOptions = [...poll.options].sort((a, b) => b.votes - a.votes);
-    
+
     sortedOptions.forEach((option, index) => {
         const percentage = poll.totalVotes > 0 ? Math.round((option.votes / poll.totalVotes) * 100) : 0;
         const isWinner = index === 0 && option.votes > 0;
-        
+
         content += `
             <div class="result-option ${isWinner ? 'winner' : ''}">
                 <div class="result-option-rank">#${index + 1}</div>
@@ -17246,7 +17279,7 @@ function showPollResultsModal(pollId) {
             </div>
         `;
     });
-    
+
     content += `
                 </div>
                 
@@ -17261,7 +17294,7 @@ function showPollResultsModal(pollId) {
             </div>
         </div>
     `;
-    
+
     showModal("Anket Sonuçları", content, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -17270,22 +17303,22 @@ function showPollResultsModal(pollId) {
 // Recent polls modal
 function showRecentPollsModal() {
     const polls = getPolls();
-    
+
     if (polls.length === 0) {
         toast('Henüz anket yok', 'info');
         return;
     }
-    
+
     let content = `
         <div class="recent-polls-modal">
             <div class="recent-polls-title">📊 Son Anketler</div>
             <div class="recent-polls-list">
     `;
-    
+
     polls.slice(-10).reverse().forEach(poll => {
         const isExpired = poll.expiresAt && Date.now() > poll.expiresAt;
         const statusIcon = isExpired ? '🔒' : '📊';
-        
+
         content += `
             <div class="recent-poll-item" onclick="showPollResultsModal('${poll.id}')">
                 <div class="poll-icon">${statusIcon}</div>
@@ -17297,12 +17330,12 @@ function showRecentPollsModal() {
             </div>
         `;
     });
-    
+
     content += `
             </div>
         </div>
     `;
-    
+
     showModal("Son Anketler", content, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -17311,7 +17344,7 @@ function showRecentPollsModal() {
 // Welcome System for New Members
 function showWelcomeSettingsModal() {
     const welcomeSettings = getWelcomeSettings();
-    
+
     const modalContent = `
         <div class="welcome-settings-modal">
             <div class="welcome-settings-header">
@@ -17401,7 +17434,7 @@ function showWelcomeSettingsModal() {
             </div>
         </div>
     `;
-    
+
     showModal("Hoş Geldin Ayarları", modalContent, '', true);
 }
 
@@ -17450,50 +17483,50 @@ function saveWelcomeSettings() {
         addEmoji: document.getElementById('welcome-emoji')?.checked || false,
         channelId: document.getElementById('welcome-channel-select')?.value || 'welcome'
     };
-    
+
     localStorage.setItem('scord_welcome_settings', JSON.stringify(settings));
-    
+
     toast('Hoş geldin ayarları kaydedildi', 'success');
     hideModal();
 }
 
 function triggerWelcomeMessage(memberId, memberName) {
     const settings = getWelcomeSettings();
-    
+
     if (!settings.enabled) return;
-    
+
     const welcomeMessage = createWelcomeMessage(memberName, settings);
-    
+
     // Send to channel if enabled
     if (settings.postInChannel) {
         // This would integrate with the existing message system
         console.log('Posting welcome message to channel:', welcomeMessage);
     }
-    
+
     // Send DM if enabled
     if (settings.sendDM) {
         // This would integrate with the existing DM system
         console.log('Sending welcome DM:', welcomeMessage);
     }
-    
+
     // Add emoji reaction if enabled
     if (settings.addEmoji) {
         // This would add emoji reactions to the join message
         console.log('Adding welcome emoji reactions');
     }
-    
+
     // Assign auto role if enabled
     if (settings.autoRoles && settings.autoRole) {
         assignAutoRole(memberId, settings.autoRole);
     }
-    
+
     // Log welcome event
     logWelcomeEvent(memberId, memberName);
 }
 
 function createWelcomeMessage(memberName, settings) {
     const personalizedMessage = settings.message.replace('{user}', `@${memberName}`);
-    
+
     let content = `
         <div class="welcome-message">
             <div class="welcome-header">
@@ -17514,21 +17547,21 @@ function createWelcomeMessage(memberName, settings) {
             </div>
         </div>
     `;
-    
+
     return content;
 }
 
 function assignAutoRole(memberId, roleName) {
     // This would integrate with the existing role system
     console.log(`Assigning role ${roleName} to member ${memberId}`);
-    
+
     // Show toast for demonstration
     toast(`${roleName} rolü verildi`, 'success');
 }
 
 function logWelcomeEvent(memberId, memberName) {
     const welcomeLogs = getWelcomeLogs();
-    
+
     const logEntry = {
         id: generateId(),
         memberId: memberId,
@@ -17536,14 +17569,14 @@ function logWelcomeEvent(memberId, memberName) {
         timestamp: Date.now(),
         date: new Date().toISOString()
     };
-    
+
     welcomeLogs.push(logEntry);
-    
+
     // Keep only last 100 logs
     if (welcomeLogs.length > 100) {
         welcomeLogs.shift();
     }
-    
+
     localStorage.setItem('scord_welcome_logs', JSON.stringify(welcomeLogs));
 }
 
@@ -17560,23 +17593,23 @@ function getWelcomeLogs() {
 // Welcome logs modal
 function showWelcomeLogsModal() {
     const logs = getWelcomeLogs();
-    
+
     if (logs.length === 0) {
         toast('Henüz hoş geldin kaydı yok', 'info');
         return;
     }
-    
+
     let content = `
         <div class="welcome-logs-modal">
             <div class="welcome-logs-title">📋 Hoş Geldin Kayıtları</div>
             <div class="welcome-logs-list">
     `;
-    
+
     logs.slice(-20).reverse().forEach(log => {
         const date = new Date(log.timestamp);
         const dateStr = date.toLocaleDateString('tr-TR');
         const timeStr = date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
-        
+
         content += `
             <div class="welcome-log-item">
                 <div class="log-info">
@@ -17589,12 +17622,12 @@ function showWelcomeLogsModal() {
             </div>
         `;
     });
-    
+
     content += `
             </div>
         </div>
     `;
-    
+
     showModal("Hoş Geldin Kayıtları", content, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -17603,7 +17636,7 @@ function showWelcomeLogsModal() {
 // Server rules modal
 function showServerRules() {
     const rules = getServerRules();
-    
+
     let content = `
         <div class="server-rules-modal">
             <div class="server-rules-header">
@@ -17612,7 +17645,7 @@ function showServerRules() {
             <div class="server-rules-content">
                 <div class="rules-list">
     `;
-    
+
     rules.forEach((rule, index) => {
         content += `
             <div class="rule-item">
@@ -17621,7 +17654,7 @@ function showServerRules() {
             </div>
         `;
     });
-    
+
     content += `
                 </div>
             </div>
@@ -17630,7 +17663,7 @@ function showServerRules() {
             </div>
         </div>
     `;
-    
+
     showModal("Sunucu Kuralları", content, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -17660,7 +17693,7 @@ function getServerRules() {
 function acknowledgeRules() {
     // This would mark the user as having read the rules
     localStorage.setItem('scord_rules_acknowledged', Date.now().toString());
-    
+
     toast('Kuralları anladım olarak işaretlendi', 'success');
     hideModal();
 }
@@ -17668,7 +17701,7 @@ function acknowledgeRules() {
 // Server info modal
 function showServerInfo() {
     const serverInfo = getServerInfo();
-    
+
     const content = `
         <div class="server-info-modal">
             <div class="server-info-header">
@@ -17721,7 +17754,7 @@ function showServerInfo() {
             </div>
         </div>
     `;
-    
+
     showModal("Sunucu Bilgileri", content, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -17761,7 +17794,7 @@ function getServerInfo() {
 function testWelcomeMessage() {
     const settings = getWelcomeSettings();
     const testMessage = createWelcomeMessage("TestKullanıcı", settings);
-    
+
     const content = `
         <div class="test-welcome-modal">
             <div class="test-welcome-title">🧪 Hoş Geldin Mesajı Test</div>
@@ -17770,7 +17803,7 @@ function testWelcomeMessage() {
             </div>
         </div>
     `;
-    
+
     showModal("Test Mesajı", content, `
         <button class="btn-secondary" onclick="hideModal()">Kapat</button>
     `);
@@ -18490,7 +18523,7 @@ updateChannelSidebar = window.updateChannelSidebar = function (serverId) {
     if (_v24ChannelSidebarTimeout) {
         clearTimeout(_v24ChannelSidebarTimeout);
     }
-    
+
     _v24ChannelSidebarTimeout = setTimeout(() => {
         const result = _v24UpdateChannelSidebar.apply(this, arguments);
         setTimeout(() => wireSidebarDragAndDrop(serverId), 0);
@@ -18505,7 +18538,7 @@ updateMembersPanel = window.updateMembersPanel = function (...args) {
     if (_v24MembersPanelTimeout) {
         clearTimeout(_v24MembersPanelTimeout);
     }
-    
+
     _v24MembersPanelTimeout = setTimeout(() => {
         const result = _v24UpdateMembersPanel.apply(this, args);
         setTimeout(() => wireSidebarDragAndDrop(args[0] || state.activeServerId), 0);
