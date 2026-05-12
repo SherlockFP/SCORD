@@ -1120,7 +1120,11 @@
       if (hero) hero.appendChild(btn);
     }
 
-    var homeObs = new MutationObserver(function () { addGameBtn(); });
+    var _gaObsTimer = null;
+    var homeObs = new MutationObserver(function () {
+      if (_gaObsTimer) return;
+      _gaObsTimer = setTimeout(function () { _gaObsTimer = null; addGameBtn(); }, 300);
+    });
     homeObs.observe(document.body, { childList: true, subtree: true });
 
     // localStorage'dan geri yükle
@@ -1425,15 +1429,24 @@
       }
     }
 
-    var tagObs = new MutationObserver(updateUserBarTag);
-    tagObs.observe(document.body, { childList: true, subtree: true });
-    setInterval(updateUserBarTag, 2000);
+    // Sadece user-bar-name elementini izle - document.body DEĞİL, performans
+    setTimeout(function () {
+      var nameParent = document.getElementById("user-bar-name")?.parentNode;
+      if (nameParent) {
+        var tagObs = new MutationObserver(updateUserBarTag);
+        tagObs.observe(nameParent, { childList: true, subtree: true });
+      }
+    }, 1000);
 
     // Setup ekranına şifre alanı ekle
     var setupCheck = setInterval(function () {
       var setupOverlay = document.getElementById("setup-overlay");
       var setupCard = setupOverlay ? setupOverlay.querySelector(".setup-card") : null;
-      if (!setupCard || setupCard.querySelector(".setup-pass-field")) return;
+      if (!setupCard || setupCard.querySelector(".setup-pass-field")) {
+        // Interval'i temizle: ya card yok (setup gizli) ya da zaten password alanı eklenmiş
+        clearInterval(setupCheck);
+        return;
+      }
       clearInterval(setupCheck);
 
       var lastNick = localStorage.getItem("scord_last_nick");
@@ -1499,17 +1512,21 @@
       if (nick && disc) nameEl.textContent = nick + "#" + disc;
     }
 
-    setInterval(_updateDiscTag, 1000);
     if (document.getElementById("setup-overlay") && !document.getElementById("setup-overlay").classList.contains("active")) {
       setTimeout(_updateDiscTag, 1000);
     }
 
-    // startApp sonrasında da güncelle
+    // startApp sonrasında da güncelle - sadece 1 kere
     var _origSA = window.startApp;
-    if (_origSA) {
+    if (_origSA && !window._discTagFixed) {
+      window._discTagFixed = true;
       window.startApp = function () {
         var result = _origSA.apply(this, arguments);
-        setTimeout(_updateDiscTag, 300);
+        setTimeout(function () {
+          _updateDiscTag();
+          // 3 saniye sonra bir daha dene (geç yüklenen elementler için)
+          setTimeout(_updateDiscTag, 3000);
+        }, 300);
         return result;
       };
     }
@@ -1530,19 +1547,24 @@
       if (typeof renderMessages === "function" && window.state.activeServerId === serverId) renderMessages(serverId, window.state.activeChannelId);
     };
 
-    // Sunucu ayarlarına "Mesaj Geçmişini Temizle" butonu ekle
+    // Sunucu ayarlarına "Mesaj Geçmişini Temizle" butonu ekle - debounced
+    var _cmObsTimer = null;
     var obs = new MutationObserver(function () {
-      var advancedTab = document.getElementById("s-tab-advanced");
-      if (advancedTab && !advancedTab.querySelector(".clear-msgs-btn")) {
-        var btn = document.createElement("button");
-        btn.className = "clear-msgs-btn btn-secondary";
-        btn.style.cssText = "margin-top:12px;background:var(--yellow,#f59e0b);border:none;color:#000;";
-        btn.textContent = "🗑 Tüm Mesaj Geçmişini Sil";
-        btn.onclick = function () {
-          if (window.state?.activeServerId) window.clearServerMessages(window.state.activeServerId);
-        };
-        advancedTab.appendChild(btn);
-      }
+      if (_cmObsTimer) return;
+      _cmObsTimer = setTimeout(function () {
+        _cmObsTimer = null;
+        var advancedTab = document.getElementById("s-tab-advanced");
+        if (advancedTab && !advancedTab.querySelector(".clear-msgs-btn")) {
+          var btn = document.createElement("button");
+          btn.className = "clear-msgs-btn btn-secondary";
+          btn.style.cssText = "margin-top:12px;background:var(--yellow,#f59e0b);border:none;color:#000;";
+          btn.textContent = "🗑 Tüm Mesaj Geçmişini Sil";
+          btn.onclick = function () {
+            if (window.state?.activeServerId) window.clearServerMessages(window.state.activeServerId);
+          };
+          advancedTab.appendChild(btn);
+        }
+      }, 300);
     });
     obs.observe(document.body, { childList: true, subtree: true });
   }
@@ -1604,8 +1626,12 @@
     }
 
     var plusObs = new MutationObserver(addPlusButton);
-    plusObs.observe(document.body, { childList: true, subtree: true });
-    setInterval(addPlusButton, 2000);
+    // Sadece sidebar'ı izle, tüm body'yi değil
+    setTimeout(function () {
+      var sidebar = document.getElementById("channel-list") || document.getElementById("channel-sidebar");
+      if (sidebar) { plusObs.observe(sidebar, { childList: true, subtree: true }); }
+      else { plusObs.observe(document.body, { childList: true, subtree: true }); }
+    }, 1000);
 
     // Arkadaş isteği gönder
     window.sendFriendRequest = function (targetPeerId, targetTag) {
@@ -1896,13 +1922,14 @@
       }
     };
 
-    setInterval(function () {
+    var _statusInterval = setInterval(function () {
       var bar = document.getElementById("status-bar");
       if (bar && !bar._statusFixed) {
         bar._statusFixed = true;
         bar.onclick = function (e) { if (typeof window.showStatusPicker === "function") window.showStatusPicker(); };
         bar.style.cursor = "pointer";
       }
+      if (bar && bar._statusFixed) clearInterval(_statusInterval);
     }, 2000);
   }
 
@@ -1912,19 +1939,22 @@
 
   function patchProfileSystem() {
     // Nick'e tıklayınca kendi profili
-    var check = setInterval(function () {
+    var _profileCheck = setInterval(function () {
       var nameEl = document.getElementById("user-bar-name");
-      if (nameEl && !nameEl.dataset.profilePatched) {
-        nameEl.dataset.profilePatched = "1";
-        nameEl.style.cursor = "pointer";
-        nameEl.title = "Profilini Görüntüle (tıkla)";
-        nameEl.onclick = function () {
-          if (typeof openUserProfile === "function") {
-            openUserProfile(window.state?.peerId, window.state?.username || window.state?.name, window.state?.avatarImage, window.state?.avatarColor);
-          }
-        };
+      if (nameEl) {
+        if (!nameEl.dataset.profilePatched) {
+          nameEl.dataset.profilePatched = "1";
+          nameEl.style.cursor = "pointer";
+          nameEl.title = "Profilini Görüntüle (tıkla)";
+          nameEl.onclick = function () {
+            if (typeof openUserProfile === "function") {
+              openUserProfile(window.state?.peerId, window.state?.username || window.state?.name, window.state?.avatarImage, window.state?.avatarColor);
+            }
+          };
+        }
+        clearInterval(_profileCheck);
       }
-    }, 1000);
+    }, 500);
 
     // Profil modalında avatar önizleme + değiştirme
     var _origOUP = window.openUserProfile;
@@ -2056,12 +2086,16 @@
       patchStatusBar();
       patchPerformance();
 
+      var _obsTimer = null;
       var obs = new MutationObserver(function () {
-        enhanceDMOverlay();
-        enhanceDMSidebar();
+        if (_obsTimer) return;
+        _obsTimer = setTimeout(function () {
+          _obsTimer = null;
+          enhanceDMOverlay();
+          enhanceDMSidebar();
+        }, 300);
       });
       obs.observe(document.body, { childList: true, subtree: true });
-      setInterval(enhanceDMSidebar, 2000);
 
       if (typeof window.applyChatCustomization === "function") window.applyChatCustomization();
       console.log("[Shercord Fixes] Tum duzeltmeler yuklendi.");
