@@ -1314,8 +1314,9 @@
 
       window.state._savedNick = nick;
       window.state._savedPass = pass;
-      localStorage.setItem("scord_last_nick", nick);
-      localStorage.setItem("scord_last_pass", pass);
+      safeSet("scord_username", nick);
+      safeSet("scord_last_nick", nick);
+      safeSet("scord_last_pass", pass);
       window._saveIdentity();
       return true;
     };
@@ -1505,11 +1506,29 @@
 
       // Enter butonunu patch'le - ORİJİNAL handler'ı KALDIR
       var enterBtn = setupCard.querySelector("#enter-btn");
+      var nickInput = document.getElementById("username-input");
       if (enterBtn) {
         enterBtn.textContent = lastNick ? "Giriş Yap" : "Kayıt Ol";
         // Orijinal handler'ı kaldırmak için butonu klonla (cloneNode listener'ları kopyalamaz)
         var newBtn = enterBtn.cloneNode(true);
         if (enterBtn.parentNode) enterBtn.parentNode.replaceChild(newBtn, enterBtn);
+
+        // Disabled state'ini yönet - nick + pass kontrolü
+        function _updateDisabled() {
+          var n = document.getElementById("username-input")?.value?.trim();
+          var p = document.getElementById("setup-password")?.value || "";
+          newBtn.disabled = !n || !p;
+        }
+        // İlk durumu ayarla
+        var savedNick = document.getElementById("username-input")?.value?.trim();
+        if (lastNick && savedNick) newBtn.disabled = false;
+        else newBtn.disabled = true;
+        // Input değişikliklerini dinle
+        var _ni = document.getElementById("username-input");
+        var _pi = document.getElementById("setup-password");
+        if (_ni) _ni.addEventListener("input", _updateDisabled);
+        if (_pi) _pi.addEventListener("input", _updateDisabled);
+
         newBtn.onclick = function (e) {
           var nick = document.getElementById("username-input")?.value?.trim();
           var pass = document.getElementById("setup-password")?.value || "";
@@ -1955,6 +1974,21 @@
           } catch (e) {}
         }
       } catch (e) { console.warn("[fixes] Ghost pre-clean failed:", e); }
+    }
+
+    // 6) setStatus wrapper - heavy UI update'leri defer et
+    if (typeof window.setStatus === "function" && !window._statusWrapFixed) {
+      window._statusWrapFixed = true;
+      var _origSetStatus = window.setStatus;
+      window.setStatus = function (newStatus, customStatus, statusEmoji) {
+        _origSetStatus.apply(this, arguments);
+        // updateMemberList ağır olabilir, requestAnimationFrame ile ertele
+        if (typeof window.updateMemberList === "function") {
+          requestAnimationFrame(function () {
+            try { window.updateMemberList(); } catch (e) {}
+          });
+        }
+      };
     }
   }
 
