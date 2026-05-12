@@ -1921,6 +1921,12 @@ function showChannelContextMenu(ev, channel, serverId) {
         }
     });
 
+    const isAdm = getMyEffectiveRole(state.servers.find(s => s.id === serverId)) === "owner" || getMyEffectiveRole(state.servers.find(s => s.id === serverId)) === "admin";
+    if (isAdm) {
+        addItem("✏️", "Kanal Adını Düzenle", () => renameChannel(serverId, channel.id));
+        addItem("🗑️", "Kanalı Sil", () => deleteChannel(serverId, channel.id), true);
+    }
+
     document.body.appendChild(menu);
     setTimeout(() => {
         document.addEventListener("click", closeContextMenu, { once: true });
@@ -2223,14 +2229,6 @@ function showHomeView() {
     clearMeshHealthPoll();
     if (state.activeServerId && state.activeChannelId) {
         persistChatDraftFor(state.activeServerId, state.activeChannelId);
-    }
-    if (state.voiceChannelId) {
-        try { leaveVoiceChannel(); } catch (e) { /* noop */ }
-    }
-    if (state.mesh) {
-        clearMeshHealthPoll();
-        try { state.mesh.disconnect(); } catch (e) { /* noop */ }
-        state.mesh = null;
     }
     refreshConnectionBadge();
     document.getElementById("home-view").classList.remove("hidden");
@@ -3221,11 +3219,29 @@ function addSystemMessage(text) {
 
 /* ── Send chat message ────────────────────────────────────── */
 async function sendMessage() {
+    console.log("[sendMessage] Starting flow...");
     const input = document.getElementById("chat-input");
+    if (!input) {
+        console.error("[sendMessage] Critical Error: chat-input element not found!");
+        toast("Sistem Hatası: Chat girişi bulunamadı.", "error");
+        return;
+    }
     const text = input.value.trim();
-    if (!text || !state.activeServerId || !state.activeChannelId) return;
+    console.log("[sendMessage] Input text length:", text.length);
+
+    if (!text) {
+        console.warn("[sendMessage] Aborting: Empty text");
+        return;
+    }
+    if (!state.activeServerId || !state.activeChannelId) {
+        console.error("[sendMessage] Aborting: Missing active identifiers", { srv: state.activeServerId, ch: state.activeChannelId });
+        toast("Kanal bilgisi eksik, lütfen tekrar kanala tıklayın.", "warning");
+        return;
+    }
+
     // Check if it's a music bot command (/music)
-    if (handleMusicCommand(text)) {
+    if (typeof handleMusicCommand === 'function' && handleMusicCommand(text)) {
+        console.log("[sendMessage] Music command detected and handled.");
         input.value = "";
         input.style.height = "auto";
         return;
@@ -3610,6 +3626,77 @@ async function submitAddChannel(serverId, type) {
 
     hideModal();
     toast(`#${name} kanalı oluşturuldu.`, "success");
+}
+
+async function deleteChannel(serverId, channelId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    const channel = server.channels.find(c => c.id === channelId);
+    if (!channel) return;
+
+    if (!confirm(`"#${channel.name}" kanalını silmek istediğine emin misin?`)) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/rooms/${serverId}/channels/${channelId}`, { method: "DELETE" });
+        const data = await res.json();
+        if (data.success || res.ok) {
+            server.channels = server.channels.filter(c => c.id !== channelId);
+            if (state.mesh) {
+                state.mesh.broadcast({ type: "channel_delete", payload: { serverId, channelId } });
+            }
+            if (state.activeChannelId === channelId) {
+                const firstText = server.channels.find(c => c.type === "text");
+                if (firstText) showChatView(serverId, firstText.id);
+                else showHomeView();
+            } else {
+                updateChannelSidebar(serverId);
+            }
+            toast("Kanal silindi.", "success");
+        } else {
+            toast("Kanal silinemedi: " + (data.error || "Bilinmeyen hata"), "error");
+        }
+    } catch (e) {
+        toast("Bağlantı hatası.", "error");
+    }
+}
+
+async function renameChannel(serverId, channelId) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    const channel = server.channels.find(c => c.id === channelId);
+    if (!channel) return;
+
+    const newName = prompt("Yeni kanal adını girin:", channel.name);
+    if (!newName || newName === channel.name) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/rooms/${serverId}/channels/${channelId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: newName.toLowerCase().replace(/\s+/g, '-') })
+        });
+        const data = await res.json();
+        if (data.success || res.ok) {
+            const updatedCh = data.channel || { ...channel, name: newName.toLowerCase().replace(/\s+/g, '-') };
+            const idx = server.channels.findIndex(c => c.id === channelId);
+            if (idx !== -1) server.channels[idx] = updatedCh;
+
+            if (state.mesh) {
+                state.mesh.broadcast({ type: "channel_rename", payload: { serverId, channelId, name: updatedCh.name } });
+            }
+            updateChannelSidebar(serverId);
+            if (state.activeChannelId === channelId) {
+                document.getElementById("active-channel-name").textContent = updatedCh.name;
+                const chatName = document.getElementById("chat-channel-name");
+                if (chatName) chatName.textContent = updatedCh.name;
+            }
+            toast("Kanal adı güncellendi.", "success");
+        } else {
+            toast("Kanal adı güncellenemedi.", "error");
+        }
+    } catch (e) {
+        toast("Bağlantı hatası.", "error");
+    }
 }
 
 /* ── Join existing server ─────────────────────────────────── */
@@ -4159,16 +4246,37 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                 applyChannelBackground(payload.id, state.activeChannelId);
             }
         }
-    } else if (data.type === "channel_create") {
-        const { serverId, channel } = data.payload;
+    } else if (data.type === "channel_delete") {
+        const { serverId, channelId } = data.payload;
         const server = state.servers.find(s => s.id === serverId);
         if (server) {
-            if (!server.channels.find(c => c.id === channel.id)) {
-                server.channels.push(channel);
+            server.channels = server.channels.filter(c => c.id !== channelId);
+            if (state.activeServerId === serverId) {
+                updateChannelSidebar(serverId);
+                if (state.activeChannelId === channelId) {
+                    const firstText = server.channels.find(c => c.type === "text");
+                    if (firstText) showChatView(serverId, firstText.id);
+                    else showHomeView();
+                }
+            }
+            toast("Bir kanal silindi.", "info");
+        }
+    } else if (data.type === "channel_rename") {
+        const { serverId, channelId, name } = data.payload;
+        const server = state.servers.find(s => s.id === serverId);
+        if (server) {
+            const ch = server.channels.find(c => c.id === channelId);
+            if (ch) {
+                ch.name = name;
                 if (state.activeServerId === serverId) {
                     updateChannelSidebar(serverId);
+                    if (state.activeChannelId === channelId) {
+                        document.getElementById("active-channel-name").textContent = name;
+                        const chatName = document.getElementById("chat-channel-name");
+                        if (chatName) chatName.textContent = name;
+                    }
                 }
-                toast(`#${channel.name} kanalı eklendi.`, "info");
+                toast(`Kanal adı güncellendi: #${name}`, "info");
             }
         }
     } else if (data.type === "history_sync") {
@@ -7409,13 +7517,19 @@ function initMembersPanelResize() {
 document.addEventListener("DOMContentLoaded", () => {
     initSetup();
     initMembersPanelResize();
-    document.getElementById("server-settings-btn").onclick = openServerSettingsModal;
-    document.getElementById("server-invite-btn").onclick = () => showInviteModal(state.activeServerId);
+    const sSettingsBtn = document.getElementById("server-settings-btn");
+    if (sSettingsBtn) sSettingsBtn.onclick = openServerSettingsModal;
+
+    const sInviteBtn = document.getElementById("server-invite-btn");
+    if (sInviteBtn) sInviteBtn.onclick = () => showInviteModal(state.activeServerId);
 
     // Modal close
-    document.getElementById("modal-close").onclick = hideModal;
-    document.getElementById("modal-backdrop").onclick = (e) => {
-        if (e.target === document.getElementById("modal-backdrop")) hideModal();
+    const mClose = document.getElementById("modal-close");
+    if (mClose) mClose.onclick = hideModal;
+
+    const mBackdrop = document.getElementById("modal-backdrop");
+    if (mBackdrop) mBackdrop.onclick = (e) => {
+        if (e.target === mBackdrop) hideModal();
     };
 
     // Chat input
@@ -7457,24 +7571,34 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
+            console.log("[ChatInput] Enter pressed. Calling sendMessage()...");
             sendMessage();
         }
     });
-    chatInput.addEventListener("input", () => {
-        chatInput.style.height = "auto";
-        chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + "px";
-        debouncedPersistDraft();
 
-        // Send typing indicator
-        if (state.activeServerId && state.activeChannelId && chatInput.value.trim()) {
-            broadcastTypingIndicator();
-        }
+    if (chatInput) {
+        chatInput.addEventListener("input", () => {
+            chatInput.style.height = "auto";
+            chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + "px";
+            if (typeof debouncedPersistDraft === 'function') debouncedPersistDraft();
 
-        // Show mention suggestions
-        showMentionSuggestions(chatInput);
-    });
+            // Send typing indicator
+            if (state.activeServerId && state.activeChannelId && chatInput.value.trim()) {
+                if (typeof broadcastTypingIndicator === 'function') broadcastTypingIndicator();
+            }
 
-    document.getElementById("send-btn").onclick = sendMessage;
+            // Show mention suggestions
+            if (typeof showMentionSuggestions === 'function') showMentionSuggestions(chatInput);
+        });
+    }
+
+    const sendBtn = document.getElementById("send-btn");
+    if (sendBtn) {
+        sendBtn.onclick = () => {
+            console.log("[SendBtn] Clicked. Calling sendMessage()...");
+            sendMessage();
+        };
+    }
     document.getElementById("reply-preview-close")?.addEventListener("click", () => clearReplyTarget());
 
     document.getElementById("focus-mode-toggle")?.addEventListener("click", () => {
@@ -7567,43 +7691,64 @@ document.addEventListener("DOMContentLoaded", () => {
     }, true);
 
     // Server create / join
-    document.getElementById("add-server-btn").onclick = openCreateServerModal;
-    document.getElementById("create-server-hero-btn").onclick = openCreateServerModal;
-    document.getElementById("join-server-hero-btn").onclick = openJoinServerModal;
+    const addSrvBtn = document.getElementById("add-server-btn");
+    if (addSrvBtn) addSrvBtn.onclick = openCreateServerModal;
+
+    const createSrvHeroBtn = document.getElementById("create-server-hero-btn");
+    if (createSrvHeroBtn) createSrvHeroBtn.onclick = openCreateServerModal;
+
+    const joinSrvHeroBtn = document.getElementById("join-server-hero-btn");
+    if (joinSrvHeroBtn) joinSrvHeroBtn.onclick = openJoinServerModal;
 
     // Home button
-    document.getElementById("home-btn").onclick = showHomeView;
+    const homeBtn = document.getElementById("home-btn");
+    if (homeBtn) homeBtn.onclick = showHomeView;
 
     // Join by Code
-    document.getElementById("join-by-code-btn").onclick = joinByCode;
+    const joinIdxBtn = document.getElementById("join-by-code-btn");
+    if (joinIdxBtn) joinIdxBtn.onclick = joinByCode;
 
     // Discover button
-    document.getElementById("discover-btn").onclick = () => { showHomeView(); refreshDiscovery(); };
+    const discoverBtn = document.getElementById("discover-btn");
+    if (discoverBtn) discoverBtn.onclick = () => { showHomeView(); if (typeof refreshDiscovery === 'function') refreshDiscovery(); };
 
     // Members toggle
-    document.getElementById("members-toggle-btn").onclick = () => {
-        state.membersOpen = !state.membersOpen;
-        const panel = document.getElementById("members-panel");
-        panel.classList.toggle("collapsed", !state.membersOpen);
-    };
+    const membersToggleBtn = document.getElementById("members-toggle-btn");
+    if (membersToggleBtn) {
+        membersToggleBtn.onclick = () => {
+            state.membersOpen = !state.membersOpen;
+            const panel = document.getElementById("members-panel");
+            if (panel) panel.classList.toggle("collapsed", !state.membersOpen);
+        };
+    }
 
     // Voice controls
-    document.getElementById("voice-join-btn").onclick = () => {
-        if (state.activeChannelId) joinVoiceChannel(state.activeChannelId);
-    };
-    document.getElementById("voice-leave-btn").onclick = leaveVoiceChannel;
-    document.getElementById("vsb-disconnect-btn").onclick = leaveVoiceChannel;
+    const voiceJoinBtn = document.getElementById("voice-join-btn");
+    if (voiceJoinBtn) {
+        voiceJoinBtn.onclick = () => {
+            if (state.activeChannelId) joinVoiceChannel(state.activeChannelId);
+        };
+    }
+    const voiceLeaveBtn = document.getElementById("voice-leave-btn");
+    if (voiceLeaveBtn) voiceLeaveBtn.onclick = leaveVoiceChannel;
+
+    const vsbDisconnectBtn = document.getElementById("vsb-disconnect-btn");
+    if (vsbDisconnectBtn) vsbDisconnectBtn.onclick = leaveVoiceChannel;
 
     // Mic toggle
-    document.getElementById("mic-toggle-btn").onclick = () => {
-        if (!state.mesh) return;
-        const muted = state.mesh.toggleMic();
-        document.getElementById("mic-toggle-btn").classList.toggle("muted", muted);
-        toast(muted ? "Mikrofon kapatıldı 🔇" : "Mikrofon açıldı 🎙️", "info");
-    };
+    const micToggleBtn = document.getElementById("mic-toggle-btn");
+    if (micToggleBtn) {
+        micToggleBtn.onclick = () => {
+            if (!state.mesh) return;
+            const muted = state.mesh.toggleMic();
+            micToggleBtn.classList.toggle("muted", muted);
+            toast(muted ? "Mikrofon kapatıldı 🔇" : "Mikrofon açıldı 🎙️", "info");
+        };
+    }
 
     // Emoji picker
-    document.getElementById("emoji-btn").onclick = toggleEmojiPicker;
+    const emojiBtn = document.getElementById("emoji-btn");
+    if (emojiBtn) emojiBtn.onclick = toggleEmojiPicker;
 
     // GIF picker
     const gifBtn = document.getElementById("gif-btn");
@@ -7612,17 +7757,25 @@ document.addEventListener("DOMContentLoaded", () => {
         gifBtn.onclick = () => {
             gifPopover.classList.toggle("hidden");
             if (!gifPopover.classList.contains("hidden")) {
-                document.getElementById("gif-input").focus();
-                searchGifs("trending");
+                const gifInp = document.getElementById("gif-input");
+                if (gifInp) gifInp.focus();
+                if (typeof searchGifs === 'function') searchGifs("trending");
             }
         };
         const gifInput = document.getElementById("gif-input");
-        gifInput.addEventListener("input", UI.debounce((e) => searchGifs(e.target.value), SCORD_T().GIF_SEARCH_DEBOUNCE_MS ?? 500));
+        if (gifInput) {
+            gifInput.addEventListener("input", UI.debounce((e) => {
+                if (typeof searchGifs === 'function') searchGifs(e.target.value);
+            }, SCORD_T().GIF_SEARCH_DEBOUNCE_MS ?? 500));
+        }
     }
 
     // Settings
-    document.getElementById("settings-btn").onclick = openSettingsModal;
-    document.getElementById("pins-toggle-btn").onclick = () => showPinnedMessages();
+    const settingsBtn = document.getElementById("settings-btn");
+    if (settingsBtn) settingsBtn.onclick = openSettingsModal;
+
+    const pinsToggleBtn = document.getElementById("pins-toggle-btn");
+    if (pinsToggleBtn) pinsToggleBtn.onclick = () => { if (typeof showPinnedMessages === 'function') showPinnedMessages(); };
     const transBtn = document.getElementById("translate-toggle-btn");
     if (transBtn) {
         transBtn.onclick = () => {
@@ -9090,11 +9243,18 @@ window.handleIncomingP2P = function (fromPeerId, data, roomId) {
 // Enhanced !play command with Discord-style bot mention
 const _origSendMessage = window.sendMessage;
 window.sendMessage = function () {
+    console.log("[window.sendMessage Override] Intercepted message send.");
     const input = document.getElementById("chat-input");
-    const text = input.value.trim();
+    if (!input) {
+        console.error("[window.sendMessage Override] Critical Error: chat-input not found!");
+        if (typeof _origSendMessage === 'function') _origSendMessage();
+        return;
+    }
+    const text = (input.value || "").trim();
 
     // Check for Discord-style music commands
     if (text.startsWith("!p ") || text.startsWith("!play ")) {
+        console.log("[window.sendMessage Override] Music !play command detected.");
         const query = text.startsWith("!p ") ? text.slice(3).trim() : text.slice(6).trim();
         if (!query) {
             toast("🎵 Kullanım: !play <şarkı adı veya YouTube linki>", "info");
@@ -9103,11 +9263,12 @@ window.sendMessage = function () {
 
         // Show bot mention style message
         const botMention = `<span class="mention" style="background:rgba(239,68,68,0.2);color:#fca5a5;">🎵 Müzik Botu</span>`;
-        addSystemMessage(`${botMention} Şarkı aranıyor: "${query}"...`);
+        if (typeof addSystemMessage === 'function') addSystemMessage(`${botMention} Şarkı aranıyor: "${query}"...`);
     }
 
     // Check for kick music bot command
     if (text === "!kickmusic" || text === "!stopmusic") {
+        console.log("[window.sendMessage Override] Music !stop/kick command detected.");
         if (!state.voiceChannelId) {
             toast("Sesli kanalda değilsin.", "warning");
             return;
@@ -9126,18 +9287,20 @@ window.sendMessage = function () {
         const server = state.servers.find(s => s.id === state.activeServerId);
         if (server && server.voiceMembers && state.voiceChannelId) {
             server.voiceMembers[state.voiceChannelId] = (server.voiceMembers[state.voiceChannelId] || []).filter(m => m.peer_id !== "bot_music");
-            renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
-            updateChannelSidebar(state.activeServerId);
+            if (typeof renderVoiceParticipants === 'function') renderVoiceParticipants(state.activeServerId, state.voiceChannelId);
+            if (typeof updateChannelSidebar === 'function') updateChannelSidebar(state.activeServerId);
         }
 
-        stopMusicBot();
+        if (typeof stopMusicBot === 'function') stopMusicBot();
         toast("🎵 Müzik botu çıkarıldı.", "info");
         input.value = "";
         return;
     }
 
-    if (_origSendMessage) {
+    if (typeof _origSendMessage === 'function') {
         _origSendMessage();
+    } else {
+        console.error("[window.sendMessage Override] Error: _origSendMessage is not a function!");
     }
 };
 
@@ -13088,15 +13251,9 @@ function createNewRole() {
     showRoleManagementModal();
 }
 
-function sendMessage() {
-    const input = document.getElementById('message-input');
-    if (input && input.value.trim()) {
-        sendChatMessage();
-    }
-}
 
 function addNewLineToMessage(e) {
-    const input = document.getElementById('message-input');
+    const input = document.getElementById('chat-input');
     if (input) {
         const start = input.selectionStart;
         const end = input.selectionEnd;
