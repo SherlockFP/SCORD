@@ -198,6 +198,12 @@ function initSetup() {
     if (saved.voice) {
         try { state.voiceSettings = JSON.parse(saved.voice); } catch (e) { }
     }
+    if (saved.voiceEffect) {
+        try {
+            const ve = JSON.parse(saved.voiceEffect);
+            state.voiceEffect = { ...state.voiceEffect, ...ve };
+        } catch (e) { }
+    }
     if (saved.image) state.avatarImage = saved.image;
     if (saved.username) {
         nameInput.value = saved.username;
@@ -1897,6 +1903,10 @@ async function joinVoiceChannel(channelId) {
     document.getElementById("voice-leave-btn").classList.remove("hidden");
     document.getElementById("voice-screen-btn")?.classList.remove("hidden");
     document.getElementById("voice-camera-btn")?.classList.remove("hidden");
+    document.getElementById("voice-effect-btn")?.classList.remove("hidden");
+    if (state.voiceEffect.current !== "none") {
+        document.getElementById("voice-effect-btn")?.classList.add("has-effect");
+    }
 
     updateMuteStates();
     toast("Sesli kanala katıldın! 🎙️", "success");
@@ -1936,6 +1946,8 @@ function leaveVoiceChannel() {
     document.getElementById("voice-leave-btn").classList.add("hidden");
     document.getElementById("voice-screen-btn")?.classList.add("hidden");
     document.getElementById("voice-camera-btn")?.classList.add("hidden");
+    document.getElementById("voice-effect-btn")?.classList.add("hidden");
+    document.getElementById("voice-effect-btn")?.classList.remove("has-effect", "active");
 
     if (state.screenStream) {
         state.screenStream.getTracks().forEach(t => t.stop());
@@ -2030,6 +2042,21 @@ function renderVoiceParticipants(serverId, channelId) {
             }
         } else if (shareIcon) {
             shareIcon.remove();
+        }
+
+        // Voice effect badge (own card only)
+        if (m.peer_id === state.peerId && state.voiceEffect.current !== "none") {
+            let effBadge = nameContainer.querySelector('.voice-effect-badge');
+            if (!effBadge) {
+                effBadge = document.createElement("span");
+                effBadge.className = "voice-effect-badge";
+                nameContainer.appendChild(effBadge);
+            }
+            effBadge.textContent = VOICE_EFFECTS[state.voiceEffect.current]?.icon || "🎤";
+            effBadge.title = VOICE_EFFECTS[state.voiceEffect.current]?.label + " efekti";
+        } else {
+            const existing = nameContainer.querySelector('.voice-effect-badge');
+            if (existing) existing.remove();
         }
 
         const isSharing = m.isSharingScreen || m.isSharingCamera || (m.peer_id === state.peerId && (state.screenStream || state.cameraStream));
@@ -3557,9 +3584,263 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // Voice Effects
+    const effectBtn = document.getElementById("voice-effect-btn");
+    if (effectBtn) {
+        effectBtn.onclick = () => toggleVoiceEffectPanel();
+    }
+
     // Load recent DMs
     state.recentDMs = JSON.parse(localStorage.getItem("scord_recent_dms") || "[]");
 });
+
+/* ══ Voice Effects Engine ══════════════════════════════════ */
+const VOICE_EFFECTS = {
+    none:    { label: "Yok",        icon: "🔇",  apply: () => null },
+    robot:   { label: "Robot",      icon: "🤖",  apply: (ctx, intensity) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const wave = ctx.createWaveShaper();
+        const n = 256;
+        const curve = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+            const x = (i * 2) / n - 1;
+            curve[i] = (Math.PI + intensity * 30) * x / (Math.PI + intensity * Math.abs(x));
+        }
+        wave.curve = curve;
+        osc.frequency.value = 60;
+        osc.type = "square";
+        gain.gain.value = 0;
+        return [osc, gain, wave];
+    }},
+    alien:   { label: "Uzayli",    icon: "👽",  apply: (ctx, intensity) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const filter = ctx.createBiquadFilter();
+        osc.frequency.value = 100 + intensity * 50;
+        osc.type = "sawtooth";
+        filter.type = "bandpass";
+        filter.frequency.value = 800 + intensity * 500;
+        filter.Q.value = 10;
+        gain.gain.value = 0;
+        return [osc, gain, filter];
+    }},
+    deep:    { label: "Derin",     icon: "🎸",  apply: (ctx, intensity) => {
+        const filter = ctx.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.value = 200 - intensity * 80;
+        return [filter];
+    }},
+    chipmunk:{ label: "Sincap",    icon: "🐿",  apply: (ctx, intensity) => {
+        const filter = ctx.createBiquadFilter();
+        filter.type = "highpass";
+        filter.frequency.value = 800 + intensity * 400;
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -20;
+        comp.ratio.value = 6;
+        return [filter, comp];
+    }},
+    cave:    { label: "Kuyu",      icon: "🏔️", apply: (ctx, intensity) => {
+        const conv = ctx.createConvolver();
+        const delay = ctx.createDelay(0.5);
+        const gain = ctx.createGain();
+        delay.delayTime.value = 0.3 * intensity;
+        gain.gain.value = 0.5 * intensity;
+        conv.channelCount = 1;
+        const len = ctx.sampleRate * 1.5;
+        const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.5));
+        conv.buffer = buf;
+        return [conv, delay, gain];
+    }},
+    radio:   { label: "Radyo",     icon: "📻",  apply: (ctx, intensity) => {
+        const filter = ctx.createBiquadFilter();
+        filter.type = "bandpass";
+        filter.frequency.value = 1000;
+        filter.Q.value = 0.5;
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -15;
+        comp.ratio.value = 4;
+        return [filter, comp];
+    }},
+    bass:    { label: "Bas",       icon: "🔊",  apply: (ctx, intensity) => {
+        const filter = ctx.createBiquadFilter();
+        filter.type = "lowshelf";
+        filter.frequency.value = 200;
+        filter.gain.value = 10 + intensity * 10;
+        return [filter];
+    }},
+    helium:  { label: "Helyum",    icon: "🎈",  apply: (ctx, intensity) => {
+        const filter = ctx.createBiquadFilter();
+        filter.type = "highpass";
+        filter.frequency.value = 1500 + intensity * 800;
+        const gain = ctx.createGain();
+        gain.gain.value = 0.8;
+        return [filter, gain];
+    }}
+};
+
+state.voiceEffect = {
+    current: "none",
+    intensity: 0.5,
+    nodes: [],
+    effectNodes: []
+};
+
+function makeDistortionCurve(amount) {
+    const n = 512;
+    const curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+        const x = (i * 2) / n - 1;
+        curve[i] = ((Math.PI + amount) * x) / (Math.PI + amount * Math.abs(x));
+    }
+    return curve;
+}
+
+function toggleVoiceEffectPanel() {
+    let panel = document.getElementById("voice-effect-popover");
+    if (panel) {
+        panel.remove();
+        return;
+    }
+    const btn = document.getElementById("voice-effect-btn");
+    if (!btn) return;
+    panel = document.createElement("div");
+    panel.id = "voice-effect-popover";
+    panel.className = "voice-effect-popover";
+
+    const presets = Object.entries(VOICE_EFFECTS).map(([key, eff]) =>
+        `<div class="vep-preset${state.voiceEffect.current === key ? " active" : ""}" data-effect="${key}">
+            <span class="vep-preset-icon">${eff.icon}</span>
+            <span>${eff.label}</span>
+        </div>`
+    ).join("");
+
+    const currentLabel = VOICE_EFFECTS[state.voiceEffect.current]?.label || "Yok";
+    const currentIcon  = VOICE_EFFECTS[state.voiceEffect.current]?.icon  || "🔇";
+
+    panel.innerHTML = `
+        ${state.voiceEffect.current !== "none" ? `<div class="vep-active-indicator">${currentIcon} ${currentLabel} aktif</div>` : ""}
+        <div class="vep-title">Ses Efektleri</div>
+        <div class="vep-grid">${presets}</div>
+        <div class="vep-divider"></div>
+        <div class="vep-intensity">
+            <label>Etki:</label>
+            <input type="range" id="vep-intensity" min="0" max="1" step="0.05" value="${state.voiceEffect.intensity}">
+            <span style="font-size:11px;color:var(--text-muted);min-width:28px;text-align:right">${Math.round(state.voiceEffect.intensity * 100)}%</span>
+        </div>
+    `;
+
+    // Position below voice controls
+    const vcontrols = document.querySelector(".voice-controls");
+    if (vcontrols) {
+        const rect = vcontrols.getBoundingClientRect();
+        panel.style.bottom = "auto";
+        panel.style.top = `${rect.top - panel.offsetHeight - 10}px`;
+        panel.style.left = "50%";
+        panel.style.transform = "translateX(-50%)";
+        panel.style.position = "fixed";
+    }
+
+    document.body.appendChild(panel);
+    setTimeout(() => document.addEventListener("click", closeEffectPanel, { once: true }), 0);
+
+    panel.querySelectorAll(".vep-preset").forEach(el => {
+        el.onclick = (e) => {
+            e.stopPropagation();
+            const effect = el.dataset.effect;
+            setVoiceEffect(effect);
+            toggleVoiceEffectPanel();
+        };
+    });
+
+    const slider = document.getElementById("vep-intensity");
+    if (slider) {
+        slider.oninput = (e) => {
+            state.voiceEffect.intensity = parseFloat(e.target.value);
+            e.target.nextElementSibling.textContent = Math.round(state.voiceEffect.intensity * 100) + "%";
+            if (state.voiceEffect.current !== "none") {
+                rebuildEffectPipeline();
+            }
+        };
+    }
+}
+
+function closeEffectPanel(e) {
+    if (e && e.target.closest(".voice-effect-popover")) return;
+    document.getElementById("voice-effect-popover")?.remove();
+}
+
+function setVoiceEffect(effect) {
+    if (effect === state.voiceEffect.current) return;
+    state.voiceEffect.current = effect;
+    localStorage.setItem("scord_voice_effect", JSON.stringify({ current: effect, intensity: state.voiceEffect.intensity }));
+    const btn = document.getElementById("voice-effect-btn");
+    if (btn) {
+        if (effect === "none") {
+            btn.classList.remove("has-effect", "active");
+        } else {
+            btn.classList.add("has-effect");
+            btn.classList.add("active");
+        }
+    }
+    rebuildEffectPipeline();
+}
+
+function rebuildEffectPipeline() {
+    if (!state.audioCtx || !state.originalMicStream) return;
+    const stream = state.originalMicStream;
+    const ctx = state.audioCtx;
+
+    // Stop existing effect nodes
+    state.voiceEffect.effectNodes.forEach(n => {
+        try { n.stop?.(); n.disconnect?.(); } catch {}
+    });
+    state.voiceEffect.effectNodes = [];
+
+    if (state.voiceEffect.current === "none") {
+        reconnectToVoice();
+        return;
+    }
+
+    const eff = VOICE_EFFECTS[state.voiceEffect.current];
+    if (!eff) return;
+
+    const nodes = eff.apply(ctx, state.voiceEffect.intensity);
+    if (!nodes) {
+        reconnectToVoice();
+        return;
+    }
+
+    state.voiceEffect.effectNodes = nodes.filter(n => n);
+
+    const source = ctx.createMediaStreamSource(stream);
+    let prev = source;
+
+    for (const node of state.voiceEffect.effectNodes) {
+        if (!node) continue;
+        prev.connect(node);
+        prev = node;
+    }
+
+    const dest = ctx.createMediaStreamDestination();
+    prev.connect(dest);
+
+    // Replace voice stream
+    const newStream = dest.stream;
+    if (state.mesh?.startVoice) {
+        state.mesh.stopVoice?.();
+        state.mesh.startVoice(newStream);
+    }
+    toast(`${eff.icon} ${eff.label} efekti aktif.`, "info");
+}
+
+function reconnectToVoice() {
+    if (!state.mesh || !state.originalMicStream || !state.voiceChannelId) return;
+    state.mesh.stopVoice?.();
+    state.mesh.startVoice(state.originalMicStream);
+}
 
 function showPinnedMessages() {
     const server = state.servers.find(s => s.id === state.activeServerId);

@@ -1641,6 +1641,131 @@ body {
 }
 
 /* ── Voice Status Bar ───────────────────────────────────────── */
+
+/* Voice Effects Panel */
+.voice-effect-popover {
+  position: absolute;
+  bottom: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  padding: 16px;
+  min-width: 260px;
+  z-index: 999;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  animation: slideUp .2s ease both;
+}
+
+.vep-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.vep-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.vep-preset {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 8px;
+  background: rgba(255,255,255,0.05);
+  border: 2px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  transition: all .15s;
+  text-align: center;
+}
+
+.vep-preset:hover {
+  background: rgba(255,255,255,0.1);
+  border-color: var(--accent-light);
+  transform: scale(1.05);
+}
+
+.vep-preset.active {
+  background: rgba(88, 101, 242, 0.2);
+  border-color: var(--accent-light);
+  color: var(--accent-light);
+}
+
+.vep-preset-icon {
+  font-size: 20px;
+}
+
+.vep-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 12px 0;
+}
+
+.vep-intensity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vep-intensity label {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.vep-intensity input[type="range"] {
+  flex: 1;
+  height: 4px;
+  accent-color: var(--accent-light);
+}
+
+.vep-active-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(88, 101, 242, 0.15);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-light);
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+#voice-effect-btn.active {
+  background: var(--accent-hover);
+  box-shadow: 0 0 12px rgba(88, 101, 242, 0.5);
+}
+
+#voice-effect-btn.has-effect {
+  background: rgba(88, 101, 242, 0.3);
+  color: #a5b4fc;
+}
+
+.voice-effect-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--accent);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 6px;
+}
 .voice-status-bar {
   position: fixed;
   bottom: 56px;
