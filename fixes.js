@@ -63,17 +63,24 @@
       };
     };
 
-    // Throttle utility
-    window._throttle = function (fn, ms) {
-      var last = 0;
-      return function () {
-        var now = Date.now();
-        if (now - last >= (ms || 16)) {
-          last = now;
-          fn.apply(this, arguments);
-        }
-      };
-    };
+    // Throttle utility - for scroll, resize, mousemove
+    var _scrollThrottle = null;
+    var _resizeThrottle = null;
+    var _mousemoveThrottle = null;
+
+    // Patch scroll handler
+    var _origScroll = null;
+    document.addEventListener("scroll", function(e) {
+      if (_scrollThrottle) return;
+      _scrollThrottle = setTimeout(function() { _scrollThrottle = null; }, 50);
+      if (typeof window.updateLastActive === "function") window.updateLastActive(e);
+    }, { passive: true });
+
+    // Patch resize handler
+    window.addEventListener("resize", function(e) {
+      if (_resizeThrottle) return;
+      _resizeThrottle = setTimeout(function() { _resizeThrottle = null; }, 100);
+    }, { passive: true });
 
     // Cache frequently accessed DOM elements
     window._domCache = {};
@@ -83,7 +90,43 @@
       return el;
     };
 
-    console.log("[Fixes] Performans iyileştirmeleri yüklendi");
+    // CSS will-change optimization - GPU acceleration
+    var perfStyle = document.createElement("style");
+    perfStyle.id = "scord-perf-gpu";
+    perfStyle.textContent = `
+      /* GPU Acceleration for animations */
+      .rail-icon, .server-rail-icon, .channel-icon, .member-avatar {
+        will-change: transform;
+        transform: translateZ(0);
+        backface-visibility: hidden;
+      }
+      
+      /* Smooth scrolling */
+      .messages-area, .channel-list, .members-list, .dm-body {
+        scroll-behavior: smooth;
+        -webkit-overflow-scrolling: touch;
+      }
+      
+      /* Optimize scrollbars */
+      *::-webkit-scrollbar { width: 6px; height: 6px; }
+      *::-webkit-scrollbar-track { background: transparent; }
+      *::-webkit-scrollbar-thumb { 
+        background: rgba(255,255,255,0.15); 
+        border-radius: 3px; 
+      }
+      *::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+      
+      /* Reduced motion support */
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+    `;
+    document.head.appendChild(perfStyle);
+
+    console.log("[Fixes] Performans iyileştirmeleri yüklendi (v2.4)");
   })();
 
   /* ══════════════════════════════════════════════════════════
@@ -683,20 +726,64 @@
   }
 
   function patchMusicBot() {
-    // Müzik botu fonksiyonunu patch'le - doğrudan renderMusicBotPanel sonrası çalışacak
-    setTimeout(function () {
-      // Önce orijinal startMusicBot'u patch'le
-      if (typeof window.startMusicBot === "function" && !window._musicBotPatched) {
-        window._musicBotPatched = true;
-        var _origSMB = window.startMusicBot;
-        window.startMusicBot = function (videoId, startAt) {
-          console.log("[Fixes] startMusicBot called with videoId:", videoId);
-          // Orijinal fonksiyonu çağır (bu zaten çalışıyor)
-          try { _origSMB(videoId, startAt); } catch (e) { console.error("[Fixes] startMusicBot error:", e); }
-          // Ayrıca custom dock player'ı da başlat
-          _startMusicFix(videoId, startAt);
-        };
-      }
+    // startMusicBot'u patch'le
+    if (typeof window.startMusicBot === "function" && !window._musicBotPatched) {
+      window._musicBotPatched = true;
+      var _origSMB = window.startMusicBot;
+      window.startMusicBot = function (videoId, startAt) {
+        console.log("[Fixes] startMusicBot called with videoId:", videoId);
+        try { _origSMB(videoId, startAt); } catch (e) { console.error("[Fixes] startMusicBot error:", e); }
+        _startMusicFix(videoId, startAt);
+      };
+    }
+    
+    // P2P music_play dinle
+    var _origP2P = window.handleIncomingP2P;
+    if (_origP2P) {
+      window.handleIncomingP2P = function (fromPeerId, data, roomId) {
+        if (data?.type === "music_play" && data.videoId) {
+          if (window.state?.voiceChannelId) _startMusicFix(data.videoId, data.startAt || 0);
+          return;
+        }
+        if (data?.type === "music_stop") { _stopMusicFix(); return; }
+        return _origP2P.apply(this, arguments);
+      };
+    }
+
+    // handleServerMessage'dan music_play dinle
+    if (typeof window.handleServerMessage === "function") {
+      var _origHSM = window.handleServerMessage;
+      window.handleServerMessage = function (data) {
+        if (data?.type === "music_play" && data.videoId) {
+          if (window.state?.voiceChannelId) _startMusicFix(data.videoId, data.startAt || 0);
+          return;
+        }
+        if (data?.type === "music_stop") { _stopMusicFix(); return; }
+        return _origHSM.apply(this, arguments);
+      };
+    }
+    
+    // leaveVoiceChannel'da müziği durdur
+    var _origLVC = window.leaveVoiceChannel;
+    if (_origLVC) {
+      window.leaveVoiceChannel = function () {
+        _stopMusicFix();
+        return _origLVC.apply(this, arguments);
+      };
+    }
+
+    window.stopMusicBot = function () { _stopMusicFix(); };
+    window.pauseMusicBot = function () {
+      var iframe = document.getElementById("yt-embed-fix");
+      if (iframe) iframe.src = iframe.src.replace("autoplay=1", "autoplay=0");
+    };
+    window.resumeMusicBot = function () {
+      var iframe = document.getElementById("yt-embed-fix");
+      if (iframe) iframe.src = iframe.src.replace("autoplay=0", "autoplay=1");
+    };
+    
+    console.log("[Fixes] Music bot patches applied");
+  }
       
       // P2P music play mesajlarını dinle
       var _origP2P = window.handleIncomingP2P;
@@ -1614,23 +1701,33 @@
           if (!nick) { if (typeof toast === "function") toast("Kullanıcı adı gerekli.", "error"); return; }
           if (!pass) { if (typeof toast === "function") toast("Şifre gerekli.", "error"); return; }
           
-          // loginWithPassword çağır
+          // loginWithPassword çağır - state.username + localStorage ayarlanır
           var ok = window.loginWithPassword(nick, pass);
           if (ok) {
-            // Setup overlay'ü gizle
-            var overlay = document.getElementById("setup-overlay");
-            if (overlay) overlay.style.display = "none";
+            // state.username zaten loginWithPassword tarafından ayarlandı
+            // peerId yoksa oluştur
+            if (!window.state.peerId) window.state.peerId = genId();
             
-            // state.username'ı localStorage'a kaydet
-            localStorage.setItem("scord_username", nick);
-            
-            console.log("[Fixes] Login successful, username:", nick);
-            
-            // startApp'i küçük bir gecikmeyle çağır (freeze önlemek için)
-            if (typeof startApp === "function") {
-              setTimeout(function () {
-                try { startApp(); } catch (e) { console.error("[Fixes] startApp error:", e); }
-              }, 50);
+            // startApp'i hemen çağır - çift çağrı koruması ile
+            if (typeof startApp === "function" && !window._startAppRunning) {
+              window._startAppRunning = true;
+              try { 
+                console.log("[Fixes] Calling startApp for:", nick);
+                startApp(); 
+              } catch (e) { 
+                console.error("[Fixes] startApp error:", e);
+                // Hata olursa yine de dene - overlay'i manuel gizle
+                var overlay = document.getElementById("setup-overlay");
+                if (overlay) { overlay.classList.remove("active"); overlay.style.display = "none"; }
+                var appEl = document.getElementById("app");
+                if (appEl) appEl.classList.remove("hidden");
+              }
+            } else {
+              // startApp zaten çalışıyor, sadece overlay'i gizle
+              var overlay = document.getElementById("setup-overlay");
+              if (overlay) { overlay.classList.remove("active"); overlay.style.display = "none"; }
+              var appEl = document.getElementById("app");
+              if (appEl) appEl.classList.remove("hidden");
             }
           }
         };
@@ -1650,37 +1747,81 @@
       setTimeout(_updateDiscTag, 1000);
     }
 
-    // startApp sonrasında "Anonim" sorununu düzelt - daha kapsamlı
+    // startApp sonrasında "Anonim" sorununu düzelt - basit ve güvenli
     var _origSA = window.startApp;
     if (_origSA && !window._discTagFixed) {
       window._discTagFixed = true;
       window.startApp = function () {
-        var result = _origSA.apply(this, arguments);
+        // Çift çağrı koruması
+        if (window._startAppRunning) {
+          console.log("[Fixes] startApp already running, skipping re-entry");
+          return;
+        }
+        window._startAppRunning = true;
         
-        // 300ms sonra "Anonim" kontrolü ve düzeltme
-        setTimeout(function () {
-          var nameEl = document.getElementById("user-bar-name");
-          var savedNick = localStorage.getItem("scord_last_nick");
-          var savedPass = localStorage.getItem("scord_last_pass");
+        // HEMEN username'i düzelt - app.js state'e bakmadan ÖNCE
+        var savedNick = localStorage.getItem("scord_last_nick");
+        if (savedNick && window.state) {
+          window.state.username = savedNick;
+          localStorage.setItem("scord_username", savedNick);
+        }
+        
+        // Orijinal startApp'i çağır
+        var result;
+        try {
+          result = _origSA.apply(this, arguments);
+        } catch (e) {
+          console.error("[Fixes] startApp error:", e);
+        }
+        
+        // startApp bitti - flag'i temizle
+        setTimeout(function () { window._startAppRunning = false; }, 100);
+        
+        // HEMEN username'i düzelt - app.js bitirdikten SONRA
+        var nameEl = document.getElementById("user-bar-name");
+        if (savedNick && nameEl) {
+          localStorage.setItem("scord_username", savedNick);
           
-          // Eğer kayıtlı nick ve pass varsa, loginWithPassword ile giriş yap
-          if (savedNick && savedPass && nameEl && nameEl.textContent === "Anonim") {
-            console.log("[Fixes] Fixing Anonim - attempting auto-login:", savedNick);
-            var ok = window.loginWithPassword(savedNick, savedPass);
-            if (ok) {
-              // State ve UI'ı güncelle
-              window.state.username = savedNick;
-              localStorage.setItem("scord_username", savedNick);
-              var disc = window.state._discriminator || "0001";
-              nameEl.textContent = savedNick + "#" + disc;
-              console.log("[Fixes] Fixed Anonim ->", savedNick + "#" + disc);
-            }
+          // discriminator'ı localStorage'dan al
+          var storedId = localStorage.getItem("scord_id_" + savedNick.toLowerCase() + "_0001");
+          var disc = "0001";
+          if (storedId) {
+            try {
+              var idData = JSON.parse(storedId);
+              disc = idData.discriminator || "0001";
+              if (window.state && !window.state._discriminator) {
+                window.state._discriminator = disc;
+              }
+            } catch (e) {}
           }
           
-          _updateDiscTag();
-          // 3 saniye sonra bir daha dene (geç yüklenen elementler için)
-          setTimeout(_updateDiscTag, 3000);
-        }, 300);
+          // UI'ı güncelle
+          nameEl.textContent = savedNick + "#" + disc;
+          console.log("[Fixes] Fixed Anonim ->", savedNick + "#" + disc);
+        } else {
+          console.log("[Fixes] No savedNick found for Anonim fix, savedNick:", savedNick, "nameEl:", !!nameEl);
+        }
+        
+        // 500ms sonra tekrar kontrol et (geç yüklenen elementler için)
+        setTimeout(function () {
+          var nameEl2 = document.getElementById("user-bar-name");
+          var savedNick2 = localStorage.getItem("scord_last_nick");
+          if (nameEl2 && savedNick2 && (nameEl2.textContent === "Anonim" || !nameEl2.textContent)) {
+            // discriminator'ı localStorage'dan al
+            var storedId2 = localStorage.getItem("scord_id_" + savedNick2.toLowerCase() + "_0001");
+            var disc2 = "0001";
+            if (storedId2) {
+              try {
+                var idData2 = JSON.parse(storedId2);
+                disc2 = idData2.discriminator || "0001";
+              } catch (e) {}
+            }
+            nameEl2.textContent = savedNick2 + "#" + disc2;
+            if (window.state) window.state.username = savedNick2;
+            localStorage.setItem("scord_username", savedNick2);
+            console.log("[Fixes] Fixed Anonim (retry) ->", savedNick2 + "#" + disc2);
+          }
+        }, 500);
         
         return result;
       };
@@ -2248,13 +2389,14 @@
      INIT
   ══════════════════════════════════════════════════════════ */
 
-  function init() {
+function init() {
+    console.log("[Fixes] v2.4 - Starting...");
     applyPerf();
     applyChatStyle();
-    patchVoiceLoop();
     patchThemeColors();
 
     function ready() {
+      console.log("[Fixes] Ready, applying patches...");
       patchSaveServerSettings();
       patchWSHandler();
       hookSounds();
@@ -2277,6 +2419,9 @@
       patchProfileSystem();
       patchStatusBar();
       patchPerformance();
+      patchAnimatedEmojis();
+      patchDiscordAnimations();
+      patchServerIcons();
 
       var _obsTimer = null;
       var obs = new MutationObserver(function () {
@@ -2295,6 +2440,289 @@
 
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready);
     else ready();
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     ANİMASYONLU EMOJİ DESTEĞİ - GIF/APNG
+  ══════════════════════════════════════════════════════════ */
+
+  function patchAnimatedEmojis() {
+    // Animated emoji CSS
+    var animStyle = document.createElement("style");
+    animStyle.id = "scord-anim-emoji";
+    animStyle.textContent = `
+      /* Animated emoji support */
+      .custom-emoji {
+        image-rendering: auto;
+        display: inline-block;
+        vertical-align: middle;
+      }
+      .custom-emoji.animated {
+        animation: emoji-bounce 0.3s ease;
+      }
+      .custom-emoji:hover {
+        transform: scale(1.15);
+      }
+      @keyframes emoji-bounce {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.2); }
+      }
+      
+      /* Reaction hover animation */
+      .reaction-pill:hover {
+        transform: scale(1.05);
+        background: var(--bg-hover);
+      }
+      .reaction-pill {
+        transition: transform 0.15s ease, background 0.15s ease;
+      }
+    `;
+    document.head.appendChild(animStyle);
+
+    // Intersection Observer for animated emojis (only animate when visible)
+    if (typeof IntersectionObserver !== "undefined") {
+      var emojiObserver = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
+          if (entry.isIntersecting) {
+            entry.target.play?.();
+          } else {
+            entry.target.pause?.();
+          }
+        });
+      }, { threshold: 0.1 });
+      window._emojiObserver = emojiObserver;
+    }
+
+    console.log("[Fixes] Animated emoji support enabled");
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     DISCORD TARZI UI ANİMASYONLARI
+  ══════════════════════════════════════════════════════════ */
+
+  function patchDiscordAnimations() {
+    var animStyle = document.createElement("style");
+    animStyle.id = "scord-discord-anim";
+    animStyle.textContent = `
+      /* Discord-style panel transitions */
+      .panel, .modal, .ctx-menu {
+        transition: opacity 0.2s ease, transform 0.2s ease;
+      }
+      
+      /* Server icon hover animation - Discord style */
+      .rail-icon, .server-rail-icon {
+        transition: border-radius 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+      }
+      .rail-icon:hover, .server-rail-icon:hover {
+        border-radius: 16px !important;
+        transform: scale(1.08);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      }
+      .rail-icon.active {
+        border-radius: 16px !important;
+      }
+      
+      /* Channel hover animation */
+      .channel-item {
+        transition: background 0.15s ease, transform 0.1s ease;
+      }
+      .channel-item:hover {
+        background: var(--bg-hover);
+        transform: translateX(2px);
+      }
+      
+      /* Message hover */
+      .msg-row {
+        transition: background 0.1s ease;
+      }
+      .msg-row:hover {
+        background: rgba(255,255,255,0.02);
+      }
+      
+      /* Button hover effects */
+      .btn, button {
+        transition: all 0.15s ease;
+      }
+      .btn:hover, button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      }
+      .btn:active, button:active {
+        transform: translateY(0);
+        box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      }
+      
+      /* Voice speaking animation */
+      .voice-speaking {
+        animation: voice-pulse 1.5s ease-in-out infinite;
+      }
+      @keyframes voice-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.4); }
+        50% { box-shadow: 0 0 0 8px rgba(88, 166, 255, 0); }
+      }
+      
+      /* Loading spinner */
+      .loading-spinner {
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      
+      /* Toast animations */
+      .toast {
+        animation: toastSlideIn 0.3s ease;
+      }
+      @keyframes toastSlideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+      
+      /* Modal fade in */
+      .modal-overlay {
+        animation: modalFadeIn 0.2s ease;
+      }
+      @keyframes modalFadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      
+      /* User mention highlight animation */
+      .mention {
+        animation: mention-flash 0.5s ease;
+      }
+      @keyframes mention-flash {
+        0%, 100% { background: transparent; }
+        50% { background: rgba(88, 166, 255, 0.3); }
+      }
+      
+      /* Typing indicator bounce */
+      .typing-dot {
+        animation: typing-bounce 1.4s ease-in-out infinite;
+      }
+      .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+      .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+      @keyframes typing-bounce {
+        0%, 60%, 100% { transform: translateY(0); }
+        30% { transform: translateY(-4px); }
+      }
+    `;
+    document.head.appendChild(animStyle);
+
+    // Add hover effects to server rail icons via JS (for dynamic elements)
+    var serverRailObserver = new MutationObserver(function() {
+      document.querySelectorAll(".rail-icon:not(.anim-patched), .server-rail-icon:not(.anim-patched)").forEach(function(icon) {
+        icon.classList.add("anim-patched");
+        icon.style.transition = "border-radius 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease";
+      });
+    });
+    serverRailObserver.observe(document.body, { childList: true, subtree: true });
+
+    console.log("[Fixes] Discord-style animations enabled");
+
+    // Discord-style reaction burst effect (on reaction add)
+    var burstStyle = document.createElement("style");
+    burstStyle.id = "scord-burst-effect";
+    burstStyle.textContent = `
+      /* Reaction burst animation - Discord style */
+      .reaction-pill.burst {
+        animation: reaction-burst 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      }
+      @keyframes reaction-burst {
+        0% { transform: scale(1); }
+        30% { transform: scale(1.3); }
+        50% { transform: scale(0.95); }
+        70% { transform: scale(1.1); }
+        100% { transform: scale(1); }
+      }
+      
+      /* Message appear animation */
+      .msg-row {
+        animation: msg-appear 0.15s ease-out;
+      }
+      @keyframes msg-appear {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      
+      /* Status dot pulse animation */
+      .status-dot.online {
+        animation: status-pulse 2s ease-in-out infinite;
+      }
+      @keyframes status-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(59, 165, 92, 0.4); }
+        50% { box-shadow: 0 0 0 4px rgba(59, 165, 92, 0); }
+      }
+      
+      /* Channel unread indicator */
+      .channel-unread {
+        animation: unread-glow 2s ease-in-out infinite;
+      }
+      @keyframes unread-glow {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      
+      /* Voice channel speaking ring */
+      .voice-user.speaking .voice-user-avatar {
+        animation: speak-ring 1.5s ease-in-out infinite;
+      }
+      @keyframes speak-ring {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.5); }
+        50% { box-shadow: 0 0 0 6px rgba(88, 166, 255, 0); }
+      }
+      
+      /* Friend request badge pulse */
+      .badge.friend-request {
+        animation: bad-pulse 1s ease-in-out infinite;
+      }
+      @keyframes bad-pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.15); }
+      }
+    `;
+    document.head.appendChild(burstStyle);
+  }
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     SERVER İCON MODERNİZE ET
+  ══════════════════════════════════════════════════════════ */
+
+  function patchServerIcons() {
+    var iconStyle = document.createElement("style");
+    iconStyle.id = "scord-server-icons";
+    iconStyle.textContent = `
+      /* Modern server icons */
+      .rail-icon, .server-rail-icon {
+        border-radius: 50% !important;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      }
+      .rail-icon img, .server-rail-icon img {
+        object-fit: cover;
+        width: 100%;
+        height: 100%;
+      }
+      .rail-icon:hover, .server-rail-icon:hover {
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5), 0 0 0 2px var(--accent);
+      }
+      .rail-icon.active {
+        box-shadow: 0 4px 16px rgba(99, 102, 241, 0.5), 0 0 0 2px var(--accent);
+      }
+      /* Add button style */
+      .add-server-btn, .rail-add-icon {
+        border-radius: 50%;
+        background: linear-gradient(135deg, #2c2c3a, #1e1e28);
+        border: 2px dashed rgba(255,255,255,0.2);
+      }
+      .add-server-btn:hover, .rail-add-icon:hover {
+        border-color: var(--accent);
+        background: linear-gradient(135deg, #3c3c4a, #2e2e38);
+      }
+    `;
+    document.head.appendChild(iconStyle);
   }
 
   init();
