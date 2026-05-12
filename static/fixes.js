@@ -50,6 +50,43 @@
   };
 
   /* ══════════════════════════════════════════════════════════
+     PERFORMANS İYİLEŞTİRMELERİ — Genel Site Kasması Fix
+  ══════════════════════════════════════════════════════════ */
+
+  (function _perfOptimizations() {
+    // Debounce utility
+    window._debounce = function (fn, ms) {
+      var tm = null;
+      return function () {
+        if (tm) clearTimeout(tm);
+        tm = setTimeout(function () { fn.apply(this, arguments); }, ms || 16);
+      };
+    };
+
+    // Throttle utility
+    window._throttle = function (fn, ms) {
+      var last = 0;
+      return function () {
+        var now = Date.now();
+        if (now - last >= (ms || 16)) {
+          last = now;
+          fn.apply(this, arguments);
+        }
+      };
+    };
+
+    // Cache frequently accessed DOM elements
+    window._domCache = {};
+    window._getCachedEl = function (id) {
+      var el = document.getElementById(id);
+      if (el) window._domCache[id] = el;
+      return el;
+    };
+
+    console.log("[Fixes] Performans iyileştirmeleri yüklendi");
+  })();
+
+  /* ══════════════════════════════════════════════════════════
      1. DISCORD TARZI SES EFEKTLERİ
   ══════════════════════════════════════════════════════════ */
 
@@ -561,85 +598,77 @@
   function _startMusicFix(videoId, startAt) {
     _stopMusicFix();
     _currentVideoId = videoId;
+    _musicExpanded = true; // Başlangıçta açık olsun
 
     var container = document.createElement("div");
     container.id = "music-player-dock";
-    container.style.cssText = "position:fixed;bottom:80px;right:20px;width:360px;z-index:10000;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.5);background:#18181b;font-family:Inter,sans-serif;";
+    // Daha görünür pozisyon - ekranın ortasında büyük
+    container.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:480px;z-index:99999;border-radius:16px;overflow:hidden;box-shadow:0 16px 60px rgba(0,0,0,0.8);background:#0f0f14;font-family:Inter,sans-serif;border:1px solid #333;";
 
-    var bar = document.createElement("div");
-    bar.id = "music-mini-bar";
-    bar.style.cssText = "display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;height:48px;box-sizing:border-box;";
-    bar.onclick = function () { _toggleMusicPlayer(); };
-
+    var header = document.createElement("div");
+    header.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:linear-gradient(90deg,#1a1a2e,#16213e);border-bottom:1px solid #333;";
+    
+    var titleSection = document.createElement("div");
+    titleSection.style.cssText = "display:flex;align-items:center;gap:12px;";
+    
     var icon = document.createElement("span");
     icon.textContent = "🎵";
-    icon.style.cssText = "font-size:18px;flex-shrink:0;";
-
-    var info = document.createElement("div");
-    info.style.cssText = "flex:1;min-width:0;";
-    var title = document.createElement("div");
-    title.style.cssText = "color:#fff;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-    title.textContent = "YouTube";
-    var subtitle = document.createElement("div");
-    subtitle.style.cssText = "color:#a1a1aa;font-size:11px;";
-    subtitle.textContent = "Bir müzik çalıyor, tıkla!";
-    info.appendChild(title);
-    info.appendChild(subtitle);
-
-    var barControls = document.createElement("div");
-    barControls.style.cssText = "display:flex;gap:4px;align-items:center;flex-shrink:0;";
-
-    var expandBtn = document.createElement("button");
-    expandBtn.innerHTML = "⏏";
-    expandBtn.title = "Genişlet";
-    expandBtn.style.cssText = "width:28px;height:28px;border:none;border-radius:6px;background:rgba(255,255,255,0.08);color:#fff;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;";
-    expandBtn.onclick = function (e) { e.stopPropagation(); _toggleMusicPlayer(); };
-
+    icon.style.cssText = "font-size:28px;";
+    
+    var titleText = document.createElement("div");
+    titleText.innerHTML = '<div style="color:#fff;font-size:16px;font-weight:700;">Müzik Çalıyor</div><div style="color:#888;font-size:12px;">Video: ' + videoId + '</div>';
+    
+    titleSection.appendChild(icon);
+    titleSection.appendChild(titleText);
+    
     var closeBtn = document.createElement("button");
     closeBtn.innerHTML = "✕";
     closeBtn.title = "Kapat";
-    closeBtn.style.cssText = "width:28px;height:28px;border:none;border-radius:6px;background:rgba(255,255,255,0.08);color:#a1a1aa;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;";
+    closeBtn.style.cssText = "width:36px;height:36px;border:none;border-radius:8px;background:rgba(255,255,255,0.1);color:#fff;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;";
     closeBtn.onclick = function (e) { e.stopPropagation(); _stopMusicFix(); };
-
-    barControls.appendChild(expandBtn);
-    barControls.appendChild(closeBtn);
-
-    bar.appendChild(icon);
-    bar.appendChild(info);
-    bar.appendChild(barControls);
-    container.appendChild(bar);
+    
+    header.appendChild(titleSection);
+    header.appendChild(closeBtn);
+    container.appendChild(header);
 
     var playerWrap = document.createElement("div");
     playerWrap.id = "music-player-wrap";
-    playerWrap.style.cssText = "display:none;";
+    playerWrap.style.cssText = "background:#000;";
+    
     var iframe = document.createElement("iframe");
     iframe.id = "yt-embed-fix";
-    iframe.style.cssText = "width:100%;height:240px;border:none;display:block;";
-    iframe.allow = "autoplay; encrypted-media; fullscreen";
+    iframe.style.cssText = "width:100%;height:280px;border:none;display:block;";
+    iframe.allow = "autoplay; encrypted-media; fullscreen; picture-in-picture";
     iframe.allowFullscreen = true;
+    iframe.title = "YouTube Player";
+    
+    // DIRECT autoplay with sound
+    var embedUrl = "https://www.youtube.com/embed/" + videoId + "?autoplay=1&mute=0&controls=1&modestbranding=1&rel=0&playsinline=1&autoplay=1";
+    iframe.src = embedUrl;
+    
     playerWrap.appendChild(iframe);
     container.appendChild(playerWrap);
 
+    // Ekrana ekle
     document.body.appendChild(container);
+    
+    // Toast ile bildir
+    if (typeof toast === "function") toast("🎵 Müzik başladı: " + videoId, "success");
+    
+    console.log("[Fixes] Music player started, videoId:", videoId, "URL:", embedUrl);
   }
 
   function _toggleMusicPlayer() {
-    var pw = document.getElementById("music-player-wrap");
-    var iframe = document.getElementById("yt-embed-fix");
-    if (!pw) return;
+    var container = document.getElementById("music-player-dock");
+    if (!container) return;
+    
     if (_musicExpanded) {
-      pw.style.display = "none";
-      _musicExpanded = false;
+      // Kapat
+      _stopMusicFix();
     } else {
-      pw.style.display = "block";
-      _musicExpanded = true;
-      // iframe'i ilk genişletmede yükle (mute ile otomatik oynasın)
-      if (iframe && !iframe.src) {
-        iframe.src = "https://www.youtube.com/embed/" + _currentVideoId + "?autoplay=1&mute=1&controls=1&modestbranding=1&rel=0&origin=" + encodeURIComponent(location.origin);
-      }
-      // Mute'u kaldır (ses aç)
-      if (iframe && iframe.src) {
-        iframe.src = iframe.src.replace("mute=1", "mute=0");
+      // Aç - yeniden oluştur
+      if (_currentVideoId) {
+        _startMusicFix(_currentVideoId, 0);
       }
     }
   }
@@ -654,27 +683,60 @@
   }
 
   function patchMusicBot() {
-    var _origLVC = window.leaveVoiceChannel;
-    if (_origLVC) {
-      window.leaveVoiceChannel = function () {
-        _stopMusicFix();
-        return _origLVC.apply(this, arguments);
-      };
-    }
-
-    var _origPMBU = window.playMusicByUrl || window.playMusicBotByUrl;
-    window.playMusicBotByUrl = function (raw) {
-      var videoId = (typeof extractYouTubeVideoId === "function" ? extractYouTubeVideoId(raw) : null) || (function () {
-        var m = String(raw).match(/(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
-        return m ? m[1] : null;
-      })() || (String(raw).length === 11 ? raw : null);
-      if (!videoId) { if (typeof toast === "function") toast("Geçersiz YouTube linki.", "error"); return; }
-      _startMusicFix(videoId, 0);
-      if (window.state?.mesh && window.state?.voiceChannelId) {
-        window.state.mesh.broadcast({ type: "music_play", videoId: videoId, startAt: 0, voiceChannelId: window.state.voiceChannelId });
+    // Müzik botu fonksiyonunu patch'le - doğrudan renderMusicBotPanel sonrası çalışacak
+    setTimeout(function () {
+      // Önce orijinal startMusicBot'u patch'le
+      if (typeof window.startMusicBot === "function" && !window._musicBotPatched) {
+        window._musicBotPatched = true;
+        var _origSMB = window.startMusicBot;
+        window.startMusicBot = function (videoId, startAt) {
+          console.log("[Fixes] startMusicBot called with videoId:", videoId);
+          // Orijinal fonksiyonu çağır (bu zaten çalışıyor)
+          try { _origSMB(videoId, startAt); } catch (e) { console.error("[Fixes] startMusicBot error:", e); }
+          // Ayrıca custom dock player'ı da başlat
+          _startMusicFix(videoId, startAt);
+        };
       }
-      if (typeof toast === "function") toast("🎵 Müzik çalıyor!", "success");
-    };
+      
+      // P2P music play mesajlarını dinle
+      var _origP2P = window.handleIncomingP2P;
+      if (_origP2P) {
+        window.handleIncomingP2P = function (fromPeerId, data, roomId) {
+          if (data?.type === "music_play" && data.videoId) {
+            console.log("[Fixes] P2P music_play received:", data.videoId);
+            if (window.state?.voiceChannelId) _startMusicFix(data.videoId, data.startAt || 0);
+            return;
+          }
+          if (data?.type === "music_stop") { _stopMusicFix(); return; }
+          return _origP2P.apply(this, arguments);
+        };
+      }
+      
+      // handleServerMessage'dan da music_play dinle
+      var _origHSM = window.handleServerMessage;
+      if (_origHSM) {
+        window.handleServerMessage = function (data) {
+          if (data?.type === "music_play" && data.videoId) {
+            console.log("[Fixes] Server message music_play:", data.videoId);
+            if (window.state?.voiceChannelId) _startMusicFix(data.videoId, data.startAt || 0);
+            return;
+          }
+          if (data?.type === "music_stop") { _stopMusicFix(); return; }
+          return _origHSM.apply(this, arguments);
+        };
+      }
+      
+      // leaveVoiceChannel'da müziği durdur
+      var _origLVC = window.leaveVoiceChannel;
+      if (_origLVC) {
+        window.leaveVoiceChannel = function () {
+          _stopMusicFix();
+          return _origLVC.apply(this, arguments);
+        };
+      }
+      
+      console.log("[Fixes] Music bot patches applied");
+    }, 500);
 
     var _origP2P = window.handleIncomingP2P;
     if (_origP2P) {
@@ -1143,7 +1205,12 @@
       if (_gaObsTimer) return;
       _gaObsTimer = setTimeout(function () { _gaObsTimer = null; addGameBtn(); }, 300);
     });
-    homeObs.observe(document.body, { childList: true, subtree: true });
+    // Optimize: Sadece home-view'ı izle, tüm body'yi değil
+    setTimeout(function () {
+      var homeView = document.getElementById("home-view") || document.querySelector(".home-view");
+      if (homeView) homeObs.observe(homeView, { childList: true, subtree: true });
+      else homeObs.observe(document.body, { childList: true, subtree: true });
+    }, 1000);
 
     // localStorage'dan geri yükle
     try {
@@ -1226,6 +1293,9 @@
 
   function patchPasswordSystem() {
     if (!window.state) return;
+
+    // Şifre Sistemi Başlangıcı - Sadece state hazırsa çalış
+    // NOT: Oto-giriş burada DEĞİL, startApp sonrasında patch'le
 
     // Discriminator sayaç (her nick için kaç kayıt var)
     window._getDiscriminator = function (nick) {
@@ -1479,10 +1549,19 @@
       var lastNick = localStorage.getItem("scord_last_nick");
       var lastPass = localStorage.getItem("scord_last_pass");
 
-      // Otomatik giriş yap - kayıtlı kimlik varsa setup'i atla
-      if (lastNick && lastPass) {
+      // Otomatik giriş yap - ZATEN yapıldı, tekrar yapma
+      if (lastNick && lastPass && window.state._autoLoginDone) {
+        // Setup overlay'ü gizle - zaten giriş yapıldı
+        if (setupOverlay) setupOverlay.style.display = "none";
+        if (typeof startApp === "function") startApp();
+        return;
+      }
+
+      // Normal giriş (henüz yapılmadıysa)
+      if (lastNick && lastPass && !window.state._autoLoginDone) {
         var ok = window.loginWithPassword(lastNick, lastPass);
         if (ok) {
+          window.state._autoLoginDone = true;
           if (typeof startApp === "function") {
             var nickInput = document.getElementById("username-input");
             if (nickInput) nickInput.value = lastNick;
@@ -1534,15 +1613,25 @@
           var pass = document.getElementById("setup-password")?.value || "";
           if (!nick) { if (typeof toast === "function") toast("Kullanıcı adı gerekli.", "error"); return; }
           if (!pass) { if (typeof toast === "function") toast("Şifre gerekli.", "error"); return; }
+          
+          // loginWithPassword çağır
           var ok = window.loginWithPassword(nick, pass);
           if (ok) {
-            // loginWithPassword zaten state'i ayarladı, sadece startApp çağır
-            window.state.username = nick;
-            if (!window.state.peerId) window.state.peerId = genId();
-            safeSet("scord_username", nick);
-            safeSet("scord_peer_id", window.state.peerId);
-            if (typeof startApp === "function") startApp();
-            setTimeout(_updateDiscTag, 500);
+            // Setup overlay'ü gizle
+            var overlay = document.getElementById("setup-overlay");
+            if (overlay) overlay.style.display = "none";
+            
+            // state.username'ı localStorage'a kaydet
+            localStorage.setItem("scord_username", nick);
+            
+            console.log("[Fixes] Login successful, username:", nick);
+            
+            // startApp'i küçük bir gecikmeyle çağır (freeze önlemek için)
+            if (typeof startApp === "function") {
+              setTimeout(function () {
+                try { startApp(); } catch (e) { console.error("[Fixes] startApp error:", e); }
+              }, 50);
+            }
           }
         };
       }
@@ -1561,17 +1650,38 @@
       setTimeout(_updateDiscTag, 1000);
     }
 
-    // startApp sonrasında da güncelle - sadece 1 kere
+    // startApp sonrasında "Anonim" sorununu düzelt - daha kapsamlı
     var _origSA = window.startApp;
     if (_origSA && !window._discTagFixed) {
       window._discTagFixed = true;
       window.startApp = function () {
         var result = _origSA.apply(this, arguments);
+        
+        // 300ms sonra "Anonim" kontrolü ve düzeltme
         setTimeout(function () {
+          var nameEl = document.getElementById("user-bar-name");
+          var savedNick = localStorage.getItem("scord_last_nick");
+          var savedPass = localStorage.getItem("scord_last_pass");
+          
+          // Eğer kayıtlı nick ve pass varsa, loginWithPassword ile giriş yap
+          if (savedNick && savedPass && nameEl && nameEl.textContent === "Anonim") {
+            console.log("[Fixes] Fixing Anonim - attempting auto-login:", savedNick);
+            var ok = window.loginWithPassword(savedNick, savedPass);
+            if (ok) {
+              // State ve UI'ı güncelle
+              window.state.username = savedNick;
+              localStorage.setItem("scord_username", savedNick);
+              var disc = window.state._discriminator || "0001";
+              nameEl.textContent = savedNick + "#" + disc;
+              console.log("[Fixes] Fixed Anonim ->", savedNick + "#" + disc);
+            }
+          }
+          
           _updateDiscTag();
           // 3 saniye sonra bir daha dene (geç yüklenen elementler için)
           setTimeout(_updateDiscTag, 3000);
         }, 300);
+        
         return result;
       };
     }
