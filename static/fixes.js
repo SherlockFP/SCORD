@@ -493,147 +493,102 @@
   }
 
   /* ══════════════════════════════════════════════════════════
-     14. MÜZİK BOTU FİX — Sıfırdan temiz implementasyon
+     14. MÜZİK BOTU FİX — Minize edilebilir player
   ══════════════════════════════════════════════════════════ */
 
-  // YouTube API yükle
-  function _ensureYT() {
-    if (window.YT && typeof YT.Player === "function") return true;
-    if (!document.querySelector("script[data-scord-yt-fix]")) {
-      var s = document.createElement("script");
-      s.src = "https://www.youtube.com/iframe_api";
-      s.dataset.scordYtFix = "1";
-      document.head.appendChild(s);
-    }
-    return false;
-  }
-
-  var _ytReadyFix = false;
-  var _pendingMusic = null;
-
-  window.onYouTubeIframeAPIReady = function () {
-    _ytReadyFix = true;
-    // Varsa beklemedeki müziği çal
-    if (_pendingMusic) {
-      var p = _pendingMusic;
-      _pendingMusic = null;
-      _startMusicFix(p.videoId, p.startAt);
-    }
-  };
+  var _musicExpanded = false;
 
   function _startMusicFix(videoId, startAt) {
-    var existingDock = document.getElementById("music-player-dock");
-    if (existingDock) existingDock.remove();
-    if (window._ytPlayerFix) {
-      try { window._ytPlayerFix.destroy(); } catch (e) {}
-      window._ytPlayerFix = null;
-    }
+    _stopMusicFix();
 
-    var d = document.createElement("div");
-    d.id = "music-player-dock";
-    d.style.cssText = "position:fixed;bottom:80px;right:20px;width:320px;height:200px;z-index:10000;background:#1a1a1a;border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
+    var container = document.createElement("div");
+    container.id = "music-player-dock";
+    container.style.cssText = "position:fixed;bottom:80px;right:20px;width:360px;z-index:10000;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.5);transition:height 0.3s ease;background:#18181b;font-family:Inter,sans-serif;";
 
-    var inner = document.createElement("div");
-    inner.id = "yt-player-fix";
-    inner.style.cssText = "width:100%;height:100%;background:#000;";
-    d.appendChild(inner);
+    var bar = document.createElement("div");
+    bar.id = "music-mini-bar";
+    bar.style.cssText = "display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;height:48px;box-sizing:border-box;";
+    bar.onclick = function () { _toggleMusicPlayer(); };
+
+    var icon = document.createElement("span");
+    icon.textContent = "🎵";
+    icon.style.cssText = "font-size:18px;flex-shrink:0;";
+
+    var info = document.createElement("div");
+    info.style.cssText = "flex:1;min-width:0;";
+    var title = document.createElement("div");
+    title.style.cssText = "color:#fff;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+    title.textContent = "YouTube";
+    var subtitle = document.createElement("div");
+    subtitle.style.cssText = "color:#a1a1aa;font-size:11px;";
+    subtitle.textContent = videoId ? "Bir müzik çalıyor..." : "Çalmıyor";
+    info.appendChild(title);
+    info.appendChild(subtitle);
+
+    var barControls = document.createElement("div");
+    barControls.style.cssText = "display:flex;gap:4px;align-items:center;flex-shrink:0;";
+
+    var expandBtn = document.createElement("button");
+    expandBtn.innerHTML = "⏏";
+    expandBtn.title = "Genişlet";
+    expandBtn.style.cssText = "width:28px;height:28px;border:none;border-radius:6px;background:rgba(255,255,255,0.08);color:#fff;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;";
+    expandBtn.onclick = function (e) { e.stopPropagation(); _toggleMusicPlayer(); };
 
     var closeBtn = document.createElement("button");
-    closeBtn.innerHTML = "&#x2715;";
-    closeBtn.style.cssText = "position:absolute;top:6px;right:6px;z-index:10;width:28px;height:28px;border-radius:50%;border:none;background:rgba(0,0,0,0.8);color:#fff;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;";
-    closeBtn.onclick = function () { _stopMusicFix(); };
-    d.appendChild(closeBtn);
+    closeBtn.innerHTML = "✕";
+    closeBtn.title = "Kapat";
+    closeBtn.style.cssText = "width:28px;height:28px;border:none;border-radius:6px;background:rgba(255,255,255,0.08);color:#a1a1aa;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;";
+    closeBtn.onclick = function (e) { e.stopPropagation(); _stopMusicFix(); };
 
-    var statusDiv = document.createElement("div");
-    statusDiv.id = "music-player-status";
-    statusDiv.style.cssText = "position:absolute;bottom:10px;left:10px;right:10px;color:#888;font-size:12px;text-align:center;";
-    statusDiv.textContent = "Yükleniyor...";
-    d.appendChild(statusDiv);
+    barControls.appendChild(expandBtn);
+    barControls.appendChild(closeBtn);
 
-    document.body.appendChild(d);
+    bar.appendChild(icon);
+    bar.appendChild(info);
+    bar.appendChild(barControls);
+    container.appendChild(bar);
 
-    var checkYTMono = function () {
-      if (window.YT && window.YT.Player) {
-        _ytReadyFix = true;
-        _createYTPlayer(videoId, startAt);
-      } else {
-        setTimeout(checkYTMono, 100);
-      }
-    };
+    var playerWrap = document.createElement("div");
+    playerWrap.id = "music-player-wrap";
+    playerWrap.style.cssText = "height:0;overflow:hidden;transition:height 0.3s ease;";
 
-    if (!window.YT || !window.YT.Player) {
-      _ensureYT();
-      toast("YouTube yükleniyor...", "info");
-      checkYTMono();
-      return;
-    }
+    var iframe = document.createElement("iframe");
+    iframe.id = "yt-embed-fix";
+    iframe.src = "https://www.youtube.com/embed/" + videoId + "?autoplay=1&origin=" + encodeURIComponent(location.origin);
+    iframe.style.cssText = "width:100%;height:240px;border:none;display:block;";
+    iframe.allow = "autoplay; encrypted-media; fullscreen";
+    iframe.allowFullscreen = true;
+    playerWrap.appendChild(iframe);
+    container.appendChild(playerWrap);
 
-    _ytReadyFix = true;
-    _createYTPlayer(videoId, startAt);
+    document.body.appendChild(container);
+
+    setTimeout(function () {
+      var pw = document.getElementById("music-player-wrap");
+      if (pw) pw.style.height = "240px";
+      _musicExpanded = true;
+    }, 50);
   }
 
-  function _createYTPlayer(videoId, startAt) {
-    try {
-      var player = new YT.Player("yt-player-fix", {
-        height: "200",
-        width: "320",
-        videoId: videoId,
-        playerVars: {
-          autoplay: 1,
-          controls: 1,
-          modestbranding: 1,
-          rel: 0,
-          playsinline: 1,
-          enablejsapi: 1
-        },
-        events: {
-          onReady: function (e) {
-            var status = document.getElementById("music-player-status");
-            if (status) status.textContent = "Çalıyor";
-            e.target.unMute();
-            e.target.setVolume(40);
-            e.target.playVideo();
-          },
-          onStateChange: function (e) {
-            var status = document.getElementById("music-player-status");
-            if (e.data === YT.PlayerState.PLAYING) {
-              if (status) status.textContent = "Çalıyor";
-            } else if (e.data === YT.PlayerState.PAUSED) {
-              if (status) status.textContent = "Durduruldu";
-            } else if (e.data === YT.PlayerState.ENDED) {
-              if (status) status.textContent = "Bitti";
-            }
-          },
-          onError: function (e) {
-            var status = document.getElementById("music-player-status");
-            if (status) status.textContent = "Hata: " + e.data;
-            toast("Video yüklenemedi: " + e.data, "error");
-          }
-        }
-      });
-      window._ytPlayerFix = player;
-    } catch (e) {
-      var status = document.getElementById("music-player-status");
-      if (status) status.textContent = "Hata: " + e.message;
-      toast("Müzik oynatılamadı: " + e.message, "error");
+  function _toggleMusicPlayer() {
+    var pw = document.getElementById("music-player-wrap");
+    if (!pw) return;
+    if (_musicExpanded) {
+      pw.style.height = "0";
+      _musicExpanded = false;
+    } else {
+      pw.style.height = "240px";
+      _musicExpanded = true;
     }
   }
 
   function _stopMusicFix() {
-    try {
-      if (window._ytPlayerFix && typeof window._ytPlayerFix.stopVideo === "function") {
-        window._ytPlayerFix.stopVideo();
-        window._ytPlayerFix.destroy();
-        window._ytPlayerFix = null;
-      }
-    } catch (e) {}
     var dock = document.getElementById("music-player-dock");
     if (dock) dock.remove();
-    _pendingMusic = null;
+    _musicExpanded = false;
   }
 
   function patchMusicBot() {
-    // Sesli kanaldan çıkınca müziği durdur
     var _origLVC = window.leaveVoiceChannel;
     if (_origLVC) {
       window.leaveVoiceChannel = function () {
@@ -642,7 +597,6 @@
       };
     }
 
-    // playMusicBotByUrl - temiz override
     var _origPMBU = window.playMusicByUrl || window.playMusicBotByUrl;
     window.playMusicBotByUrl = function (raw) {
       var videoId = (typeof extractYouTubeVideoId === "function" ? extractYouTubeVideoId(raw) : null) || (function () {
@@ -651,32 +605,24 @@
       })() || (String(raw).length === 11 ? raw : null);
       if (!videoId) { if (typeof toast === "function") toast("Geçersiz YouTube linki.", "error"); return; }
       _startMusicFix(videoId, 0);
-      // Broadcast to peers
       if (window.state?.mesh && window.state?.voiceChannelId) {
         window.state.mesh.broadcast({ type: "music_play", videoId: videoId, startAt: 0, voiceChannelId: window.state.voiceChannelId });
       }
       if (typeof toast === "function") toast("🎵 Müzik çalıyor!", "success");
     };
 
-    // P2P music_play handler - diğer kullanıcılar için
     var _origP2P = window.handleIncomingP2P;
     if (_origP2P) {
       window.handleIncomingP2P = function (fromPeerId, data, roomId) {
         if (data?.type === "music_play" && data.videoId) {
-          if (window.state?.voiceChannelId) {
-            _startMusicFix(data.videoId, data.startAt || 0);
-          }
+          if (window.state?.voiceChannelId) _startMusicFix(data.videoId, data.startAt || 0);
           return;
         }
-        if (data?.type === "music_stop") {
-          _stopMusicFix();
-          return;
-        }
+        if (data?.type === "music_stop") { _stopMusicFix(); return; }
         return _origP2P.apply(this, arguments);
       };
     }
 
-    // Ayrıca app.js'deki P2P handler'ı da patch'le (handleP2PMessage)
     var _origHPM = window.handleP2PMessage || window.handleServerMessage;
     if (_origHPM) {
       var savedOrig = _origHPM;
@@ -690,16 +636,15 @@
       };
     }
 
-    // YT API hazır değilse bekle
-    _ensureYT();
-    if (window.YT && typeof YT.Player === "function") {
-      _ytReadyFix = true;
-      if (_pendingMusic) {
-        var p = _pendingMusic;
-        _pendingMusic = null;
-        _startMusicFix(p.videoId, p.startAt);
-      }
-    }
+    window.stopMusicBot = function () { _stopMusicFix(); };
+    window.pauseMusicBot = function () {
+      var iframe = document.getElementById("yt-embed-fix");
+      if (iframe) iframe.src = iframe.src.replace("autoplay=1", "autoplay=0");
+    };
+    window.resumeMusicBot = function () {
+      var iframe = document.getElementById("yt-embed-fix");
+      if (iframe) iframe.src = iframe.src.replace("autoplay=0", "autoplay=1");
+    };
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -1437,54 +1382,84 @@
     tagObs.observe(document.body, { childList: true, subtree: true });
     setInterval(updateUserBarTag, 2000);
 
-    // Otomatik giriş
-    try {
-      var lastNick = localStorage.getItem("scord_last_nick");
-      var lastPass = localStorage.getItem("scord_last_pass");
-      if (lastNick && lastPass) {
-        setTimeout(function () { window.loginWithPassword(lastNick, lastPass); }, 500);
-      }
-    } catch (e) {}
-
     // Setup ekranına şifre alanı ekle
     var setupCheck = setInterval(function () {
       var setupOverlay = document.getElementById("setup-overlay");
       var setupCard = setupOverlay ? setupOverlay.querySelector(".setup-card") : null;
-      if (setupCard && !setupCard.querySelector(".setup-pass-field")) {
-        // Şifre alanını ekle (username input'tan sonra)
-        var formGroup = setupCard.querySelector(".form-group");
-        var passGroup = document.createElement("div");
-        passGroup.className = "form-group setup-pass-field";
-        passGroup.innerHTML = '<label for="setup-password">Şifre (isteğe bağlı)</label><input id="setup-password" type="password" placeholder="Profilini korumak için şifre..." maxlength="64" autocomplete="off" /><p style="font-size:11px;opacity:0.5;margin-top:4px;">Şifre koyarsan aynı nickle başkası giriş yapamaz.</p>';
-        if (formGroup && formGroup.parentNode) {
-          formGroup.parentNode.insertBefore(passGroup, formGroup.nextSibling);
-        }
+      if (!setupCard || setupCard.querySelector(".setup-pass-field")) return;
+      clearInterval(setupCheck);
 
-        // Enter butonunu patch'le (şifreyi de kaydet)
-        var enterBtn = setupCard.querySelector("#enter-btn");
-        if (enterBtn) {
-          var origClick = enterBtn.onclick;
-          enterBtn.onclick = function (e) {
-            var pass = document.getElementById("setup-password")?.value || "";
-            var nick = document.getElementById("username-input")?.value?.trim();
-            if (nick && pass) {
-              // Şifre varsa hemen kaydet
-              window._setupPassword = pass;
-              localStorage.setItem("scord_last_nick", nick);
-              localStorage.setItem("scord_last_pass", pass);
-              // Kimlik oluştur/giriş yap
-              window.loginWithPassword(nick, pass);
-            } else if (nick && !pass) {
-              // Şifresiz giriş - sadece nick kaydet
-              localStorage.setItem("scord_last_nick", nick);
-              localStorage.removeItem("scord_last_pass");
-            }
-            if (origClick) origClick.call(this, e);
-          };
+      var lastNick = localStorage.getItem("scord_last_nick");
+      var lastPass = localStorage.getItem("scord_last_pass");
+
+      // Otomatik giriş yap - kayıtlı kimlik varsa setup'i atla
+      if (lastNick && lastPass) {
+        var ok = window.loginWithPassword(lastNick, lastPass);
+        if (ok) {
+          if (typeof startApp === "function") {
+            var nickInput = document.getElementById("username-input");
+            if (nickInput) nickInput.value = lastNick;
+            startApp();
+          }
+          return;
         }
-        clearInterval(setupCheck);
       }
-    }, 500);
+
+      // Şifre alanını ekle
+      var formGroup = setupCard.querySelector(".form-group");
+      var nickLabel = setupCard.querySelector("label[for]");
+      var passHtml = '<div class="form-group setup-pass-field" style="margin-top:12px;"><label for="setup-password">Şifre</label><input id="setup-password" type="password" placeholder="Şifreni belirle veya mevcut hesabınla giriş yap..." maxlength="64" autocomplete="off" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:#fff;font-size:14px;outline:none;box-sizing:border-box;" /></div>';
+      if (formGroup && formGroup.parentNode) {
+        formGroup.insertAdjacentHTML("afterend", passHtml);
+      }
+
+      // Başlığı güncelle
+      var setupTitle = setupCard.querySelector("h2") || setupCard.querySelector(".setup-title");
+      if (setupTitle) setupTitle.textContent = "Scord\'a Hoş Geldin";
+
+      // Enter butonunu patch'le
+      var enterBtn = setupCard.querySelector("#enter-btn");
+      if (enterBtn) {
+        enterBtn.textContent = lastNick ? "Giriş Yap" : "Kayıt Ol";
+        var origClick = enterBtn.onclick;
+        enterBtn.onclick = function (e) {
+          var nick = document.getElementById("username-input")?.value?.trim();
+          var pass = document.getElementById("setup-password")?.value || "";
+          if (!nick) { toast("Kullanıcı adı gerekli.", "error"); return; }
+          if (!pass) { toast("Şifre gerekli.", "error"); return; }
+          var ok = window.loginWithPassword(nick, pass);
+          if (ok) {
+            if (origClick) origClick.call(this, e);
+            // Discriminator'ı user bar'da göster
+            setTimeout(_updateDiscTag, 500);
+          }
+        };
+      }
+    }, 200);
+
+    // Kullanıcı barında discriminator güncelleme
+    function _updateDiscTag() {
+      var nameEl = document.getElementById("user-bar-name");
+      if (!nameEl) return;
+      var nick = window.state?._savedNick || window.state?.username;
+      var disc = window.state?._discriminator;
+      if (nick && disc) nameEl.textContent = nick + "#" + disc;
+    }
+
+    setInterval(_updateDiscTag, 1000);
+    if (document.getElementById("setup-overlay") && !document.getElementById("setup-overlay").classList.contains("active")) {
+      setTimeout(_updateDiscTag, 1000);
+    }
+
+    // startApp sonrasında da güncelle
+    var _origSA = window.startApp;
+    if (_origSA) {
+      window.startApp = function () {
+        var result = _origSA.apply(this, arguments);
+        setTimeout(_updateDiscTag, 300);
+        return result;
+      };
+    }
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -1701,41 +1676,122 @@
      25. STATUS BAR FİX — innerHTML koruma
   ══════════════════════════════════════════════════════════ */
 
+  function patchMemberStatus() {
+    if (!window.state) window.state = {};
+    if (!window.state.peerStatuses) window.state.peerStatuses = {};
+
+    window.getMemberStatus = function (peerId) {
+      if (peerId === window.state?.peerId) return window.state?.status || "online";
+      return window.state?.peerStatuses?.[peerId]?.status || "offline";
+    };
+
+    window.getMemberStatusText = function (peerId) {
+      var s = window.getMemberStatus(peerId);
+      var icons = { online: "🟢", idle: "🟡", dnd: "🔴", offline: "⚫" };
+      var labels = { online: "Çevrimiçi", idle: "Boşta", dnd: "Rahatsız Etmeyin", offline: "Çevrimdışı" };
+      return (icons[s] || "⚫") + " " + (labels[s] || "Çevrimdışı");
+    };
+
+    var _origUpdateMembersPanel = window.updateMembersPanel;
+    if (_origUpdateMembersPanel) {
+      window.updateMembersPanel = function (serverId) {
+        var r = _origUpdateMembersPanel.apply(this, arguments);
+        var list = document.getElementById("members-list") || document.querySelector(".members-list");
+        if (list) {
+          list.querySelectorAll(".member-item").forEach(function (item) {
+            var pid = item.dataset.peerId || item.dataset.memberId;
+            if (!pid) return;
+            var dot = item.querySelector(".member-status-dot, .status-dot");
+            var txt = item.querySelector(".member-status-text, .status-text");
+            if (dot) {
+              var s = window.getMemberStatus(pid);
+              var colors = { online: "#3ba55c", idle: "#faa61a", dnd: "#ed4245", offline: "#747f8d" };
+              dot.style.background = colors[s] || "#747f8d";
+            }
+            if (txt) txt.textContent = window.getMemberStatusText(pid).slice(2);
+          });
+        }
+        return r;
+      };
+    }
+
+    var _origP2P = window.handleIncomingP2P;
+    if (_origP2P) {
+      window.handleIncomingP2P = function (fromPeerId, data, roomId) {
+        if (data?.type === "status_update" || data?.type === "user_status") {
+          if (!window.state.peerStatuses) window.state.peerStatuses = {};
+          window.state.peerStatuses[fromPeerId] = {
+            status: data.status || data.payload?.status || "online",
+            customStatus: data.customStatus || data.payload?.customStatus || "",
+            lastSeen: Date.now()
+          };
+          var list = document.getElementById("members-list") || document.querySelector(".members-list");
+          if (list) {
+            list.querySelectorAll(".member-item").forEach(function (item) {
+              var pid = item.dataset.peerId || item.dataset.memberId;
+              if (pid === fromPeerId) {
+                var dot = item.querySelector(".member-status-dot, .status-dot");
+                if (dot) {
+                  var colors = { online: "#3ba55c", idle: "#faa61a", dnd: "#ed4245", offline: "#747f8d" };
+                  dot.style.background = colors[window.state.peerStatuses[fromPeerId].status] || "#747f8d";
+                }
+              }
+            });
+          }
+          return;
+        }
+        return _origP2P.apply(this, arguments);
+      };
+    }
+
+    var _origHSP = window.handleServerMessage;
+    if (_origHSP) {
+      window.handleServerMessage = function (data) {
+        if (data?.type === "status_update" || data?.type === "user_status") {
+          var pid = data.from || data.peerId || data.userId;
+          if (pid) {
+            if (!window.state.peerStatuses) window.state.peerStatuses = {};
+            window.state.peerStatuses[pid] = {
+              status: data.status || data.payload?.status || "online",
+              customStatus: data.customStatus || data.payload?.customStatus || "",
+              lastSeen: Date.now()
+            };
+          }
+          return;
+        }
+        return _origHSP.apply(this, arguments);
+      };
+    }
+
+    // Kendi status'ümüzü periyodik olarak broadcast et
+    function _broadcastMyStatus() {
+      var mesh = window.state?.mesh;
+      if (!mesh) return;
+      var st = window.state?.status || "online";
+      var cs = window.state?.customStatus || "";
+      mesh.broadcast({ type: "user_status", status: st, customStatus: cs });
+    }
+    setInterval(_broadcastMyStatus, 30000);
+    setTimeout(_broadcastMyStatus, 2000);
+  }
+
   function patchStatusBar() {
     var _origUSB = window.updateStatusBar;
     if (!_origUSB) return;
     window.updateStatusBar = function () {
-      // Event listener'ı koru: öncekini sakla
+      _origUSB.apply(this, arguments);
       var bar = document.getElementById("status-bar");
-      var hadClick = false;
-      if (bar) {
-        var clones = [];
-        for (var ci = 0; ci < bar.children.length; ci++) {
-          clones.push(bar.children[ci].cloneNode(true));
-        }
-        _origUSB.apply(this, arguments);
-        // Click listener'ı yeniden ekle (showStatusPicker)
-        if (bar && typeof window.showStatusPicker === "function") {
-          bar.onclick = function (e) {
-            // status-indicator veya status-text'e tıklandıysa
-            if (e.target.closest(".status-indicator") || e.target.closest(".status-bar")) {
-              window.showStatusPicker();
-            }
-          };
-        }
-      } else {
-        _origUSB.apply(this, arguments);
+      if (bar && typeof window.showStatusPicker === "function") {
+        bar.onclick = function (e) { window.showStatusPicker(); };
+        bar.style.cursor = "pointer";
       }
     };
 
-    // İlk yüklemeden sonra onClick'i garantiye al
     setInterval(function () {
       var bar = document.getElementById("status-bar");
       if (bar && !bar._statusFixed) {
         bar._statusFixed = true;
-        bar.onclick = function (e) {
-          if (typeof window.showStatusPicker === "function") window.showStatusPicker();
-        };
+        bar.onclick = function (e) { if (typeof window.showStatusPicker === "function") window.showStatusPicker(); };
         bar.style.cursor = "pointer";
       }
     }, 2000);
@@ -1883,6 +1939,7 @@
       patchGameActivity();
       patchClearMessages();
       patchServerRail();
+      patchMemberStatus();
       patchPasswordSystem();
       patchFriendRequestSystem();
       patchProfileSystem();
