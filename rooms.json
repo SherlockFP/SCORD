@@ -1,1 +1,150 @@
-{}
+{
+  "d243cf58-0eb5-4738-8202-63e2a23ae6a6": {
+    "room_id": "d243cf58-0eb5-4738-8202-63e2a23ae6a6",
+    "name": "Test",
+    "owner_id": "me",
+    "channels": [
+      {
+        "id": "ch-genel",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "ch-duyurular",
+        "name": "duyurular",
+        "type": "text"
+      },
+      {
+        "id": "ch-sesli",
+        "name": "sesli-sohbet",
+        "type": "voice"
+      },
+      {
+        "id": "ch-muzik",
+        "name": "müzik",
+        "type": "voice"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Üye",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "me": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {},
+    "icon_url": null,
+    "invite_code": "712289"
+  },
+  "fd5eea5b-fc2b-4476-a509-e683e3f58746": {
+    "room_id": "fd5eea5b-fc2b-4476-a509-e683e3f58746",
+    "name": "Test",
+    "owner_id": "me",
+    "channels": [
+      {
+        "id": "ch-genel",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "ch-duyurular",
+        "name": "duyurular",
+        "type": "text"
+      },
+      {
+        "id": "ch-sesli",
+        "name": "sesli-sohbet",
+        "type": "voice"
+      },
+      {
+        "id": "ch-muzik",
+        "name": "müzik",
+        "type": "voice"
+      },
+      {
+        "id": "d3c9699c",
+        "name": "ch1",
+        "type": "text"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Üye",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "me": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {},
+    "icon_url": null,
+    "invite_code": "AC5525"
+  },
+  "63a75fef-cf64-46fc-bd25-aaa62bbb70e7": {
+    "room_id": "63a75fef-cf64-46fc-bd25-aaa62bbb70e7",
+    "name": "Test",
+    "owner_id": "me",
+    "channels": [
+      {
+        "id": "ch-genel",
+        "name": "genel",
+        "type": "text"
+      },
+      {
+        "id": "ch-duyurular",
+        "name": "duyurular",
+        "type": "text"
+      },
+      {
+        "id": "ch-sesli",
+        "name": "sesli-sohbet",
+        "type": "voice"
+      },
+      {
+        "id": "ch-muzik",
+        "name": "müzik",
+        "type": "voice"
+      },
+      {
+        "id": "04175d38",
+        "name": "renamed",
+        "type": "text"
+      }
+    ],
+    "roles": {
+      "admin": {
+        "name": "Admin",
+        "color": "#ef4444",
+        "hoist": true
+      },
+      "member": {
+        "name": "Üye",
+        "color": "#94a3b8",
+        "hoist": false
+      }
+    },
+    "peer_roles": {
+      "me": "admin"
+    },
+    "pinned_messages": [],
+    "messages": {},
+    "icon_url": "https://x.com/i.png",
+    "invite_code": "105BA8"
+  }
+}

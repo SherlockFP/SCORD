@@ -8,20 +8,16 @@
 
 "use strict";
 
-function _scordTiming() {
-    return typeof window !== "undefined" && window.SCORD_TIMING ? window.SCORD_TIMING : {};
-}
-
-function _scordIceServers() {
-    if (typeof window !== "undefined" && Array.isArray(window.SCORD_ICE_SERVERS) && window.SCORD_ICE_SERVERS.length) {
-        return window.SCORD_ICE_SERVERS;
-    }
-    return [
-        // Default: STUN only (TURN must be configured server-side via /api/config).
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-    ];
-}
+const ICE_SERVERS = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun.relay.metered.ca:80" },
+    {
+        urls: "turn:global.relay.metered.ca:80",
+        username: "scord",
+        credential: "scord2024",
+    },
+];
 
 class P2PMesh {
     /**
@@ -53,7 +49,6 @@ class P2PMesh {
         this._pendingIce = {};           // peerId → [candidate, ...]
         this._reconnectTimer = null;
         this._dead = false;
-        this.cameraStream = null;
     }
 
     /* ── Connect to signaling server ─────────────────────────── */
@@ -64,7 +59,6 @@ class P2PMesh {
         this.avatarImage = avatarImage;
         const url = `${this.signalingUrl}/${this.roomId}/${this.peerId}?username=${encodeURIComponent(username)}&color=${encodeURIComponent(avatarColor)}`;
         this._setStatus("connecting");
-        console.log("[P2P] Signaling URL:", url);
         this.ws = new WebSocket(url);
 
         this.ws.onopen = () => {
@@ -78,47 +72,29 @@ class P2PMesh {
             await this._handleSignal(msg);
         };
 
-        this.ws.onclose = (ev) => {
+        this.ws.onclose = () => {
             if (this._dead) return;
-            console.warn("[P2P] Signaling disconnected", { code: ev?.code, reason: ev?.reason, wasClean: ev?.wasClean });
+            console.warn("[P2P] Signaling disconnected — reconnecting in 3s");
             this._setStatus("disconnected");
             clearTimeout(this._reconnectTimer);
-            this._reconnectTimer = setTimeout(
-                () => this.connect(this.username, this.avatarColor, this.avatarImage),
-                _scordTiming().P2P_WS_RECONNECT_MS ?? 3000
-            );
+            this._reconnectTimer = setTimeout(() => this.connect(this.username, this.avatarColor, this.avatarImage), 3000);
         };
 
-        this.ws.onerror = (e) => {
-            console.error("[P2P] WS error:", e);
-            this._setStatus("ws_error");
-        };
+        this.ws.onerror = (e) => console.error("[P2P] WS error:", e);
     }
 
     disconnect() {
         this._dead = true;
         clearTimeout(this._reconnectTimer);
         this._pingTimer && clearInterval(this._pingTimer);
-        this._reconnectTimer = null;
-
-        // Close all peer connections & data channels
         Object.keys(this.peers).forEach(pid => this._closePeer(pid));
-        this.peers = {};
-        this._pendingIce = {};
-
-        // Close signaling socket
-        if (this.ws) {
-            try { this.ws.onmessage = null; } catch { }
-            try { this.ws.close(); } catch { }
-        }
-        this.ws = null;
+        this.ws && this.ws.close();
     }
 
     /* ── Signaling message dispatcher ────────────────────────── */
     async _handleSignal(msg) {
         switch (msg.type) {
             case "room_state":
-                this.cb.onServerEvent?.(msg);
                 // We got here — now initiate connections to existing peers
                 for (const peer of msg.room.peers) {
                     if (peer.peer_id !== this.peerId) {
@@ -162,27 +138,8 @@ class P2PMesh {
                 this.cb.onMessage?.(msg.from, msg.data);
                 break;
 
-            case "voice_state_snapshot":
-            case "voice_state":
-            case "media_status":
-            case "music_state":
-            case "permission_denied":
-            case "permission_update":
-            case "role_update":
-            case "force_disconnect":
-            case "dm_call_offer":
-            case "dm_call_answer":
-            case "dm_call_end":
-                this.cb.onServerEvent?.(msg);
-                break;
-
             case "error":
                 console.error("[P2P] Server error:", msg.message);
-                if (String(msg.message || "").toLowerCase().includes("room not found")) {
-                    this.cb.onStatusChange?.("room_not_found");
-                } else {
-                    this.cb.onStatusChange?.("server_error");
-                }
                 break;
         }
     }
@@ -191,7 +148,7 @@ class P2PMesh {
     async _initiatePeer(peerId, info, makeOffer) {
         if (this.peers[peerId]) return; // already connected
 
-        const pc = new RTCPeerConnection({ iceServers: _scordIceServers() });
+        const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         const peerObj = { pc, dc: null, info };
         this.peers[peerId] = peerObj;
         this._pendingIce[peerId] = [];
@@ -211,18 +168,6 @@ class P2PMesh {
             this.cameraStream.getTracks().forEach(t => pc.addTrack(t, this.cameraStream));
         }
 
-        // If we are the offerer and currently have no local media, still open
-        // receive lanes. Otherwise a new user who joins a room while someone is
-        // already in voice can create a datachannel-only offer and never receive
-        // the existing user's microphone/camera tracks in the answer.
-        if (makeOffer && !this.localStream) {
-            try { pc.addTransceiver("audio", { direction: "recvonly" }); } catch { }
-        }
-        if (makeOffer && !this.screenStream && !this.cameraStream) {
-            try { pc.addTransceiver("video", { direction: "recvonly" }); } catch { }
-            try { pc.addTransceiver("video", { direction: "recvonly" }); } catch { }
-        }
-
         // Receive remote tracks (Voice + Screen)
         pc.ontrack = (ev) => {
             if (!this.remoteStreams) this.remoteStreams = {};
@@ -240,48 +185,18 @@ class P2PMesh {
             }
         };
 
-        // Negotiation (glare-safe)
-        // Deterministic “polite” side based on peerId ordering.
-        // This prevents both sides from creating offers at the same time.
-        peerObj._makingOffer = false;
-        peerObj._polite = String(this.peerId) > String(peerId);
-        peerObj._negTimer = null;
-
-        pc.onnegotiationneeded = () => {
-            clearTimeout(peerObj._negTimer);
-            peerObj._negTimer = setTimeout(async () => {
-                try {
-                    if (pc.connectionState === "closed") return;
-                    if (pc.signalingState !== "stable") {
-                        // Don't create offers when not stable; glare is handled in offer path.
-                        return;
-                    }
-
-                    if (peerObj._makingOffer) return;
-                    peerObj._makingOffer = true;
-
-                    const offer = await pc.createOffer();
-                    await pc.setLocalDescription(offer);
-
-                    this._send({ type: "offer", target: peerId, sdp: pc.localDescription });
-                } catch (err) {
-                    console.error("[P2P] Renegotiation error:", err);
-                } finally {
-                    peerObj._makingOffer = false;
-                }
-            }, _scordTiming().P2P_NEGOTIATION_DEBOUNCE_MS ?? 150);
+        pc.onnegotiationneeded = async () => {
+            try {
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                this._send({ type: "offer", target: peerId, sdp: pc.localDescription });
+            } catch (err) {
+                console.error("[P2P] Renegotiation error:", err);
+            }
         };
 
         pc.onconnectionstatechange = () => {
             console.log(`[P2P] ${peerId} → ${pc.connectionState}`);
-        };
-
-        pc.oniceconnectionstatechange = () => {
-            console.log(`[P2P] ${peerId} ice → ${pc.iceConnectionState}`);
-            if (pc.iceConnectionState === "failed") {
-                // Common quick recovery: trigger ICE restart by renegotiation
-                try { pc.restartIce?.(); } catch { }
-            }
         };
 
         if (makeOffer) {
@@ -322,10 +237,7 @@ class P2PMesh {
             } catch { /* ignore malformed */ }
         };
         dc.onerror = (e) => console.warn(`[P2P] DC error with ${peerId}:`, e);
-        dc.onclose = () => {
-            console.log(`[P2P] DC closed with ${peerId}`);
-            this.cb.onStatusChange?.("p2p_dc_closed");
-        };
+        dc.onclose = () => console.log(`[P2P] DC closed with ${peerId}`);
     }
 
     async _handleOffer(fromId, sdp) {
@@ -335,20 +247,8 @@ class P2PMesh {
             await this._initiatePeer(fromId, {}, false);
             peerObj = this.peers[fromId];
         }
-
         const { pc } = peerObj;
-
-        // Glare handling (perfect negotiation style)
-        // If we are making an offer and we are NOT polite, ignore this offer.
-        // If we are polite, roll over by setting remote description.
-        const offerCollision = peerObj._makingOffer || pc.signalingState !== "stable";
-        if (offerCollision && !peerObj._polite) {
-            console.warn(`[P2P] Offer glare ignored (from ${fromId})`);
-            return;
-        }
-
         await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-
 
         // Flush pending ICE
         for (const c of (this._pendingIce[fromId] || [])) {
@@ -395,47 +295,17 @@ class P2PMesh {
     /* ── Send text message over DataChannels ──────────────────── */
     broadcast(data) {
         const raw = JSON.stringify(data);
-        const maxBuf = _scordTiming().P2P_DC_MAX_BUFFERED_BYTES ?? 262144;
         for (const [, peerObj] of Object.entries(this.peers)) {
-            const dc = peerObj.dc;
-            if (!dc || dc.readyState !== "open") continue;
-            if (dc.bufferedAmount > maxBuf) {
-                console.warn("[P2P] DC buffer yüksek, gönderim atlandı:", peerObj);
-                continue;
+            if (peerObj.dc && peerObj.dc.readyState === "open") {
+                peerObj.dc.send(raw);
             }
-            try {
-                dc.send(raw);
-            } catch (e) {
-                console.warn("[P2P] broadcast send error:", e);
-            }
-        }
-    }
-
-    /**
-     * Fallback broadcast over signaling WebSocket.
-     * This is NOT for voice/video streams, only small JSON state (chat, presence, etc.).
-     */
-    broadcastSignal(data) {
-        try {
-            this._send({ type: "broadcast", data });
-        } catch (e) {
-            console.warn("[P2P] broadcastSignal failed:", e);
         }
     }
 
     sendTo(targetPeerId, data) {
         const peerObj = this.peers[targetPeerId];
-        const dc = peerObj?.dc;
-        if (!dc || dc.readyState !== "open") return;
-        const maxBuf = _scordTiming().P2P_DC_MAX_BUFFERED_BYTES ?? 262144;
-        if (dc.bufferedAmount > maxBuf) {
-            console.warn("[P2P] sendTo buffer yüksek:", targetPeerId);
-            return;
-        }
-        try {
-            dc.send(JSON.stringify(data));
-        } catch (e) {
-            console.warn("[P2P] sendTo error:", e);
+        if (peerObj && peerObj.dc && peerObj.dc.readyState === "open") {
+            peerObj.dc.send(JSON.stringify(data));
         }
     }
 
@@ -528,19 +398,14 @@ class P2PMesh {
         }
     }
 
-    sendSignal(data) {
-        this._send(data);
-    }
-
     _setStatus(status) {
         this.cb.onStatusChange?.(status);
     }
 
     _startPing() {
-        const pingMs = _scordTiming().P2P_SIGNALING_PING_INTERVAL_MS ?? 25000;
         this._pingTimer = setInterval(() => {
             this._send({ type: "ping" });
-        }, pingMs);
+        }, 25000);
     }
 
     get connectedPeerCount() {
