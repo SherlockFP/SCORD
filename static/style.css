@@ -4752,6 +4752,11 @@ html.scord-high-contrast .msg-bubble--other {
   }
 }
 
+/* Visibility Utilities */
+.hidden {
+  display: none !important;
+}
+
 .chat-view:not(.hidden),
 .voice-view:not(.hidden),
 #home-view:not(.hidden) {
