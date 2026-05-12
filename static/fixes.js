@@ -127,6 +127,7 @@
     window.state.voiceChannelId = null;
     window.state.servers.splice(idx, 1);
     try { if (window.state.mesh) { window.state.mesh.disconnect(); window.state.mesh = null; } } catch (e) {}
+    if (typeof removeServerFromStorage === "function") removeServerFromStorage(serverId);
     if (typeof renderServerRail === "function") renderServerRail();
     if (typeof showHomeView === "function") showHomeView();
     if (typeof toast === "function") toast("Sunucudan ayrıldın.", "info");
@@ -521,64 +522,100 @@
   };
 
   function _startMusicFix(videoId, startAt) {
-    var dock = document.getElementById("music-player-dock") || (function () {
-      var d = document.createElement("div");
-      d.id = "music-player-dock";
-      d.className = "music-player-dock";
-      d.style.cssText = "position:fixed;bottom:80px;right:20px;width:320px;height:200px;z-index:10000;background:#000;border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
-      var inner = document.createElement("div");
-      inner.id = "yt-player-fix";
-      inner.style.cssText = "width:100%;height:100%;";
-      d.appendChild(inner);
-      // Kapatma butonu
-      var closeBtn = document.createElement("button");
-      closeBtn.textContent = "\u2715";
-      closeBtn.style.cssText = "position:absolute;top:6px;right:6px;z-index:10;width:24px;height:24px;border-radius:50%;border:none;background:rgba(0,0,0,0.7);color:#fff;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;";
-      closeBtn.addEventListener("click", function () { d.remove(); });
-      d.appendChild(closeBtn);
-      document.body.appendChild(d);
-      return d;
-    })();
+    var existingDock = document.getElementById("music-player-dock");
+    if (existingDock) existingDock.remove();
+    if (window._ytPlayerFix) {
+      try { window._ytPlayerFix.destroy(); } catch (e) {}
+      window._ytPlayerFix = null;
+    }
 
-    if (!window.YT || typeof YT.Player !== "function" || !_ytReadyFix) {
-      _pendingMusic = { videoId: videoId, startAt: startAt || 0 };
+    var d = document.createElement("div");
+    d.id = "music-player-dock";
+    d.style.cssText = "position:fixed;bottom:80px;right:20px;width:320px;height:200px;z-index:10000;background:#1a1a1a;border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
+
+    var inner = document.createElement("div");
+    inner.id = "yt-player-fix";
+    inner.style.cssText = "width:100%;height:100%;background:#000;";
+    d.appendChild(inner);
+
+    var closeBtn = document.createElement("button");
+    closeBtn.innerHTML = "&#x2715;";
+    closeBtn.style.cssText = "position:absolute;top:6px;right:6px;z-index:10;width:28px;height:28px;border-radius:50%;border:none;background:rgba(0,0,0,0.8);color:#fff;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;";
+    closeBtn.onclick = function () { _stopMusicFix(); };
+    d.appendChild(closeBtn);
+
+    var statusDiv = document.createElement("div");
+    statusDiv.id = "music-player-status";
+    statusDiv.style.cssText = "position:absolute;bottom:10px;left:10px;right:10px;color:#888;font-size:12px;text-align:center;";
+    statusDiv.textContent = "Yükleniyor...";
+    d.appendChild(statusDiv);
+
+    document.body.appendChild(d);
+
+    var checkYTMono = function () {
+      if (window.YT && window.YT.Player) {
+        _ytReadyFix = true;
+        _createYTPlayer(videoId, startAt);
+      } else {
+        setTimeout(checkYTMono, 100);
+      }
+    };
+
+    if (!window.YT || !window.YT.Player) {
       _ensureYT();
-      if (typeof toast === "function") toast("YouTube yükleniyor...", "info");
+      toast("YouTube yükleniyor...", "info");
+      checkYTMono();
       return;
     }
 
-    var existing = document.getElementById("yt-player-fix");
-    if (!existing) {
-      var inner = document.createElement("div");
-      inner.id = "yt-player-fix";
-      inner.style.cssText = "width:100%;height:100%;";
-      dock.appendChild(inner);
-    }
+    _ytReadyFix = true;
+    _createYTPlayer(videoId, startAt);
+  }
 
+  function _createYTPlayer(videoId, startAt) {
     try {
-      if (window._ytPlayerFix && typeof window._ytPlayerFix.loadVideoById === "function") {
-        window._ytPlayerFix.loadVideoById(videoId, Math.floor(startAt || 0));
-        window._ytPlayerFix.unMute();
-        window._ytPlayerFix.setVolume(30);
-        window._ytPlayerFix.playVideo();
-      } else {
-        if (window._ytPlayerFix) { try { window._ytPlayerFix.destroy(); } catch (e) {} }
-        window._ytPlayerFix = new YT.Player("yt-player-fix", {
-          height: "200",
-          width: "320",
-          videoId: videoId,
-          playerVars: { autoplay: 1, controls: 0, modestbranding: 1, rel: 0, playsinline: 1 },
-          events: {
-            onReady: function (e) {
-              e.target.unMute();
-              e.target.setVolume(30);
-              e.target.playVideo();
-            },
+      var player = new YT.Player("yt-player-fix", {
+        height: "200",
+        width: "320",
+        videoId: videoId,
+        playerVars: {
+          autoplay: 1,
+          controls: 1,
+          modestbranding: 1,
+          rel: 0,
+          playsinline: 1,
+          enablejsapi: 1
+        },
+        events: {
+          onReady: function (e) {
+            var status = document.getElementById("music-player-status");
+            if (status) status.textContent = "Çalıyor";
+            e.target.unMute();
+            e.target.setVolume(40);
+            e.target.playVideo();
           },
-        });
-      }
+          onStateChange: function (e) {
+            var status = document.getElementById("music-player-status");
+            if (e.data === YT.PlayerState.PLAYING) {
+              if (status) status.textContent = "Çalıyor";
+            } else if (e.data === YT.PlayerState.PAUSED) {
+              if (status) status.textContent = "Durduruldu";
+            } else if (e.data === YT.PlayerState.ENDED) {
+              if (status) status.textContent = "Bitti";
+            }
+          },
+          onError: function (e) {
+            var status = document.getElementById("music-player-status");
+            if (status) status.textContent = "Hata: " + e.data;
+            toast("Video yüklenemedi: " + e.data, "error");
+          }
+        }
+      });
+      window._ytPlayerFix = player;
     } catch (e) {
-      if (typeof toast === "function") toast("Müzik oynatılamadı: " + e.message, "error");
+      var status = document.getElementById("music-player-status");
+      if (status) status.textContent = "Hata: " + e.message;
+      toast("Müzik oynatılamadı: " + e.message, "error");
     }
   }
 
@@ -700,18 +737,14 @@
   ══════════════════════════════════════════════════════════ */
 
   function patchDMCloseButton() {
-    // dm-close-btn ✕ butonuna gerçek kapatma işlevi ver
     var check = setInterval(function () {
       var btn = document.getElementById("dm-close-btn");
       if (btn) {
         clearInterval(check);
-        var origClick = btn.onclick;
         btn.onclick = function (e) {
-          // Orijinal: overlay'i gizle
           var ov = document.getElementById("dm-overlay");
           if (ov) { ov.classList.add("hidden"); ov.setAttribute("aria-hidden", "true"); }
           if (typeof hideDMMainView === "function") hideDMMainView(true);
-          // DM'i recent'dan kaldır ve mesajları temizle
           var peerId = window.state?.activeDM;
           if (peerId) {
             if (window.state?.recentDMs) {
@@ -726,10 +759,42 @@
             } catch (e) {}
             window.state.activeDM = null;
             if (!window.state.activeServerId && typeof renderHomeSidebar === "function") renderHomeSidebar();
+            if (typeof renderDMMainView === "function") renderDMMainView();
           }
         };
       }
     }, 500);
+  }
+
+  function patchDMClickReposition() {
+    var check2 = setInterval(function () {
+      var dmMain = document.getElementById("dm-main-view");
+      if (dmMain) {
+        clearInterval(check2);
+        dmMain.addEventListener("click", function (e) {
+          var peerId = window.state?.activeDM;
+          if (!peerId) return;
+          var item = e.target.closest(".dm-main-item");
+          if (item) return;
+          var msgArea = document.getElementById("dm-messages");
+          if (msgArea && e.target.closest(msgArea)) return;
+        });
+      }
+    }, 500);
+  }
+
+  function patchOpenDM() {
+    var _origODM = window.openDM;
+    if (!_origODM) return;
+    window.openDM = function (peerId, name, avatarColor, avatarImage) {
+      var oldRecent = window.state?.recentDMs || [];
+      var wasAlreadyRecent = oldRecent.some(function (d) { return d.peerId === peerId; });
+      _origODM.call(this, peerId, name, avatarColor, avatarImage);
+      if (wasAlreadyRecent && window.state?.recentDMs) {
+        window.state.recentDMs = oldRecent;
+        localStorage.setItem("scord_recent_dms", JSON.stringify(window.state.recentDMs));
+      }
+    };
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -1242,50 +1307,45 @@
       }
     } catch (e) {}
 
-    // İlk girişte otomatik pin/şifre sor
-    var firstRunKey = "scord_first_run_done";
-    if (!localStorage.getItem(firstRunKey)) {
-      setTimeout(function () {
-        var lastNick = localStorage.getItem("scord_last_nick");
-        var lastPass = localStorage.getItem("scord_last_pass");
-        if (!lastNick || !lastPass) {
-          if (typeof window.showLoginModal === "function") window.showLoginModal();
-        }
-        localStorage.setItem(firstRunKey, "1");
-      }, 1500);
-    }
-
-    // Setup butonuna giriş + etiket butonları
+    // Setup ekranına şifre alanı ekle
     var setupCheck = setInterval(function () {
       var setupOverlay = document.getElementById("setup-overlay");
-      if (setupOverlay && !setupOverlay.querySelector(".login-btn")) {
-        var group = document.createElement("div");
-        group.style.cssText = "display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;";
-        var loginBtn = document.createElement("button");
-        loginBtn.className = "login-btn hero-btn";
-        loginBtn.textContent = "🔑 Giriş Yap (Şifre ile)";
-        loginBtn.style.cssText = "font-size:13px;padding:10px 24px;";
-        loginBtn.onclick = function () { if (typeof window.showLoginModal === "function") window.showLoginModal(); };
-        var friendBtn = document.createElement("button");
-        friendBtn.className = "login-btn hero-btn";
-        friendBtn.textContent = "👥 Etiketle Arkadaş Ekle";
-        friendBtn.style.cssText = "font-size:13px;padding:10px 24px;background:var(--accent);";
-        friendBtn.onclick = function () { if (typeof window.showAddFriendByTagModal === "function") window.showAddFriendByTagModal(); };
-        var editTagBtn = document.createElement("button");
-        editTagBtn.className = "login-btn hero-btn";
-        editTagBtn.textContent = "🏷 #Etiket Değiştir";
-        editTagBtn.style.cssText = "font-size:13px;padding:10px 24px;background:var(--green);";
-        editTagBtn.onclick = function () { if (typeof window.showEditTagModal === "function") window.showEditTagModal(); };
-        group.appendChild(loginBtn);
-        group.appendChild(friendBtn);
-        group.appendChild(editTagBtn);
-        var container = setupOverlay.querySelector(".setup-content, .setup-card, .hero-actions, .form-group");
-        if (container) {
-          container.parentNode.insertBefore(group, container.nextSibling);
-          clearInterval(setupCheck);
+      var setupCard = setupOverlay ? setupOverlay.querySelector(".setup-card") : null;
+      if (setupCard && !setupCard.querySelector(".setup-pass-field")) {
+        // Şifre alanını ekle (username input'tan sonra)
+        var formGroup = setupCard.querySelector(".form-group");
+        var passGroup = document.createElement("div");
+        passGroup.className = "form-group setup-pass-field";
+        passGroup.innerHTML = '<label for="setup-password">Şifre (isteğe bağlı)</label><input id="setup-password" type="password" placeholder="Profilini korumak için şifre..." maxlength="64" autocomplete="off" /><p style="font-size:11px;opacity:0.5;margin-top:4px;">Şifre koyarsan aynı nickle başkası giriş yapamaz.</p>';
+        if (formGroup && formGroup.parentNode) {
+          formGroup.parentNode.insertBefore(passGroup, formGroup.nextSibling);
         }
+
+        // Enter butonunu patch'le (şifreyi de kaydet)
+        var enterBtn = setupCard.querySelector("#enter-btn");
+        if (enterBtn) {
+          var origClick = enterBtn.onclick;
+          enterBtn.onclick = function (e) {
+            var pass = document.getElementById("setup-password")?.value || "";
+            var nick = document.getElementById("username-input")?.value?.trim();
+            if (nick && pass) {
+              // Şifre varsa hemen kaydet
+              window._setupPassword = pass;
+              localStorage.setItem("scord_last_nick", nick);
+              localStorage.setItem("scord_last_pass", pass);
+              // Kimlik oluştur/giriş yap
+              window.loginWithPassword(nick, pass);
+            } else if (nick && !pass) {
+              // Şifresiz giriş - sadece nick kaydet
+              localStorage.setItem("scord_last_nick", nick);
+              localStorage.removeItem("scord_last_pass");
+            }
+            if (origClick) origClick.call(this, e);
+          };
+        }
+        clearInterval(setupCheck);
       }
-    }, 1000);
+    }, 500);
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -1676,6 +1736,7 @@
       patchMusicBot();
       patchMessageDeletePermission();
       patchDMCloseButton();
+      patchOpenDM();
       patchContextMenu();
       patchGameActivity();
       patchClearMessages();
