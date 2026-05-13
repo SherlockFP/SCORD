@@ -1464,6 +1464,20 @@
     }
     
     console.log("[Fixes] Device ID system ready, peerId:", window.state.peerId);
+    
+    // "Anonim" watchdog - DOM'da sürekli kontrol et
+    setInterval(function () {
+      var nameEl = document.getElementById("user-bar-name");
+      if (!nameEl) return;
+      if (nameEl.textContent === "Anonim" || nameEl.textContent === "" || !nameEl.textContent) {
+        var savedNick = localStorage.getItem("scord_username") || localStorage.getItem("scord_last_nick");
+        if (savedNick) {
+          nameEl.textContent = savedNick;
+          if (window.state) window.state.username = savedNick;
+          localStorage.setItem("scord_username", savedNick);
+        }
+      }
+    }, 500);
   }
 
   /* ══════════════════════════════════════════════════════════
