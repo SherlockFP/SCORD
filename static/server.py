@@ -647,6 +647,28 @@ async def delete_channel(room_id: str, channel_id: str, requester_id: str = ""):
     return {"success": True}
 
 
+@app.patch("/api/rooms/{room_id}/channels/{channel_id}")
+async def rename_channel(room_id: str, channel_id: str, body: dict, requester_id: str = ""):
+    if room_id not in rooms:
+        return {"error": "Not found"}
+    room = rooms[room_id]
+    channel = next((c for c in room.channels if c["id"] == channel_id), None)
+    if not channel:
+        return {"error": "Channel not found"}
+    
+    new_name = body.get("name")
+    if new_name:
+        channel["name"] = new_name
+        schedule_save_db()
+        await broadcast_to_room(room, {
+            "type": "channel_rename",
+            "payload": {"serverId": room_id, "channelId": channel_id, "name": new_name}
+        })
+        log.info(f"Channel {channel_id} renamed to {new_name} in room {room_id}")
+        return {"success": True, "channel": channel}
+    return {"error": "Name is required"}
+
+
 @app.post("/api/rooms/{room_id}/roles")
 def add_role(room_id: str, body: dict):
     if room_id not in rooms:
@@ -656,10 +678,27 @@ def add_role(room_id: str, body: dict):
     room.roles[role_id] = {
         "name": body.get("name", "New Role"),
         "color": body.get("color", "#94a3b8"),
-        "hoist": body.get("hoist", False)
+        "hoist": body.get("hoist", False),
+        "permissions": body.get("permissions", {})
     }
     schedule_save_db()
     return {"role_id": role_id}
+
+@app.patch("/api/rooms/{room_id}/roles/{role_id}")
+def update_role(room_id: str, role_id: str, body: dict):
+    if room_id not in rooms:
+        return {"error": "Not found"}
+    room = rooms[room_id]
+    if role_id not in room.roles:
+        return {"error": "Role not found"}
+    
+    if "name" in body: room.roles[role_id]["name"] = body["name"]
+    if "color" in body: room.roles[role_id]["color"] = body["color"]
+    if "hoist" in body: room.roles[role_id]["hoist"] = body["hoist"]
+    if "permissions" in body: room.roles[role_id]["permissions"] = body["permissions"]
+    
+    schedule_save_db()
+    return {"success": True, "role": room.roles[role_id]}
 
 @app.post("/api/rooms/{room_id}/assign_role")
 def assign_role(room_id: str, body: dict):
@@ -960,10 +999,6 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 @app.get("/app.js")
 def serve_app_js():
     return FileResponse(Path(__file__).parent / "app.js")
-
-@app.get("/fixes.js")
-def serve_fixes_js():
-    return FileResponse(Path(__file__).parent / "fixes.js")
 
 @app.get("/{full_path:path}")
 def serve_spa(full_path: str):

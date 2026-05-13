@@ -21870,8 +21870,11 @@ function init() {
       console.log("[Shercord Fixes] Tum duzeltmeler yuklendi.");
     }
 
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready);
-    else ready();
+    // initSetup()'in app.js tarafından çağrılmasını BEKLE
+    document.addEventListener("DOMContentLoaded", function () {
+      // initSetup() tamamlandıktan sonra çalış
+      setTimeout(ready, 50);
+    });
   }
 
   /* ══════════════════════════════════════════════════════════
