@@ -1392,419 +1392,44 @@
   }
 
   /* ══════════════════════════════════════════════════════════
-     20. ŞİFRE + DİSCRİMİNATOR (#0001) SİSTEMİ
+     20. BASİT CİHAZ ID SİSTEMİ - şifre yok
   ══════════════════════════════════════════════════════════ */
 
   function patchPasswordSystem() {
     if (!window.state) return;
 
-    // Şifre Sistemi Başlangıcı - Sadece state hazırsa çalış
-    // NOT: Oto-giriş burada DEĞİL, startApp sonrasında patch'le
-
-    // Discriminator sayaç (her nick için kaç kayıt var)
-    window._getDiscriminator = function (nick) {
-      var counterKey = "scord_disc_count_" + nick.toLowerCase().trim();
-      var count = parseInt(localStorage.getItem(counterKey) || "0", 10);
-      count++;
-      localStorage.setItem(counterKey, count.toString());
-      return String(count).padStart(4, "0");
-    };
-
-    window._formatTag = function (nick, disc) {
-      return nick + "#" + disc;
-    };
-
-    // Discriminator'a göre identity key
-    window._getIdentityKey = function (nick, disc) {
-      return "scord_id_" + nick.toLowerCase().trim() + "_" + disc;
-    };
-
-    window._getPasswordHash = function (pass) {
-      var h = 0;
-      for (var i = 0; i < pass.length; i++) { h = ((h << 5) - h) + pass.charCodeAt(i); h |= 0; }
-      return "p_" + Math.abs(h).toString(36);
-    };
-
-    window._findIdentityByFullTag = function (fullTag) {
-      var parts = fullTag.split("#");
-      if (parts.length !== 2) return null;
-      var nick = parts[0].trim().toLowerCase();
-      var disc = parts[1].trim();
-      var key = "scord_id_" + nick + "_" + disc;
-      var stored = localStorage.getItem(key);
-      if (stored) {
-        var data = JSON.parse(stored);
-        data._fullTag = fullTag;
-        return data;
-      }
-      return null;
-    };
-
-    window.loginWithPassword = function (nick, pass) {
-      var disc = window.state._discriminator;
-      var key = window._getIdentityKey(nick, disc);
-      var stored = localStorage.getItem(key);
-      var hash = window._getPasswordHash(pass);
-      var isNew = false;
-
-      // HER ZAMAN username'i set et, böylece _saveIdentity null kaydetmez
-      window.state.username = nick;
-
-      if (!stored) {
-        disc = window._getDiscriminator(nick);
-        key = window._getIdentityKey(nick, disc);
-        stored = localStorage.getItem(key);
-      }
-
-      if (stored) {
-        var data = JSON.parse(stored);
-        if (data.hash !== hash) {
-          if (typeof toast === "function") toast("Hatalı şifre! Bu kimlik başkasına ait.", "error");
-          return false;
-        }
-        disc = data.discriminator || disc;
-        window.state._discriminator = disc;
-        if (data.peerId) window.state.peerId = data.peerId;
-        // Mevcut identity'den username varsa onu kullan, yoksa nick kullan
-        if (data.username) window.state.username = data.username;
-        else window.state.username = nick;
-        if (data.avatarColor) window.state.avatarColor = data.avatarColor;
-        if (data.avatarImage) window.state.avatarImage = data.avatarImage;
-        if (data.servers) window.state.servers = data.servers;
-        if (data.friends) window.state.friends = data.friends;
-        if (data.dms) window.state.dms = data.dms;
-        if (data.recentDMs) window.state.recentDMs = data.recentDMs;
-        if (typeof toast === "function") toast("Hoş geldin, " + window._formatTag(nick, disc) + "!", "success");
-      } else {
-        disc = window._getDiscriminator(nick);
-        window.state._discriminator = disc;
-        window.state.username = nick;
-        isNew = true;
-        if (typeof toast === "function") toast("Yeni kimlik: " + window._formatTag(nick, disc), "success");
-      }
-
-      // peerId yoksa oluştur
-      if (!window.state.peerId) window.state.peerId = genId();
-
-      window.state._savedNick = nick;
-      window.state._savedPass = pass;
-      safeSet("scord_username", nick);
-      safeSet("scord_last_nick", nick);
-      safeSet("scord_last_pass", pass);
-      window._saveIdentity();
-      return true;
-    };
-
-    window._saveIdentity = function () {
-      var nick = window.state._savedNick;
-      if (!nick) return;
-      var disc = window.state._discriminator || "0001";
-      var key = window._getIdentityKey(nick, disc);
-      var stored = localStorage.getItem(key);
-      var data = stored ? JSON.parse(stored) : {};
-      data.hash = window._getPasswordHash(window.state._savedPass || "");
-      data.discriminator = disc;
-      data.peerId = window.state.peerId;
-      data.username = window.state.username;
-      data.avatarColor = window.state.avatarColor;
-      data.avatarImage = window.state.avatarImage;
-      data.servers = window.state.servers || [];
-      data.friends = window.state.friends || [];
-      data.dms = window.state.dms || {};
-      data.recentDMs = window.state.recentDMs || [];
-      localStorage.setItem(key, JSON.stringify(data));
-    };
-
-    window.showLoginModal = function () {
-      var savedNick = localStorage.getItem("scord_last_nick") || "";
-      var html = '<div class="form-group"><label class="modal-label">Kullanıcı Adı</label><input class="modal-input" id="login-nick" value="' + savedNick.replace(/"/g, "&quot;") + '" placeholder="Nickin..." maxlength="32" autocomplete="off" /></div><div class="form-group"><label class="modal-label">Şifre</label><input class="modal-input" id="login-pass" type="password" placeholder="Şifre..." maxlength="64" autocomplete="off" /></div><p class="modal-info">Aynı nick + şifre ile aynı profili kullanırsın. Etiketin: #0001, #0002... (sırayla).</p>';
-      if (typeof showModal === "function") {
-        showModal("Giriş / Kayıt", html, '<button class="btn-secondary" onclick="hideModal()">İptal</button><button class="btn-primary" onclick="window._doLogin()">Giriş Yap</button>');
-        setTimeout(function () { var el = document.getElementById("login-nick"); if (el) el.focus(); }, 100);
-      }
-    };
-
-    window._doLogin = function () {
-      var nick = document.getElementById("login-nick")?.value?.trim();
-      var pass = document.getElementById("login-pass")?.value;
-      if (!nick || !pass) { if (typeof toast === "function") toast("Nick ve şifre gerekli.", "error"); return; }
-      var ok = window.loginWithPassword(nick, pass);
-      if (ok) {
-        if (typeof hideModal === "function") hideModal();
-        if (typeof renderServerRail === "function") renderServerRail();
-      }
-    };
-
-    // Etiket değiştirme
-    window.showEditTagModal = function () {
-      var currentTag = window._formatTag(window.state._savedNick || window.state.username, window.state._discriminator || "0001");
-      var html = '<div class="form-group"><label class="modal-label">Mevcut Etiketin</label><div class="peer-id-display" style="text-align:center;font-size:18px;letter-spacing:1px;">' + currentTag + '</div></div><div class="form-group"><label class="modal-label">Yeni Etiket (örn: 0005)</label><input class="modal-input" id="edit-tag-input" value="' + (window.state._discriminator || "0001") + '" placeholder="0001" maxlength="4" autocomplete="off" /></div><p class="modal-info">Not: Başkasının kullandığı bir etiketi alamazsın.</p>';
-      if (typeof showModal === "function") {
-        showModal("Etiket Değiştir", html, '<button class="btn-secondary" onclick="hideModal()">İptal</button><button class="btn-primary" onclick="window._saveEditedTag()">Kaydet</button>');
-      }
-    };
-
-    window._saveEditedTag = function () {
-      var newDisc = document.getElementById("edit-tag-input")?.value?.trim();
-      if (!newDisc || !/^\d{4}$/.test(newDisc)) { if (typeof toast === "function") toast("Geçerli 4 haneli bir etiket gir (0001-9999).", "error"); return; }
-      var nick = window.state._savedNick;
-      if (!nick) return;
-      // Başkası kullanıyor mu kontrol
-      var testKey = window._getIdentityKey(nick, newDisc);
-      var existing = localStorage.getItem(testKey);
-      if (existing && window.state._discriminator !== newDisc) {
-        if (typeof toast === "function") toast("Bu etiket dolu! Başka bir tane dene.", "error");
-        return;
-      }
-      // Eski kaydı sil
-      var oldKey = window._getIdentityKey(nick, window.state._discriminator);
-      localStorage.removeItem(oldKey);
-      // Yeni etiketi ata
-      window.state._discriminator = newDisc;
-      window._saveIdentity();
-      if (typeof hideModal === "function") hideModal();
-      if (typeof toast === "function") toast("Yeni etiketin: " + window._formatTag(nick, newDisc), "success");
-    };
-
-    // Arkadaşı etiketle ekle (#0001)
-    window.showAddFriendByTagModal = function () {
-      var html = '<div class="form-group"><label class="modal-label">Arkadaşının Etiketi</label><input class="modal-input" id="add-friend-tag-input" placeholder="örn: sherlock#0001" maxlength="64" autocomplete="off" /></div><p class="modal-info">Aynı nick + 4 haneli etiket. Örn: <b>ahmet#0241</b></p>';
-      if (typeof showModal === "function") {
-        showModal("Arkadaş Ekle (Etiket ile)", html, '<button class="btn-secondary" onclick="hideModal()">İptal</button><button class="btn-primary" onclick="window._doAddFriendByTag()">Ekle</button>');
-        setTimeout(function () { var el = document.getElementById("add-friend-tag-input"); if (el) el.focus(); }, 100);
-      }
-    };
-
-    window._doAddFriendByTag = function () {
-      var fullTag = document.getElementById("add-friend-tag-input")?.value?.trim();
-      if (!fullTag || !fullTag.includes("#")) { if (typeof toast === "function") toast("Geçerli bir etiket gir (nick#0001).", "error"); return; }
-      var identity = window._findIdentityByFullTag(fullTag);
-      if (identity) {
-        // Yerel kayıtlı kullanıcı - doğrudan ekle
-        if (!window.state.friends) window.state.friends = [];
-        if (window.state.friends.some(function (f) { return f.peerId === identity.peerId; })) { if (typeof toast === "function") toast("Zaten arkadaşsın.", "info"); return; }
-        window.state.friends.push({ peerId: identity.peerId, name: identity.username || fullTag.split("#")[0], avatarColor: identity.avatarColor, avatarImage: identity.avatarImage, tag: fullTag });
-        localStorage.setItem("scord_friends", JSON.stringify(window.state.friends));
-        window._saveIdentity();
-        if (typeof hideModal === "function") hideModal();
-        if (typeof toast === "function") toast(fullTag + " arkadaş olarak eklendi!", "success");
-        if (!window.state.activeServerId && typeof renderHomeSidebar === "function") renderHomeSidebar();
-        return;
-      }
-      // Çevrimiçi kullanıcıları ara (mesh üzerinden)
-      if (window.state?.mesh) {
-        var peers = window.state.mesh.peers || {};
-        var foundPeer = null;
-        for (var pid in peers) {
-          var info = window.state.mesh.peerInfo?.[pid] || {};
-          var ptag = info.tag || "";
-          var pname = info.username || "";
-          var checkTag = fullTag.toLowerCase().replace(/\s/g, "");
-          var pFull = (pname + "#" + ptag).toLowerCase().replace(/\s/g, "");
-          if (pFull === checkTag) { foundPeer = pid; break; }
-        }
-        if (foundPeer && typeof window.sendFriendRequest === "function") {
-          window.sendFriendRequest(foundPeer, fullTag);
-          if (typeof hideModal === "function") hideModal();
-          return;
-        }
-      }
-      if (typeof toast === "function") toast("Bu etikette kimse bulunamadı (çevrimdışı olabilir).", "error");
-    };
-
-    // Kullanıcı barına etiket göster
-    function updateUserBarTag() {
-      var nameEl = document.getElementById("user-bar-name");
-      if (!nameEl) return;
-      var nick = window.state._savedNick || window.state.username;
-      var disc = window.state._discriminator;
-      if (nick && disc) {
-        var tagSpan = nameEl.querySelector(".user-tag");
-        if (!tagSpan) {
-          tagSpan = document.createElement("span");
-          tagSpan.className = "user-tag";
-          tagSpan.style.cssText = "font-size:10px;opacity:0.5;margin-left:4px;font-weight:400;";
-          nameEl.appendChild(tagSpan);
-        }
-        tagSpan.textContent = "#" + disc;
-      }
+    // Cihaz ID'sini oluştur veya yükle
+    if (!window.state.peerId) {
+      var savedId = localStorage.getItem("scord_peer_id");
+      window.state.peerId = savedId || (function() {
+        var id = "peer_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem("scord_peer_id", id);
+        return id;
+      })();
     }
 
-    // Sadece user-bar-name elementini izle - document.body DEĞİL, performans
-    setTimeout(function () {
-      var nameParent = document.getElementById("user-bar-name")?.parentNode;
-      if (nameParent) {
-        var tagObs = new MutationObserver(updateUserBarTag);
-        tagObs.observe(nameParent, { childList: true, subtree: true });
-      }
-    }, 1000);
-
-    // Setup ekranına şifre alanı ekle
-    var setupCheck = setInterval(function () {
-      var setupOverlay = document.getElementById("setup-overlay");
-      var setupCard = setupOverlay ? setupOverlay.querySelector(".setup-card") : null;
-      
-      // Henüz setup overlay görünmüyor, bekle
-      if (!setupCard) return;
-      
-      // Şifre alanı zaten eklenmiş - işlem tamam, interval'i temizle
-      if (setupCard.querySelector(".setup-pass-field")) {
-        clearInterval(setupCheck);
-        return;
-      }
-      clearInterval(setupCheck);
-
-      var lastNick = localStorage.getItem("scord_last_nick");
-      var lastPass = localStorage.getItem("scord_last_pass");
-
-      // Otomatik giriş yap - ZATEN yapıldı, tekrar yapma
-      if (lastNick && lastPass && window.state._autoLoginDone) {
-        // Setup overlay'ü gizle - zaten giriş yapıldı
-        if (setupOverlay) setupOverlay.style.display = "none";
-        if (typeof startApp === "function") startApp();
-        return;
-      }
-
-      // Normal giriş (henüz yapılmadıysa)
-      if (lastNick && lastPass && !window.state._autoLoginDone) {
-        var ok = window.loginWithPassword(lastNick, lastPass);
-        if (ok) {
-          window.state._autoLoginDone = true;
-          if (typeof startApp === "function") {
-            var nickInput = document.getElementById("username-input");
-            if (nickInput) nickInput.value = lastNick;
-            startApp();
-          }
-          return;
-        }
-      }
-
-      // Şifre alanını ekle
-      var formGroup = setupCard.querySelector(".form-group");
-      var nickLabel = setupCard.querySelector("label[for]");
-      var passHtml = '<div class="form-group setup-pass-field" style="margin-top:12px;"><label for="setup-password">Şifre</label><input id="setup-password" type="password" placeholder="Şifreni belirle veya mevcut hesabınla giriş yap..." maxlength="64" autocomplete="off" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:#fff;font-size:14px;outline:none;box-sizing:border-box;" /></div>';
-      if (formGroup && formGroup.parentNode) {
-        formGroup.insertAdjacentHTML("afterend", passHtml);
-      }
-
-      // Başlığı güncelle
-      var setupTitle = setupCard.querySelector("h2") || setupCard.querySelector(".setup-title");
-      if (setupTitle) setupTitle.textContent = "Scord\'a Hoş Geldin";
-
-      // Enter butonunu patch'le - ORİJİNAL handler'ı KALDIR
-      var enterBtn = setupCard.querySelector("#enter-btn");
-      var nickInput = document.getElementById("username-input");
-      if (enterBtn) {
-        enterBtn.textContent = lastNick ? "Giriş Yap" : "Kayıt Ol";
-        // Orijinal handler'ı kaldırmak için butonu klonla (cloneNode listener'ları kopyalamaz)
-        var newBtn = enterBtn.cloneNode(true);
-        if (enterBtn.parentNode) enterBtn.parentNode.replaceChild(newBtn, enterBtn);
-
-        // Disabled state'ini yönet - nick + pass kontrolü
-        function _updateDisabled() {
-          var n = document.getElementById("username-input")?.value?.trim();
-          var p = document.getElementById("setup-password")?.value || "";
-          newBtn.disabled = !n || !p;
-        }
-        // İlk durumu ayarla
-        var savedNick = document.getElementById("username-input")?.value?.trim();
-        if (lastNick && savedNick) newBtn.disabled = false;
-        else newBtn.disabled = true;
-        // Input değişikliklerini dinle
-        var _ni = document.getElementById("username-input");
-        var _pi = document.getElementById("setup-password");
-        if (_ni) _ni.addEventListener("input", _updateDisabled);
-        if (_pi) _pi.addEventListener("input", _updateDisabled);
-        
-        // ORİJİNAL Enter handler'ını devre dışı bırak (çift startApp sorunu)
-        // Capture phase ile Enter tuşunu engelle
-        if (_ni) {
-          _ni.addEventListener("keydown", function(e) {
-            if (e.key === "Enter") {
-              e.stopPropagation();
-              e.preventDefault();
-              if (!newBtn.disabled) newBtn.click();
-            }
-          }, true);
-        }
-        // Şifre input'unda da Enter handler'ı
-        if (_pi) {
-          _pi.addEventListener("keydown", function(e) {
-            if (e.key === "Enter" && !newBtn.disabled) {
-              newBtn.click();
-            }
-          });
-        }
-
-        newBtn.onclick = function (e) {
-          var nick = document.getElementById("username-input")?.value?.trim();
-          var pass = document.getElementById("setup-password")?.value || "";
-          if (!nick) { if (typeof toast === "function") toast("Kullanıcı adı gerekli.", "error"); return; }
-          if (!pass) { if (typeof toast === "function") toast("Şifre gerekli.", "error"); return; }
-          
-          // loginWithPassword çağır - state.username + localStorage ayarlanır
-          var ok = window.loginWithPassword(nick, pass);
-          if (ok) {
-            // state.username zaten loginWithPassword tarafından ayarlandı
-            // peerId yoksa oluştur
-            if (!window.state.peerId) window.state.peerId = genId();
-            
-            // startApp'i çağır - flag'i startApp patch'inin KENDİSİ yönetir
-            if (typeof startApp === "function") {
-              try { 
-                console.log("[Fixes] Calling startApp for:", nick);
-                startApp(); 
-              } catch (e) { 
-                console.error("[Fixes] startApp error:", e);
-                var overlay = document.getElementById("setup-overlay");
-                if (overlay) { overlay.classList.remove("active"); overlay.style.display = "none"; }
-                var appEl = document.getElementById("app");
-                if (appEl) appEl.classList.remove("hidden");
-              }
-            } else {
-              var overlay = document.getElementById("setup-overlay");
-              if (overlay) { overlay.classList.remove("active"); overlay.style.display = "none"; }
-              var appEl = document.getElementById("app");
-              if (appEl) appEl.classList.remove("hidden");
-            }
-          }
-        };
-      }
-    }, 200);
-
-    // Kullanıcı barında discriminator güncelleme
-    function _updateDiscTag() {
-      var nameEl = document.getElementById("user-bar-name");
-      if (!nameEl) return;
-      var nick = window.state?._savedNick || window.state?.username;
-      var disc = window.state?._discriminator;
-      if (nick && disc) nameEl.textContent = nick + "#" + disc;
+    // Kayıtlı nickname varsa yükle
+    var savedNick = localStorage.getItem("scord_username") || localStorage.getItem("scord_last_nick");
+    if (savedNick && window.state && !window.state.username) {
+      window.state.username = savedNick;
     }
 
-    if (document.getElementById("setup-overlay") && !document.getElementById("setup-overlay").classList.contains("active")) {
-      setTimeout(_updateDiscTag, 1000);
-    }
-
-    // startApp sonrasında "Anonim" sorununu düzelt - basit ve güvenli
+    // startApp sonrası "Anonim" fix - basit
     var _origSA = window.startApp;
     if (_origSA && !window._discTagFixed) {
       window._discTagFixed = true;
       window.startApp = function () {
-        // Çift çağrı koruması
-        if (window._startAppRunning) {
-          console.log("[Fixes] startApp already running, skipping re-entry");
-          return;
-        }
+        if (window._startAppRunning) return;
         window._startAppRunning = true;
         
-        // HEMEN username'i düzelt - app.js state'e bakmadan ÖNCE
-        var savedNick = localStorage.getItem("scord_last_nick");
+        // ÖNCE username'i ayarla
+        var savedNick = localStorage.getItem("scord_username") || localStorage.getItem("scord_last_nick");
         if (savedNick && window.state) {
           window.state.username = savedNick;
           localStorage.setItem("scord_username", savedNick);
         }
         
-        // Orijinal startApp'i çağır
+        // Orijinal startApp
         var result;
         try {
           result = _origSA.apply(this, arguments);
@@ -1812,58 +1437,33 @@
           console.error("[Fixes] startApp error:", e);
         }
         
-        // startApp bitti - flag'i temizle
         setTimeout(function () { window._startAppRunning = false; }, 100);
         
-        // HEMEN username'i düzelt - app.js bitirdikten SONRA
+        // SONRA username'i düzelt (app.js "Anonim" yazmış olabilir)
         var nameEl = document.getElementById("user-bar-name");
-        if (savedNick && nameEl) {
+        if (savedNick && nameEl && (nameEl.textContent === "Anonim" || !nameEl.textContent || nameEl.textContent.includes("Anonim"))) {
+          nameEl.textContent = savedNick;
           localStorage.setItem("scord_username", savedNick);
-          
-          // discriminator'ı localStorage'dan al
-          var storedId = localStorage.getItem("scord_id_" + savedNick.toLowerCase() + "_0001");
-          var disc = "0001";
-          if (storedId) {
-            try {
-              var idData = JSON.parse(storedId);
-              disc = idData.discriminator || "0001";
-              if (window.state && !window.state._discriminator) {
-                window.state._discriminator = disc;
-              }
-            } catch (e) {}
-          }
-          
-          // UI'ı güncelle
-          nameEl.textContent = savedNick + "#" + disc;
-          console.log("[Fixes] Fixed Anonim ->", savedNick + "#" + disc);
-        } else {
-          console.log("[Fixes] No savedNick found for Anonim fix, savedNick:", savedNick, "nameEl:", !!nameEl);
+          if (window.state) window.state.username = savedNick;
+          console.log("[Fixes] Fixed Anonim ->", savedNick);
         }
         
-        // 500ms sonra tekrar kontrol et (geç yüklenen elementler için)
+        // 500ms sonra tekrar kontrol
         setTimeout(function () {
           var nameEl2 = document.getElementById("user-bar-name");
-          var savedNick2 = localStorage.getItem("scord_last_nick");
+          var savedNick2 = localStorage.getItem("scord_username") || localStorage.getItem("scord_last_nick");
           if (nameEl2 && savedNick2 && (nameEl2.textContent === "Anonim" || !nameEl2.textContent)) {
-            // discriminator'ı localStorage'dan al
-            var storedId2 = localStorage.getItem("scord_id_" + savedNick2.toLowerCase() + "_0001");
-            var disc2 = "0001";
-            if (storedId2) {
-              try {
-                var idData2 = JSON.parse(storedId2);
-                disc2 = idData2.discriminator || "0001";
-              } catch (e) {}
-            }
-            nameEl2.textContent = savedNick2 + "#" + disc2;
+            nameEl2.textContent = savedNick2;
             if (window.state) window.state.username = savedNick2;
             localStorage.setItem("scord_username", savedNick2);
-            console.log("[Fixes] Fixed Anonim (retry) ->", savedNick2 + "#" + disc2);
           }
         }, 500);
         
         return result;
       };
     }
+    
+    console.log("[Fixes] Device ID system ready, peerId:", window.state.peerId);
   }
 
   /* ══════════════════════════════════════════════════════════
