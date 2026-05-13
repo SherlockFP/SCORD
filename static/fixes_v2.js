@@ -2,117 +2,7 @@
     "use strict";
     console.log("[Fixes V2] Initializing comprehensive fixes...");
 
-    // 1. MUSIC BOT FIX
-    function applyMusicBotFix() {
-        const origOnReady = window.onYouTubeIframeAPIReady;
-        window.onYouTubeIframeAPIReady = function() {
-            if (origOnReady) origOnReady();
-            if (window.state && window.state.musicBot) {
-                window.state.musicBot.isReady = true;
-            }
-            window._ytApiReady = true;
-            console.log("[Fixes V2] YouTube API ready");
-        };
-
-        const _origStartMusicBot = window.startMusicBot;
-        if (_origStartMusicBot && !window._musicBotFixApplied) {
-            window._musicBotFixApplied = true;
-
-            // Re-implement startMusicBot to ensure the player is in the correct container
-            window.startMusicBot = function(videoId, startAt = 0) {
-                if (!window.state || !window.state.voiceChannelId) return;
-
-                if (!window.state.musicBot) {
-                    window.state.musicBot = { volume: 30, active: false };
-                }
-                
-                window.state.musicBot.active = true;
-                window.state.musicBot.videoId = videoId;
-                
-                // Show dock
-                if (typeof window.setMusicDockVisible === "function") {
-                    window.setMusicDockVisible(true);
-                }
-
-                // Add bot to participants
-                const server = window.state.servers?.find(s => s.id === window.state.activeServerId);
-                if (server) {
-                    if (!server.voiceMembers) server.voiceMembers = {};
-                    if (!server.voiceMembers[window.state.voiceChannelId]) server.voiceMembers[window.state.voiceChannelId] = [];
-                    server.voiceMembers[window.state.voiceChannelId] = server.voiceMembers[window.state.voiceChannelId].filter(m => m.peer_id !== "bot_music");
-                    server.voiceMembers[window.state.voiceChannelId].push({
-                        peer_id: "bot_music",
-                        username: "🎵 Müzik Botu",
-                        avatar_color: "#ef4444",
-                        avatar_image: null
-                    });
-                    if (typeof window.renderVoiceParticipants === "function") {
-                        window.renderVoiceParticipants(window.state.activeServerId, window.state.voiceChannelId);
-                    }
-                }
-
-                // Wait for YT API
-                if (!window._ytApiReady && (!window.YT || !window.YT.Player)) {
-                    if (typeof window.toast === "function") window.toast("YouTube yükleniyor...", "info");
-                    setTimeout(() => window.startMusicBot(videoId, startAt), 1000);
-                    return;
-                }
-
-                const offset = Math.max(0, Number(startAt || 0));
-
-                let container = document.getElementById("yt-player");
-                if (!container) {
-                    container = document.createElement("div");
-                    container.id = "yt-player";
-                    document.body.appendChild(container); // temporary
-                }
-
-                // Move container to dock if dock exists
-                const dock = document.getElementById("music-player-dock");
-                if (dock) {
-                    const wrap = document.getElementById("music-yt-container") || dock;
-                    if (container.parentNode !== wrap) {
-                        wrap.appendChild(container);
-                    }
-                    container.style.width = "100%";
-                    container.style.height = "100%";
-                    dock.style.width = "480px";
-                    const ytWrap = document.getElementById("music-player-wrap");
-                    if (ytWrap) ytWrap.style.display = "block";
-                }
-
-                if (!window.state.musicBot.player) {
-                    window.state.musicBot.player = new window.YT.Player(container, {
-                        height: "100%",
-                        width: "100%",
-                        videoId: videoId,
-                        playerVars: { autoplay: 1, controls: 1, start: Math.floor(offset) },
-                        events: {
-                            onReady: (e) => {
-                                e.target.setVolume(window.state.musicBot.volume || 30);
-                                try { e.target.unMute(); } catch (ex) {}
-                                try { e.target.playVideo(); } catch (ex) {}
-                                if (typeof window.renderMusicBotPanel === "function") window.renderMusicBotPanel();
-                            },
-                            onStateChange: () => {
-                                if (typeof window.renderMusicBotPanel === "function") window.renderMusicBotPanel();
-                            }
-                        }
-                    });
-                } else {
-                    try {
-                        window.state.musicBot.player.loadVideoById(videoId, Math.floor(offset));
-                        window.state.musicBot.player.setVolume(window.state.musicBot.volume || 30);
-                        window.state.musicBot.player.playVideo();
-                    } catch (e) {
-                        console.error("[Fixes V2] Error loading video:", e);
-                    }
-                }
-                
-                if (typeof window.renderMusicBotPanel === "function") window.renderMusicBotPanel();
-            };
-        }
-    }
+    // 1. MUSIC BOT FIX (Moved to fixes.js)
 
     // 2. DM CALL STABILITY & AUDIO
     function applyDMCallFix() {
@@ -369,8 +259,29 @@
         \`;
         document.head.appendChild(style);
 
-        // Add password visibility toggle
+        // Add password visibility toggle and fix sidebar server name
         setInterval(() => {
+            // Fix: Dynamically update sidebar server name
+            if (window.state && window.state.activeServerId && window.state.servers) {
+                const server = window.state.servers.find(s => s.id === window.state.activeServerId);
+                const sidebarName = document.getElementById("sidebar-server-name");
+                if (server && sidebarName && sidebarName.textContent !== server.name) {
+                    sidebarName.textContent = server.name;
+                    sidebarName.style.cursor = "pointer";
+                    sidebarName.title = "Sunucu Bilgilerini Görüntüle";
+                    
+                    // Add click listener if not added
+                    if (!sidebarName.dataset.infoLinked) {
+                        sidebarName.dataset.infoLinked = "true";
+                        sidebarName.addEventListener("click", () => {
+                            if (typeof window.showServerInfo === "function") {
+                                window.showServerInfo();
+                            }
+                        });
+                    }
+                }
+            }
+
             const passInput = document.getElementById("scord-pass-input");
             if (passInput && !passInput.dataset.toggleAdded) {
                 passInput.dataset.toggleAdded = "true";
@@ -401,7 +312,6 @@
     function initV2() {
         console.log("[Fixes V2] Starting...");
         setTimeout(() => {
-            applyMusicBotFix();
             applyDMCallFix();
             applyStatusFix();
             applyVoiceEffects();

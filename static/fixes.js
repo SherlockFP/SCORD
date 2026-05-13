@@ -944,28 +944,38 @@
       var _origSMB = window.startMusicBot;
       window.startMusicBot = function (videoId, startAt) {
         // ÖNCE: YT.Player'ı taşıyacak dock'u oluştur
-        var dock = _createMusicDock(videoId);
+        var dockInfo = _createMusicDock(videoId);
         
-        // SONRA: orijinal startMusicBot'u çağır (YT.Player'ı oluşturur)
+        // YT iframe taşınırsa API bağlantısı kopar ve siyah ekran olur.
+        // Bu yüzden YT.Player oluşturulmadan ÖNCE div'i doğru yere koyuyoruz.
+        var ytPlayer = document.getElementById("yt-player");
+        if (!ytPlayer) {
+          ytPlayer = document.createElement("div");
+          ytPlayer.id = "yt-player";
+        }
+        var ytContainer = document.getElementById("music-yt-container");
+        if (ytContainer && ytPlayer.parentNode !== ytContainer) {
+          ytContainer.appendChild(ytPlayer);
+          ytPlayer.style.width = "100%";
+          ytPlayer.style.height = "100%";
+        }
+
+        // SONRA: orijinal startMusicBot'u çağır (YT.Player'ı ytContainer içinde oluşturacak)
         try {
           _origSMB(videoId, startAt);
         } catch (e) {
           console.error("[Fixes] startMusicBot error:", e);
         }
         
-        // YT.Player oluştuktan sonra #yt-player'ı dock'a taşı
-        setTimeout(function () {
-          var ytPlayer = document.getElementById("yt-player");
-          var ytContainer = document.getElementById("music-yt-container");
-          if (ytPlayer && ytContainer) {
-            ytContainer.innerHTML = "";
-            ytContainer.appendChild(ytPlayer);
-            ytPlayer.style.width = "100%";
-            ytPlayer.style.height = "100%";
+        var sub = document.getElementById("music-subtitle");
+        if (sub) sub.textContent = videoId || "Çalıyor...";
+        
+        // Dock'u otomatik olarak genişlet ki video görünsün
+        setTimeout(function() {
+          var pw = document.getElementById("music-player-wrap");
+          if (pw && pw.style.display === "none") {
+            _toggleMusicPlayer();
           }
-          
-          var sub = document.getElementById("music-subtitle");
-          if (sub) sub.textContent = videoId || "Çalıyor...";
         }, 500);
       };
     }
