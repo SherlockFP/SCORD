@@ -45,7 +45,94 @@
             if (changed && window.state.activeServerId && typeof window.updateMembersPanel === "function") {
                 window.updateMembersPanel(window.state.activeServerId);
             }
+            
+            // Re-broadcast queued friend requests when peers are online
+            if (window.state && window.state.mesh && window.state.mesh.peers) {
+                try {
+                    let queued = JSON.parse(localStorage.getItem("scord_queued_friend_requests") || "[]");
+                    if (queued.length > 0) {
+                        let toKeep = [];
+                        queued.forEach(req => {
+                            if (Date.now() - req.timestamp > 7 * 24 * 60 * 60 * 1000) return; // drop after 7 days
+                            // Broadcast if we have peers
+                            if (Object.keys(window.state.mesh.peers).length > 0) {
+                                window.state.mesh.broadcast(req.payload);
+                                // remove from queue
+                            } else {
+                                toKeep.push(req);
+                            }
+                        });
+                        localStorage.setItem("scord_queued_friend_requests", JSON.stringify(toKeep));
+                    }
+                } catch (e) {
+                    console.error("[Fixes V2] Queue error", e);
+                }
+            }
         }, 10000);
+
+        // Offline Friend Request hook
+        setInterval(() => {
+            if (!window._offlineFrHooked && typeof window.sendFriendRequest === "function") {
+                window._offlineFrHooked = true;
+                const origFr = window.sendFriendRequest;
+                window.sendFriendRequest = function (targetPeerId, targetTag) {
+                    if (!window.state || !window.state.mesh || Object.keys(window.state.mesh.peers || {}).length === 0) {
+                        // Offline queue
+                        const reqPayload = {
+                            type: "friend_request",
+                            from: window.state.peerId,
+                            username: window.state.username || "Anonim",
+                            tag: window.state._discriminator || "0000",
+                            targetTag: targetTag,
+                            timestamp: Date.now()
+                        };
+                        try {
+                            let queued = JSON.parse(localStorage.getItem("scord_queued_friend_requests") || "[]");
+                            queued.push({ timestamp: Date.now(), payload: reqPayload });
+                            localStorage.setItem("scord_queued_friend_requests", JSON.stringify(queued));
+                            if (typeof window.toast === "function") {
+                                window.toast("Bağlantı zayıf, istek sıraya alındı. Çevrimiçi olunduğunda iletilecek.", "info");
+                            }
+                        } catch (e) {}
+                        
+                        if (!window.state._friendRequests) window.state._friendRequests = [];
+                        window.state._friendRequests.push({ peerId: targetPeerId, tag: targetTag, timestamp: Date.now() });
+                        localStorage.setItem("scord_friend_requests", JSON.stringify(window.state._friendRequests));
+                        return;
+                    }
+                    return origFr.apply(this, arguments);
+                };
+            }
+        }, 2000);
+
+        // Status Update broadcasting hook
+        setInterval(() => {
+            if (!window._statusUpdateHooked && typeof window.setStatus === "function") {
+                window._statusUpdateHooked = true;
+                const origSetStatus = window.setStatus;
+                window.setStatus = function (newStatus, customStatus, statusEmoji) {
+                    origSetStatus.apply(this, arguments);
+                    
+                    if (window.state) {
+                        window.state.status = newStatus || window.state.status || "online";
+                        window.state.customStatus = customStatus || "";
+                        window.state.statusEmoji = statusEmoji || "";
+                        
+                        if (typeof window.updateStatusBar === "function") {
+                            window.updateStatusBar();
+                        }
+                        
+                        if (window.state.mesh) {
+                            window.state.mesh.broadcast({
+                                type: "user_status",
+                                status: window.state.status,
+                                customStatus: window.state.customStatus
+                            });
+                        }
+                    }
+                };
+            }
+        }, 2000);
     }
 
     // 4. VOICE EFFECTS
@@ -176,7 +263,74 @@
     function applyUIFixes() {
         const style = document.createElement("style");
         style.id = "scord-fixes-v2-css";
-        style.textContent = \`
+        style.textContent = `
+            /* DM Search Dropdown */
+            .dm-main-search {
+                position: relative;
+            }
+            .dm-search-dropdown {
+                position: absolute;
+                top: 100%;
+                left: 0;
+                width: 100%;
+                max-width: 320px;
+                background: var(--bg-elevated, #2f3136);
+                border: 1px solid var(--border, #202225);
+                border-radius: 8px;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+                z-index: 100;
+                margin-top: 8px;
+                max-height: 300px;
+                overflow-y: auto;
+                display: flex;
+                flex-direction: column;
+                padding: 8px 0;
+            }
+            .dm-search-dropdown.hidden {
+                display: none;
+            }
+            .dm-search-item {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 8px 12px;
+                cursor: pointer;
+                transition: background 0.1s;
+            }
+            .dm-search-item:hover {
+                background: var(--bg-active, rgba(255,255,255,0.1));
+            }
+            .dm-search-item-avatar {
+                width: 32px;
+                height: 32px;
+                border-radius: 50%;
+                background-size: cover;
+                background-position: center;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-weight: bold;
+                color: #fff;
+            }
+            .dm-search-item-info {
+                display: flex;
+                flex-direction: column;
+            }
+            .dm-search-item-name {
+                font-size: 14px;
+                font-weight: 500;
+                color: var(--text-normal, #dcddde);
+            }
+            .dm-search-item-label {
+                font-size: 12px;
+                color: var(--text-muted, #8e9297);
+            }
+            
+            /* Hide the old chip container */
+            #dm-main-top-actions {
+                display: none !important;
+            }
+
             /* Fix chat header duplication */
             #chat-channel-name, .header-right { display: none !important; }
             .chat-header {
@@ -241,6 +395,20 @@
                 backdrop-filter: blur(5px) !important;
             }
             
+            /* Server Logos Fix */
+            .rail-icon {
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                font-weight: bold !important;
+                overflow: hidden !important;
+            }
+            .rail-icon img {
+                width: 100% !important;
+                height: 100% !important;
+                object-fit: cover !important;
+            }
+
             /* Password field toggle button */
             .pass-toggle-btn {
                 position: absolute;
@@ -256,7 +424,7 @@
             .pass-toggle-btn:hover {
                 color: var(--text-normal);
             }
-        \`;
+        `;
         document.head.appendChild(style);
 
         // Add password visibility toggle and fix sidebar server name
@@ -280,6 +448,85 @@
                         });
                     }
                 }
+            } else if (!window.state || !window.state.activeServerId) {
+                const sidebarName = document.getElementById("sidebar-server-name");
+                if (sidebarName && sidebarName.textContent !== "SCORD") {
+                    sidebarName.textContent = "SCORD";
+                    delete sidebarName.dataset.infoLinked;
+                }
+            }
+
+            // Hook DM search input to show dropdown
+            const dmSearchInput = document.getElementById("dm-main-search-input");
+            if (dmSearchInput && !dmSearchInput.dataset.dropdownHooked) {
+                dmSearchInput.dataset.dropdownHooked = "true";
+                
+                let dropdown = document.getElementById("dm-search-dropdown");
+                if (!dropdown) {
+                    dropdown = document.createElement("div");
+                    dropdown.id = "dm-search-dropdown";
+                    dropdown.className = "dm-search-dropdown hidden";
+                    dmSearchInput.parentNode.appendChild(dropdown);
+                }
+
+                // Override renderDMMainSearch to populate dropdown instead of chips
+                window.renderDMMainSearch = function() {
+                    const q = String(dmSearchInput.value || "").trim().toLowerCase();
+                    const rows = [
+                        ...(window.state.recentDMs || []).map(dm => ({ ...dm, label: "DM" })),
+                        ...(window.state.friends || []).map(f => ({ peerId: f.peerId, name: f.name || f.username, avatarColor: f.avatarColor, avatarImage: f.avatarImage, label: "Arkadaş" })),
+                    ];
+                    const seen = new Set();
+                    dropdown.innerHTML = "";
+                    
+                    const filtered = rows.filter(row => row.peerId && !seen.has(row.peerId) && (!q || String(row.name || "").toLowerCase().includes(q))).slice(0, 10);
+                    
+                    if (filtered.length === 0) {
+                        dropdown.innerHTML = `<div style="padding: 12px; text-align: center; color: var(--text-muted, #8e9297); font-size: 13px;">Kullanıcı bulunamadı</div>`;
+                    } else {
+                        filtered.forEach(row => {
+                            seen.add(row.peerId);
+                            const item = document.createElement("div");
+                            item.className = "dm-search-item";
+                            
+                            const avatar = document.createElement("div");
+                            avatar.className = "dm-search-item-avatar";
+                            avatar.style.backgroundColor = row.avatarColor || "#5865f2";
+                            if (row.avatarImage) {
+                                avatar.style.backgroundImage = `url(${row.avatarImage})`;
+                            } else {
+                                avatar.textContent = window.initials ? window.initials(row.name || "?") : (row.name || "?").charAt(0).toUpperCase();
+                            }
+                            
+                            const info = document.createElement("div");
+                            info.className = "dm-search-item-info";
+                            info.innerHTML = `<span class="dm-search-item-name">${window.escapeHtml ? window.escapeHtml(row.name || "Kullanıcı") : (row.name || "Kullanıcı")}</span>
+                                              <span class="dm-search-item-label">${row.label}</span>`;
+                                              
+                            item.appendChild(avatar);
+                            item.appendChild(info);
+                            
+                            item.onmousedown = (e) => {
+                                e.preventDefault();
+                                if (typeof window.openDM === "function") {
+                                    window.openDM(row.peerId, row.name, row.avatarColor, row.avatarImage);
+                                }
+                                dropdown.classList.add("hidden");
+                                dmSearchInput.value = "";
+                            };
+                            dropdown.appendChild(item);
+                        });
+                    }
+                };
+
+                dmSearchInput.addEventListener("focus", () => {
+                    dropdown.classList.remove("hidden");
+                    if (typeof window.renderDMMainSearch === "function") window.renderDMMainSearch();
+                });
+
+                dmSearchInput.addEventListener("blur", () => {
+                    setTimeout(() => dropdown.classList.add("hidden"), 150);
+                });
             }
 
             const passInput = document.getElementById("scord-pass-input");
