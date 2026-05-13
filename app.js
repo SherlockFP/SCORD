@@ -19401,12 +19401,24 @@ console.log("[Shercord V24] Voice empty layout, auto members, leave/join logs, t
         }
       }
       
-      /* CSS contain - render performansı */
+      /* CSS contain - render performansi */
       .messages-area, .channel-list, .members-list {
         contain: content;
       }
       .server-rail {
         contain: strict;
+      }
+
+      /* Voice mute badge */
+      .vpc-card { position: relative; }
+      .vpc-mute-badge {
+        position: absolute; bottom: 2px; right: 2px;
+        width: 18px; height: 18px; border-radius: 50%;
+        background: #ed4245; color: #fff;
+        font-size: 10px; display: flex;
+        align-items: center; justify-content: center;
+        z-index: 5; box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        pointer-events: none;
       }
     `;
     document.head.appendChild(perfStyle);
@@ -21523,14 +21535,13 @@ console.log("[Shercord V24] Voice empty layout, auto members, leave/join logs, t
   }
 
   function patchStatusBar() {
-    // Direkt showModal ile açılan status picker bazen çalışmıyor
-    // Bunun yerine, kendi basit status picker'ımızı yapalım
     window._openStatusMenu = function () {
+      // ASCII-safe status menu - no emojis, no Turkish chars
       var statusTypes = {
-        online: { text: "Çevrimiçi", icon: "🟢", color: "#3ba55c" },
-        idle: { text: "Boşta", icon: "🟡", color: "#faa61a" },
-        dnd: { text: "Rahatsız Etmeyin", icon: "🔴", color: "#ed4245" },
-        offline: { text: "Görünmez", icon: "⚫", color: "#747f8d" }
+        online: { text: "Online", icon: "(O)", color: "#3ba55c" },
+        idle: { text: "Idle", icon: "(-)", color: "#faa61a" },
+        dnd: { text: "Do Not Disturb", icon: "(X)", color: "#ed4245" },
+        offline: { text: "Invisible", icon: "(_)", color: "#747f8d" }
       };
       
       var menu = document.createElement("div");
@@ -21541,10 +21552,8 @@ console.log("[Shercord V24] Voice empty layout, auto members, leave/join logs, t
         if (!statusTypes.hasOwnProperty(key)) continue;
         var s = statusTypes[key];
         var item = document.createElement("div");
-        item.style.cssText = "padding:10px 14px;cursor:pointer;border-radius:8px;display:flex;align-items:center;gap:10px;font-size:14px;color:#ddd;transition:background 0.15s;";
-        item.innerHTML = '<span style="font-size:18px;">' + s.icon + '</span><span>' + s.text + '</span>';
-        item.onmouseover = function () { this.style.background = "rgba(255,255,255,0.08)"; };
-        item.onmouseout = function () { this.style.background = "transparent"; };
+        item.style.cssText = "padding:10px 14px;cursor:pointer;border-radius:8px;display:flex;align-items:center;gap:10px;font-size:14px;color:#ddd;";
+        item.innerHTML = '<span style="font-size:16px;font-weight:bold;color:' + s.color + '">' + s.icon + '</span><span>' + s.text + '</span>';
         (function (k) {
           item.onclick = function () {
             if (typeof window.setStatus === "function") {
@@ -21557,7 +21566,6 @@ console.log("[Shercord V24] Voice empty layout, auto members, leave/join logs, t
         menu.appendChild(item);
       }
       
-      // Click outside to close
       document.addEventListener("click", function handler() {
         var m = document.getElementById("scord-status-menu");
         if (m) m.remove();
@@ -21567,69 +21575,122 @@ console.log("[Shercord V24] Voice empty layout, auto members, leave/join logs, t
       document.body.appendChild(menu);
     };
     
-    // Status bar'a tıklanınca menüyü aç
     function setupStatusBar() {
       var bar = document.getElementById("status-bar");
       if (bar && !bar._scordStatusFixed) {
         bar._scordStatusFixed = true;
         bar.onclick = function (e) {
           e.stopPropagation();
-          // Eğer showStatusPicker çalışıyorsa onu da dene, yoksa kendi menümüzü aç
-          if (typeof window.showStatusPicker === "function") {
-            window._openStatusMenu();
-          } else {
-            window._openStatusMenu();
-          }
+          window._openStatusMenu();
         };
         bar.style.cursor = "pointer";
       }
     }
     
-    // setupStatusBar'ı sürekli kontrol et (DOM yeniden yüklenebilir)
+    // Keep checking for status bar (DOM might rebuild)
     setInterval(setupStatusBar, 2000);
     setTimeout(setupStatusBar, 500);
     
-    // updateStatusBar'ı HTML-güvenli patch'le - custom status özel karakterlerini escape et
-    if (typeof window.STATUS_TYPES !== "undefined") {
-      window.updateStatusBar = function () {
-        var bar = document.getElementById("status-bar");
-        if (!bar) return;
-
-        var statusInfo = window.STATUS_TYPES[window.state?.status] || window.STATUS_TYPES?.online || { text: "Çevrimiçi", color: "#3ba55c" };
-        var customStatus = window._escapeHtml(window.state?.customStatus || "");
-        var statusEmoji = window.state?.statusEmoji || "";
-        var gameActivity = window.state?.gameActivity;
-        var activityHtml = "";
-        
-        if (gameActivity) {
-          activityHtml = '<div class="status-activities">' + window._escapeHtml(gameActivity.name) + '</div>';
-        }
-        
-        bar.innerHTML = 
-          '<div class="status-indicator" style="--status-color:' + statusInfo.color + '" title="Durumu değiştirmek için tıkla">' +
-            '<span class="status-dot"></span>' +
-            '<span class="status-text">' + window._escapeHtml(statusInfo.text) + '</span>' +
-          '</div>' +
-          '<div class="status-custom">' +
-            (statusEmoji ? '<span class="status-emoji">' + window._escapeHtml(statusEmoji) + '</span>' : "") +
-            (customStatus ? '<span class="custom-status-text">' + customStatus + '</span>' : "") +
-          '</div>' +
-          activityHtml;
-          
-        setupStatusBar();
-      };
-    } else {
-      // Fallback: eski patch
+    // updateStatusBar override - use parentNode-based onclick restore
+    if (typeof window.updateStatusBar === "function") {
       var _origUSB = window.updateStatusBar;
-      if (_origUSB) {
-        window.updateStatusBar = function () {
-          _origUSB.apply(this, arguments);
+      window.updateStatusBar = function () {
+        _origUSB.apply(this, arguments);
+        // Re-attach click after status bar is rebuilt
+        var bar = document.getElementById("status-bar");
+        if (bar) {
           setupStatusBar();
-        };
-      }
+          bar.style.cursor = "pointer";
+        }
+      };
     }
-    
-    console.log("[Fixes] Status bar patched");
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     VOICE MUTE INDICATOR - sesli sohbet mute/unmute gostergesi
+  ══════════════════════════════════════════════════════════ */
+
+  function patchVoiceMuteIndicator() {
+    // renderVoiceParticipants patch - mute/deafen badges ekle
+    if (typeof window.renderVoiceParticipants === "function") {
+      var _origRVP = window.renderVoiceParticipants;
+      window.renderVoiceParticipants = function (serverId, channelId) {
+        var result = _origRVP.apply(this, arguments);
+        
+        setTimeout(function () {
+          var cards = document.querySelectorAll(".vpc-card");
+          cards.forEach(function (card) {
+            var peerId = card.dataset.peerId || card.dataset.memberId;
+            if (!peerId) return;
+            
+            // Check if mute badge already exists
+            if (card.querySelector(".vpc-mute-badge")) return;
+            
+            var isSelf = peerId === window.state?.peerId;
+            var isMuted = isSelf ? window.state?.muted : window.state?.peerMuted?.[peerId];
+            var isDeafened = isSelf ? window.state?.deafened : window.state?.peerDeafened?.[peerId];
+            
+            if (isMuted || isDeafened) {
+              var badge = document.createElement("span");
+              badge.className = "vpc-mute-badge";
+              badge.style.cssText = "position:absolute;bottom:2px;right:2px;width:18px;height:18px;border-radius:50%;background:#ed4245;color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;z-index:5;box-shadow:0 2px 4px rgba(0,0,0,0.3);";
+              badge.textContent = isDeafened ? "DD" : "M";
+              badge.title = isDeafened ? "Deafened" : "Muted";
+              card.style.position = "relative";
+              card.appendChild(badge);
+            }
+          });
+        }, 100);
+        
+        return result;
+      };
+    }
+
+    // Mute/unmute state tracking - broadcast and listen
+    if (typeof window.setMuted === "function" && !window._mutePatchDone) {
+      window._mutePatchDone = true;
+      var _origSetMuted = window.setMuted;
+      window.setMuted = function (muted) {
+        _origSetMuted.apply(this, arguments);
+        // Broadcast mute state
+        if (window.state?.mesh) {
+          window.state.mesh.broadcast({
+            type: "voice_mute_status",
+            peerId: window.state.peerId,
+            muted: muted,
+            deafened: window.state?.deafened || false
+          });
+        }
+        // Force UI update
+        if (window.state?.activeServerId && window.state?.voiceChannelId) {
+          if (typeof window.renderVoiceParticipants === "function") {
+            window.renderVoiceParticipants(window.state.activeServerId, window.state.voiceChannelId);
+          }
+        }
+      };
+    }
+
+    // Listen for peer mute status
+    if (typeof window.handleIncomingP2P === "function") {
+      var _origP2P = window.handleIncomingP2P;
+      window.handleIncomingP2P = function (fromPeerId, data, roomId) {
+        if (data?.type === "voice_mute_status") {
+          if (!window.state) window.state = {};
+          if (!window.state.peerMuted) window.state.peerMuted = {};
+          if (!window.state.peerDeafened) window.state.peerDeafened = {};
+          window.state.peerMuted[fromPeerId] = data.muted;
+          window.state.peerDeafened[fromPeerId] = data.deafened;
+          // Re-render voice panel
+          if (window.state.activeServerId && window.state.voiceChannelId) {
+            if (typeof window.renderVoiceParticipants === "function") {
+              window.renderVoiceParticipants(window.state.activeServerId, window.state.voiceChannelId);
+            }
+          }
+          return;
+        }
+        return _origP2P.apply(this, arguments);
+      };
+    }
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -21786,6 +21847,7 @@ function init() {
       patchFriendRequestSystem();
       patchProfileSystem();
       patchStatusBar();
+      patchVoiceMuteIndicator();
       patchPerformance();
       patchAnimatedEmojis();
       patchDiscordAnimations();
