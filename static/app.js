@@ -6692,6 +6692,12 @@ function openServerSettingsModal() {
                     <option value="emerald" ${state.theme === "emerald" ? "selected" : ""}>Zümrüt</option>
                     <option value="ruby" ${state.theme === "ruby" ? "selected" : ""}>Yakut</option>
                     <option value="gold" ${state.theme === "gold" ? "selected" : ""}>Altın</option>
+                    <option value="midnight" ${state.theme === "midnight" ? "selected" : ""}>🔮 Gece Moru</option>
+                    <option value="ocean" ${state.theme === "ocean" ? "selected" : ""}>🌊 Okyanus</option>
+                    <option value="cyberpunk" ${state.theme === "cyberpunk" ? "selected" : ""}>⚡ Siber</option>
+                    <option value="sunset" ${state.theme === "sunset" ? "selected" : ""}>🌅 Gün Batımı</option>
+                    <option value="dark" ${state.theme === "dark" ? "selected" : ""}>🌙 Koyu</option>
+                    <option value="light" ${state.theme === "light" ? "selected" : ""}>☀️ Açık</option>
                 </select>
             </div>
          </div>
@@ -7108,6 +7114,55 @@ function createSidebarItem(name, color, image, onclick, peerId = "") {
     item.appendChild(av);
     item.appendChild(nameText);
     item.onclick = onclick;
+    
+    // Right click menu for closing DMs
+    item.oncontextmenu = (e) => {
+        if (!peerId) return;
+        e.preventDefault();
+        
+        document.querySelectorAll(".scord-ctx-menu").forEach(el => el.remove());
+        
+        const menu = document.createElement("div");
+        menu.className = "scord-ctx-menu ctx-menu";
+        menu.style.position = "fixed";
+        menu.style.left = `${e.clientX}px`;
+        menu.style.top = `${e.clientY}px`;
+        menu.style.zIndex = "9999";
+        menu.style.background = "var(--bg-elevated)";
+        menu.style.padding = "4px";
+        
+        const closeBtn = document.createElement("div");
+        closeBtn.className = "ctx-item";
+        closeBtn.style.color = "var(--red)";
+        closeBtn.style.padding = "8px 12px";
+        closeBtn.style.cursor = "pointer";
+        closeBtn.textContent = "Sohbeti Kapat / Sil";
+        
+        closeBtn.onclick = (ev) => {
+            ev.stopPropagation();
+            menu.remove();
+            
+            if (state.recentDMs) {
+                state.recentDMs = state.recentDMs.filter(dm => dm.peerId !== peerId);
+                const storageKey = state.peerId ? `scord_recent_dms_${state.peerId}` : "scord_recent_dms";
+                localStorage.setItem(storageKey, JSON.stringify(state.recentDMs));
+            }
+            
+            if (state.activeDM === peerId) {
+                state.activeDM = null;
+                hideDMMainView(true);
+            }
+            
+            renderHomeSidebar();
+        };
+        
+        menu.appendChild(closeBtn);
+        document.body.appendChild(menu);
+        
+        const closeMenu = () => { menu.remove(); document.removeEventListener("click", closeMenu); };
+        setTimeout(() => document.addEventListener("click", closeMenu), 0);
+    };
+    
     return item;
 }
 
@@ -12101,6 +12156,10 @@ function loadThemePresetsContent() {
         { id: 'gold', name: 'Altın', icon: '⭐', colors: ['#451a03', '#78350f', '#92400e', '#b45309', '#d97706', '#fbbf24', '#fcd34d'] },
         { id: 'dark', name: 'Koyu', icon: '🌙', colors: ['#000000', '#1a1a1a', '#2d2d2d', '#404040', '#595959', '#737373', '#adadad'] },
         { id: 'light', name: 'Açık', icon: '☀️', colors: ['#ffffff', '#f5f5f5', '#e5e5e5', '#d4d4d4', '#a3a3a3', '#737373', '#525252'] },
+        { id: 'midnight', name: 'Gece', icon: '🔮', colors: ['#0d0a1a', '#15112b', '#1f1a3c', '#2d2554', '#7c3aed', '#a78bfa', '#e8e0ff'] },
+        { id: 'ocean', name: 'Okyanus', icon: '🌊', colors: ['#0a1628', '#0f1f3d', '#162a52', '#1e3a6e', '#0ea5e9', '#38bdf8', '#e0f0ff'] },
+        { id: 'cyberpunk', name: 'Siber', icon: '⚡', colors: ['#0a0a0f', '#111118', '#1a1a24', '#252530', '#00ff88', '#33ffaa', '#e0ffe0'] },
+        { id: 'sunset', name: 'Gün Batımı', icon: '🌅', colors: ['#1a0f0a', '#2a1810', '#3a2218', '#4a2e22', '#f97316', '#fb923c', '#fff0e6'] },
         { id: 'auto', name: 'Otomatik', icon: '🔄', colors: ['#ffffff', '#f5f5f5', '#e5e5e5', '#d4d4d4', '#a3a3a3', '#737373', '#525252'] }
     ];
 
@@ -12353,6 +12412,54 @@ function applyTheme(themeId) {
             '--accent': '#3b82f6',
             '--accent-light': '#60a5fa',
             '--border': '#d4d4d4'
+        },
+        'midnight': {
+            '--bg-primary': '#0d0a1a',
+            '--bg-surface': '#15112b',
+            '--bg-elevated': '#1f1a3c',
+            '--bg-highlight': '#2d2554',
+            '--text-primary': '#e8e0ff',
+            '--text-secondary': '#c8b8ff',
+            '--text-muted': '#8b7cc8',
+            '--accent': '#7c3aed',
+            '--accent-light': '#a78bfa',
+            '--border': '#2d2554'
+        },
+        'ocean': {
+            '--bg-primary': '#0a1628',
+            '--bg-surface': '#0f1f3d',
+            '--bg-elevated': '#162a52',
+            '--bg-highlight': '#1e3a6e',
+            '--text-primary': '#e0f0ff',
+            '--text-secondary': '#a8d4ff',
+            '--text-muted': '#5e8ab4',
+            '--accent': '#0ea5e9',
+            '--accent-light': '#38bdf8',
+            '--border': '#1e3a6e'
+        },
+        'cyberpunk': {
+            '--bg-primary': '#0a0a0f',
+            '--bg-surface': '#111118',
+            '--bg-elevated': '#1a1a24',
+            '--bg-highlight': '#252530',
+            '--text-primary': '#e0ffe0',
+            '--text-secondary': '#b0ffb0',
+            '--text-muted': '#5eff5e',
+            '--accent': '#00ff88',
+            '--accent-light': '#33ffaa',
+            '--border': '#1a3a2a'
+        },
+        'sunset': {
+            '--bg-primary': '#1a0f0a',
+            '--bg-surface': '#2a1810',
+            '--bg-elevated': '#3a2218',
+            '--bg-highlight': '#4a2e22',
+            '--text-primary': '#fff0e6',
+            '--text-secondary': '#ffccaa',
+            '--text-muted': '#c89070',
+            '--accent': '#f97316',
+            '--accent-light': '#fb923c',
+            '--border': '#4a2e22'
         }
     };
 
