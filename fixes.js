@@ -210,6 +210,59 @@
         click: function () { noise(0.03, 0.06); },
         connect: function () { osc("sine", 440, 0, 0.08, 0.15); osc("sine", 550, 0.06, 0.1, 0.12); },
         disconnect: function () { osc("sine", 440, 0, 0.1, 0.12, 330); },
+        // Yeni Discord tarzı efektler
+        incoming_call: function () {
+          // Çalan telefon - 3 vuruş
+          osc("sine", 440, 0, 0.15, 0.4); osc("sine", 440, 0.3, 0.15, 0.4);
+          osc("sine", 440, 0.6, 0.15, 0.4); osc("sine", 440, 0.9, 0.15, 0.4);
+        },
+        call_join: function () {
+          // Aramaya katılma - hızlı yükselen ton
+          osc("sine", 400, 0, 0.1, 0.3, 600);
+          osc("sine", 600, 0.05, 0.12, 0.25, 800);
+        },
+        call_leave: function () {
+          // Aramadan ayrılma - alçalan ton
+          osc("sine", 600, 0, 0.1, 0.3, 400);
+          osc("sine", 400, 0.05, 0.12, 0.25, 300);
+        },
+        friend_request: function () {
+          // Arkadaşlık isteği - 3 kısa not
+          osc("sine", 660, 0, 0.05, 0.3); osc("sine", 880, 0.08, 0.05, 0.25);
+          osc("sine", 1100, 0.16, 0.08, 0.2);
+        },
+        friend_accept: function () {
+          // Arkadaş kabul - yükselen mutlu ses
+          osc("sine", 523, 0, 0.1, 0.4); osc("sine", 659, 0.08, 0.1, 0.35);
+          osc("sine", 784, 0.16, 0.15, 0.3);
+        },
+        server_join: function () {
+          // Sunucuya katılma
+          osc("sine", 440, 0, 0.08, 0.35); osc("sine", 554, 0.06, 0.08, 0.3);
+          osc("sine", 659, 0.12, 0.1, 0.25);
+        },
+        server_leave: function () {
+          // Sunucudan ayrılma
+          osc("sine", 659, 0, 0.08, 0.3); osc("sine", 554, 0.06, 0.08, 0.25);
+          osc("sine", 440, 0.12, 0.1, 0.2);
+        },
+        screen_share: function () {
+          // Ekran paylaşımı başlatma
+          osc("square", 330, 0, 0.05, 0.2, 220);
+          osc("sine", 440, 0.05, 0.08, 0.15);
+        },
+        screen_stop: function () {
+          // Ekran paylaşımı durdurma
+          osc("sine", 440, 0, 0.05, 0.15); osc("square", 220, 0.05, 0.06, 0.12, 110);
+        },
+        deafen: function () {
+          // Sağır et - düşük vuruş
+          osc("sawtooth", 150, 0, 0.1, 0.15, 75); noise(0.08, 0.05);
+        },
+        undeafen: function () {
+          // Sağırlığı kaldır
+          osc("sawtooth", 75, 0, 0.08, 0.12, 150); noise(0.06, 0.04);
+        },
       };
       var fn = s[name];
       if (fn) fn();
@@ -607,6 +660,7 @@
   ══════════════════════════════════════════════════════════ */
 
   function hookSounds() {
+    // Ses kanalı katılma/ayrılma
     var _oj = window.joinVoiceChannel;
     if (_oj) {
       window.joinVoiceChannel = function () {
@@ -622,6 +676,65 @@
         return _ol.apply(this, arguments);
       };
     }
+    
+    // DM araması sesleri
+    if (typeof window.startDirectCall === "function") {
+      var _origSDC = window.startDirectCall;
+      window.startDirectCall = function () {
+        window.playDiscordSFX("incoming_call");
+        return _origSDC.apply(this, arguments);
+      };
+    }
+    if (typeof window.acceptCall === "function") {
+      var _origAC = window.acceptCall;
+      window.acceptCall = function () {
+        window.playDiscordSFX("call_join");
+        return _origAC.apply(this, arguments);
+      };
+    }
+    if (typeof window.endCall === "function") {
+      var _origEC = window.endCall;
+      window.endCall = function () {
+        window.playDiscordSFX("call_leave");
+        return _origEC.apply(this, arguments);
+      };
+    }
+    
+    // Sunucu katılma/ayrılma
+    if (typeof window.joinServer === "function") {
+      var _origJS = window.joinServer;
+      window.joinServer = function () {
+        var r = _origJS.apply(this, arguments);
+        setTimeout(function () { window.playDiscordSFX("server_join"); }, 200);
+        return r;
+      };
+    }
+    if (typeof window.leaveServer === "function") {
+      var _origLS = window.leaveServer;
+      window.leaveServer = function () {
+        window.playDiscordSFX("server_leave");
+        return _origLS.apply(this, arguments);
+      };
+    }
+    
+    // Ekran paylaşımı
+    if (typeof window.startScreenShare === "function") {
+      var _origSSS = window.startScreenShare;
+      window.startScreenShare = function () {
+        var r = _origSSS.apply(this, arguments);
+        setTimeout(function () { window.playDiscordSFX("screen_share"); }, 200);
+        return r;
+      };
+    }
+    if (typeof window.stopScreenShare === "function") {
+      var _origStSS = window.stopScreenShare;
+      window.stopScreenShare = function () {
+        window.playDiscordSFX("screen_stop");
+        return _origStSS.apply(this, arguments);
+      };
+    }
+    
+    // DM/chat butonları
     var check = setInterval(function () {
       var micBtn = document.getElementById("mic-toggle-btn");
       var sendBtn = document.getElementById("send-btn");
@@ -633,33 +746,54 @@
         micBtn.addEventListener("click", function () {
           setTimeout(function () { window.playDiscordSFX(window.state?.muted ? "mute" : "unmute"); }, 50);
         });
+        // Sağır et butonu
+        var deafBtn = document.getElementById("deafen-btn");
+        if (deafBtn) {
+          deafBtn.addEventListener("click", function () {
+            window.playDiscordSFX(window.state?.deafened ? "deafen" : "undeafen");
+          });
+        }
         sendBtn.addEventListener("click", function () { window.playDiscordSFX("message"); });
         chatInput.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) window.playDiscordSFX("message"); });
         dmSendBtn.addEventListener("click", function () { window.playDiscordSFX("dm"); });
         dmInput.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) window.playDiscordSFX("dm"); });
       }
     }, 500);
+    
+    // Friend request sesleri - handleIncomingP2P patch
+    var _origFRP2 = window.handleIncomingP2P;
+    if (_origFRP2) {
+      window.handleIncomingP2P = function (fromPeerId, data, roomId) {
+        if (data?.type === "friend_request") {
+          setTimeout(function () { window.playDiscordSFX("friend_request"); }, 100);
+        }
+        if (data?.type === "friend_request_accepted") {
+          window.playDiscordSFX("friend_accept");
+        }
+        return _origFRP2.apply(this, arguments);
+      };
+    }
+    
+    console.log("[Fixes] Discord sound effects hooked");
   }
 
   /* ══════════════════════════════════════════════════════════
-     14. MÜZİK BOTU FİX — Minize edilebilir player
+     14. MÜZİK BOTU — YT.Player + özel dock
   ══════════════════════════════════════════════════════════ */
 
   var _musicExpanded = false;
 
-  var _currentVideoId = null;
-
-  function _startMusicFix(videoId, startAt) {
-    _stopMusicFix();
-    _currentVideoId = videoId;
-    _musicExpanded = false; // Başlangıçta KÜÇÜK
+  function _createMusicDock(videoId) {
+    // Varolan dock'u temizle
+    var old = document.getElementById("music-player-dock");
+    if (old) old.remove();
+    _musicExpanded = false;
 
     var container = document.createElement("div");
     container.id = "music-player-dock";
-    // Küçük dock - sağ alt köşe
-    container.style.cssText = "position:fixed;bottom:80px;right:20px;width:360px;z-index:99999;border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.6);background:#18181b;font-family:Inter,sans-serif;border:1px solid #333;transition:all 0.3s ease;";
+    container.style.cssText = "position:fixed;bottom:80px;right:20px;width:360px;z-index:99999;border-radius:12px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.6);background:#18181b;font-family:Inter,sans-serif;border:1px solid #333;";
 
-    // Mini bar (her zaman görünür)
+    // Mini bar
     var bar = document.createElement("div");
     bar.id = "music-mini-bar";
     bar.style.cssText = "display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;height:48px;box-sizing:border-box;background:linear-gradient(90deg,#1a1a2e,#16213e);";
@@ -675,8 +809,9 @@
     title.style.cssText = "color:#fff;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
     title.textContent = "Müzik";
     var subtitle = document.createElement("div");
+    subtitle.id = "music-subtitle";
     subtitle.style.cssText = "color:#a1a1aa;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
-    subtitle.textContent = videoId;
+    subtitle.textContent = videoId || "Yükleniyor...";
     info.appendChild(title);
     info.appendChild(subtitle);
 
@@ -703,119 +838,103 @@
     bar.appendChild(barControls);
     container.appendChild(bar);
 
-    // Player wrap (genişletince görünür)
+    // Player wrap - içinde #yt-player olacak
     var playerWrap = document.createElement("div");
     playerWrap.id = "music-player-wrap";
-    playerWrap.style.cssText = "display:none;background:#000;transition:all 0.3s ease;";
-    
-    var iframe = document.createElement("iframe");
-    iframe.id = "yt-embed-fix";
-    iframe.style.cssText = "width:100%;height:240px;border:none;display:block;";
-    iframe.allow = "autoplay; encrypted-media; fullscreen; picture-in-picture";
-    iframe.allowFullscreen = true;
-    iframe.title = "YouTube Player";
-    
-    // mute=1 ile başlat (tarayıcı otoplay politikası)
-    var embedUrl = "https://www.youtube.com/embed/" + videoId + "?autoplay=1&mute=1&controls=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1&origin=" + encodeURIComponent(location.origin);
-    iframe.src = embedUrl;
-    
-    playerWrap.appendChild(iframe);
-    
-    // Unmute butonu + volume slider
-    var unmuteBar = document.createElement("div");
-    unmuteBar.style.cssText = "display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(99,102,241,0.15);border-top:1px solid #333;";
+    playerWrap.style.cssText = "display:none;background:#000;";
+
+    // #yt-player buraya taşınacak
+    var ytDiv = document.createElement("div");
+    ytDiv.id = "music-yt-container";
+    ytDiv.style.cssText = "width:100%;height:240px;";
+
+    // Volume + unmute bar
+    var ctrlBar = document.createElement("div");
+    ctrlBar.id = "music-ctrl-bar";
+    ctrlBar.style.cssText = "display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(99,102,241,0.15);border-top:1px solid #333;";
+
     var unmuteBtn = document.createElement("button");
-    unmuteBtn.id = "yt-unmute-btn";
+    unmuteBtn.id = "music-unmute-btn";
     unmuteBtn.innerHTML = "🔇 Sesi Aç";
-    unmuteBtn.title = "Sesi açmak için tıkla";
     unmuteBtn.style.cssText = "padding:6px 12px;border:none;border-radius:6px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;cursor:pointer;font-size:11px;font-weight:600;white-space:nowrap;";
     unmuteBtn.onclick = function (e) {
       e.stopPropagation();
-      var ifr = document.getElementById("yt-embed-fix");
-      if (ifr) {
-        var parent = ifr.parentNode;
-        var newIfr = document.createElement("iframe");
-        newIfr.id = "yt-embed-fix";
-        newIfr.style.cssText = ifr.style.cssText;
-        newIfr.allow = ifr.allow;
-        newIfr.allowFullscreen = true;
-        newIfr.title = "YouTube Player";
-        newIfr.src = "https://www.youtube.com/embed/" + _currentVideoId + "?autoplay=1&mute=0&controls=1&modestbranding=1&rel=0&playsinline=1&enablejsapi=1&origin=" + encodeURIComponent(location.origin);
-        ifr.remove();
-        parent.appendChild(newIfr);
-        unmuteBtn.innerHTML = "✅ Ses";
-        unmuteBtn.style.background = "linear-gradient(135deg,#22c55e,#16a34a)";
-        unmuteBtn.disabled = true;
-        // Volume slider'ı enable et
-        var vs = document.getElementById("yt-vol-slider");
-        if (vs) { vs.disabled = false; vs.style.opacity = "1"; }
-        if (typeof toast === "function") toast("🔊 Ses açıldı!", "success");
+      if (typeof window.unlockMusicAudio === "function") {
+        window.unlockMusicAudio();
       }
+      // YT.Player'ı dene
+      var mb = window.state?.musicBot;
+      if (mb?.player && typeof mb.player.unMute === "function") {
+        try { mb.player.unMute(); } catch (ex) {}
+        try { mb.player.setVolume(mb.volume || 50); } catch (ex) {}
+        try { mb.player.playVideo(); } catch (ex) {}
+      }
+      unmuteBtn.innerHTML = "✅ Ses Açık";
+      unmuteBtn.style.background = "linear-gradient(135deg,#22c55e,#16a34a)";
+      unmuteBtn.disabled = true;
+      volSlider.disabled = false;
+      volSlider.style.opacity = "1";
     };
-    unmuteBar.appendChild(unmuteBtn);
-    
-    // Volume slider
+    ctrlBar.appendChild(unmuteBtn);
+
     var volLabel = document.createElement("span");
     volLabel.textContent = "🔊";
     volLabel.style.cssText = "font-size:14px;flex-shrink:0;";
     var volSlider = document.createElement("input");
     volSlider.type = "range";
-    volSlider.id = "yt-vol-slider";
     volSlider.min = "0";
     volSlider.max = "100";
     volSlider.value = "50";
     volSlider.disabled = true;
     volSlider.style.cssText = "flex:1;min-width:60px;height:4px;accent-color:#6366f1;opacity:0.5;cursor:pointer;";
-    volSlider.oninput = function (e) {
-      e.stopPropagation();
+    volSlider.oninput = function () {
       var val = parseInt(this.value);
-      // YouTube iframe'e volume komutu gönder
-      var ifr = document.getElementById("yt-embed-fix");
-      if (ifr && ifr.contentWindow) {
-        try {
-          ifr.contentWindow.postMessage(JSON.stringify({
-            event: "command",
-            func: "setVolume",
-            args: [val]
-          }), "*");
-        } catch (err) {}
+      var mb = window.state?.musicBot;
+      if (mb?.player && typeof mb.player.setVolume === "function") {
+        try { mb.player.setVolume(val); } catch (ex) {}
+        if (mb.volume !== undefined) mb.volume = val;
       }
     };
-    unmuteBar.appendChild(volLabel);
-    unmuteBar.appendChild(volSlider);
-    playerWrap.appendChild(unmuteBar);
-    
+    ctrlBar.appendChild(volLabel);
+    ctrlBar.appendChild(volSlider);
+
+    playerWrap.appendChild(ytDiv);
+    playerWrap.appendChild(ctrlBar);
     container.appendChild(playerWrap);
 
     document.body.appendChild(container);
-    console.log("[Fixes] Music player started (compact), videoId:", videoId);
+    return { ytDiv: ytDiv, container: container };
   }
 
   function _toggleMusicPlayer() {
     var pw = document.getElementById("music-player-wrap");
     var container = document.getElementById("music-player-dock");
     if (!pw || !container) return;
-    
+
     if (_musicExpanded) {
-      // Küçült
       pw.style.display = "none";
       container.style.width = "360px";
       _musicExpanded = false;
     } else {
-      // Büyüt
       pw.style.display = "block";
       container.style.width = "480px";
       _musicExpanded = true;
+
+      // #yt-player'ı container'a taşı (app.js onu body'e koymuş olabilir)
+      var ytPlayer = document.getElementById("yt-player");
+      var ytContainer = document.getElementById("music-yt-container");
+      if (ytPlayer && ytContainer && ytPlayer.parentNode !== ytContainer) {
+        ytContainer.appendChild(ytPlayer);
+        ytPlayer.style.width = "100%";
+        ytPlayer.style.height = "100%";
+      }
     }
   }
 
   function _stopMusicFix() {
     var dock = document.getElementById("music-player-dock");
-    var iframe = document.getElementById("yt-embed-fix");
-    if (iframe) { iframe.src = ""; iframe.remove(); }
     if (dock) dock.remove();
     _musicExpanded = false;
-    _currentVideoId = null;
   }
 
   function patchMusicBot() {
@@ -824,18 +943,41 @@
       window._musicBotPatched = true;
       var _origSMB = window.startMusicBot;
       window.startMusicBot = function (videoId, startAt) {
-        console.log("[Fixes] startMusicBot called with videoId:", videoId);
-        try { _origSMB(videoId, startAt); } catch (e) { console.error("[Fixes] startMusicBot error:", e); }
-        _startMusicFix(videoId, startAt);
+        // ÖNCE: YT.Player'ı taşıyacak dock'u oluştur
+        var dock = _createMusicDock(videoId);
+        
+        // SONRA: orijinal startMusicBot'u çağır (YT.Player'ı oluşturur)
+        try {
+          _origSMB(videoId, startAt);
+        } catch (e) {
+          console.error("[Fixes] startMusicBot error:", e);
+        }
+        
+        // YT.Player oluştuktan sonra #yt-player'ı dock'a taşı
+        setTimeout(function () {
+          var ytPlayer = document.getElementById("yt-player");
+          var ytContainer = document.getElementById("music-yt-container");
+          if (ytPlayer && ytContainer) {
+            ytContainer.innerHTML = "";
+            ytContainer.appendChild(ytPlayer);
+            ytPlayer.style.width = "100%";
+            ytPlayer.style.height = "100%";
+          }
+          
+          var sub = document.getElementById("music-subtitle");
+          if (sub) sub.textContent = videoId || "Çalıyor...";
+        }, 500);
       };
     }
-    
+
     // P2P music_play dinle
     var _origP2P = window.handleIncomingP2P;
     if (_origP2P) {
       window.handleIncomingP2P = function (fromPeerId, data, roomId) {
         if (data?.type === "music_play" && data.videoId) {
-          if (window.state?.voiceChannelId) _startMusicFix(data.videoId, data.startAt || 0);
+          if (window.state?.voiceChannelId && typeof window.startMusicBot === "function") {
+            window.startMusicBot(data.videoId, data.startAt || 0);
+          }
           return;
         }
         if (data?.type === "music_stop") { _stopMusicFix(); return; }
@@ -848,14 +990,16 @@
       var _origHSM = window.handleServerMessage;
       window.handleServerMessage = function (data) {
         if (data?.type === "music_play" && data.videoId) {
-          if (window.state?.voiceChannelId) _startMusicFix(data.videoId, data.startAt || 0);
+          if (window.state?.voiceChannelId && typeof window.startMusicBot === "function") {
+            window.startMusicBot(data.videoId, data.startAt || 0);
+          }
           return;
         }
         if (data?.type === "music_stop") { _stopMusicFix(); return; }
         return _origHSM.apply(this, arguments);
       };
     }
-    
+
     // leaveVoiceChannel'da müziği durdur
     var _origLVC = window.leaveVoiceChannel;
     if (_origLVC) {
@@ -865,16 +1009,6 @@
       };
     }
 
-    window.stopMusicBot = function () { _stopMusicFix(); };
-    window.pauseMusicBot = function () {
-      var iframe = document.getElementById("yt-embed-fix");
-      if (iframe) iframe.src = iframe.src.replace("autoplay=1", "autoplay=0");
-    };
-    window.resumeMusicBot = function () {
-      var iframe = document.getElementById("yt-embed-fix");
-      if (iframe) iframe.src = iframe.src.replace("autoplay=0", "autoplay=1");
-    };
-    
     console.log("[Fixes] Music bot patches applied");
   }
 
@@ -1392,92 +1526,304 @@
   }
 
   /* ══════════════════════════════════════════════════════════
-     20. BASİT CİHAZ ID SİSTEMİ - şifre yok
+     20. BASİT ŞİFRE SİSTEMİ - nick + şifre → kalıcı ID
   ══════════════════════════════════════════════════════════ */
 
   function patchPasswordSystem() {
     if (!window.state) return;
 
-    // Cihaz ID'sini oluştur veya yükle
-    if (!window.state.peerId) {
-      var savedId = localStorage.getItem("scord_peer_id");
-      window.state.peerId = savedId || (function() {
-        var id = "peer_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
-        localStorage.setItem("scord_peer_id", id);
-        return id;
-      })();
-    }
+    // Şifreden unique ID oluştur
+    window._makeIdFromPass = function (nick, pass) {
+      var h = 0;
+      var str = (nick || "").toLowerCase().trim() + ":" + (pass || "");
+      for (var i = 0; i < str.length; i++) {
+        h = ((h << 5) - h) + str.charCodeAt(i);
+        h |= 0;
+      }
+      return "id_" + Math.abs(h).toString(36);
+    };
 
-    // Kayıtlı nickname varsa yükle
-    var savedNick = localStorage.getItem("scord_username") || localStorage.getItem("scord_last_nick");
-    if (savedNick && window.state && !window.state.username) {
+    // Kayıtlı kimliği yükle
+    var savedNick = localStorage.getItem("scord_username");
+    var savedPass = localStorage.getItem("scord_pass");
+    var savedId = localStorage.getItem("scord_identity_id");
+
+    if (savedNick && savedPass && savedId) {
+      window.state.peerId = savedId;
       window.state.username = savedNick;
+      if (!window.state._savedNick) window.state._savedNick = savedNick;
+      console.log("[Fixes] Identity restored:", savedNick, savedId);
     }
 
-    // startApp sonrası "Anonim" fix - basit
-    var _origSA = window.startApp;
-    if (_origSA && !window._discTagFixed) {
-      window._discTagFixed = true;
-      window.startApp = function () {
-        if (window._startAppRunning) return;
-        window._startAppRunning = true;
+    // Setup ekranına şifre alanı ekle + otomatik giriş
+    var setupCheck = setInterval(function () {
+      var setupOverlay = document.getElementById("setup-overlay");
+      var setupCard = setupOverlay ? setupOverlay.querySelector(".setup-card") : null;
+      if (!setupCard) return;
+      if (setupCard.querySelector(".scord-pass-field")) {
+        clearInterval(setupCheck);
+        return;
+      }
+      clearInterval(setupCheck);
+
+      var nickInput = document.getElementById("username-input");
+      var enterBtn = setupCard.querySelector("#enter-btn");
+      if (!nickInput || !enterBtn) return;
+
+      // Kayıtlı kimlik varsa otomatik giriş yap
+      if (savedNick && savedPass && savedId) {
+        if (typeof startApp === "function") {
+          nickInput.value = savedNick;
+          startApp();
+          return;
+        }
+      }
+
+      // Şifre alanını ekle
+      var formGroup = setupCard.querySelector(".form-group");
+      if (!formGroup) return;
+      
+      var passHtml = '<div class="form-group scord-pass-field" style="margin-top:12px;"><label for="scord-pass-input">Şifre</label><input id="scord-pass-input" type="password" placeholder="Şifreni gir (her girişte aynı)" maxlength="64" autocomplete="off" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:#fff;font-size:14px;outline:none;box-sizing:border-box;" /></div>';
+      formGroup.insertAdjacentHTML("afterend", passHtml);
+
+      // Butonu güncelle
+      enterBtn.textContent = "Giriş Yap";
+
+      // Orijinal handler'ı kaldırmak için butonu klonla
+      var newBtn = enterBtn.cloneNode(true);
+      if (enterBtn.parentNode) enterBtn.parentNode.replaceChild(newBtn, enterBtn);
+
+      var passInput = document.getElementById("scord-pass-input");
+
+      // Disabled state
+      function updDisabled() {
+        var n = document.getElementById("username-input")?.value?.trim();
+        var p = document.getElementById("scord-pass-input")?.value || "";
+        newBtn.disabled = !n || !p;
+      }
+      if (savedNick) newBtn.disabled = false;
+      else newBtn.disabled = true;
+
+      if (nickInput) nickInput.addEventListener("input", updDisabled);
+      if (passInput) passInput.addEventListener("input", updDisabled);
+      
+      // Capture phase ile Enter'ı yakala
+      if (nickInput) {
+        nickInput.addEventListener("keydown", function(e) {
+          if (e.key === "Enter") {
+            e.stopPropagation();
+            e.preventDefault();
+            if (!newBtn.disabled) newBtn.click();
+          }
+        }, true);
+      }
+      if (passInput) {
+        passInput.addEventListener("keydown", function(e) {
+          if (e.key === "Enter" && !newBtn.disabled) newBtn.click();
+        });
+      }
+
+      // Buton click
+      newBtn.onclick = function () {
+        var nick = nickInput?.value?.trim();
+        var pass = passInput?.value || "";
+        if (!nick || !pass) {
+          if (typeof toast === "function") toast("Nick ve şifre gerekli.", "error");
+          return;
+        }
         
-        // ÖNCE username'i ayarla
-        var savedNick = localStorage.getItem("scord_username") || localStorage.getItem("scord_last_nick");
+        // Identity oluştur
+        var identityId = window._makeIdFromPass(nick, pass);
+        window.state.peerId = identityId;
+        window.state.username = nick;
+        window.state._savedNick = nick;
+        window.state._savedPass = pass;
+        
+        localStorage.setItem("scord_username", nick);
+        localStorage.setItem("scord_pass", pass);
+        localStorage.setItem("scord_identity_id", identityId);
+        localStorage.setItem("scord_peer_id", identityId);
+        
+        console.log("[Fixes] Identity created:", nick, identityId);
+        
+        // startApp
+        if (typeof startApp === "function" && !window._startAppRunning) {
+          try { startApp(); } catch (e) { console.error("[Fixes] startApp error:", e); }
+        }
+      };
+    }, 200);
+
+    // startApp patch - "Anonim" fix
+    var _origSA = window.startApp;
+    if (_origSA && !window._scordSafix) {
+      window._scordSafix = true;
+      window.startApp = function () {
+        var savedNick = localStorage.getItem("scord_username");
         if (savedNick && window.state) {
           window.state.username = savedNick;
-          localStorage.setItem("scord_username", savedNick);
         }
         
-        // Orijinal startApp
         var result;
-        try {
-          result = _origSA.apply(this, arguments);
-        } catch (e) {
-          console.error("[Fixes] startApp error:", e);
-        }
+        try { result = _origSA.apply(this, arguments); } catch (e) {}
         
-        setTimeout(function () { window._startAppRunning = false; }, 100);
-        
-        // SONRA username'i düzelt (app.js "Anonim" yazmış olabilir)
         var nameEl = document.getElementById("user-bar-name");
-        if (savedNick && nameEl && (nameEl.textContent === "Anonim" || !nameEl.textContent || nameEl.textContent.includes("Anonim"))) {
+        if (savedNick && nameEl && (nameEl.textContent === "Anonim" || !nameEl.textContent)) {
           nameEl.textContent = savedNick;
-          localStorage.setItem("scord_username", savedNick);
-          if (window.state) window.state.username = savedNick;
-          console.log("[Fixes] Fixed Anonim ->", savedNick);
         }
-        
-        // 500ms sonra tekrar kontrol
-        setTimeout(function () {
-          var nameEl2 = document.getElementById("user-bar-name");
-          var savedNick2 = localStorage.getItem("scord_username") || localStorage.getItem("scord_last_nick");
-          if (nameEl2 && savedNick2 && (nameEl2.textContent === "Anonim" || !nameEl2.textContent)) {
-            nameEl2.textContent = savedNick2;
-            if (window.state) window.state.username = savedNick2;
-            localStorage.setItem("scord_username", savedNick2);
-          }
-        }, 500);
         
         return result;
       };
     }
     
-    console.log("[Fixes] Device ID system ready, peerId:", window.state.peerId);
-    
-    // "Anonim" watchdog - DOM'da sürekli kontrol et
+    // Watchdog - her ihtimale karşı "Anonim"i düzelt
     setInterval(function () {
       var nameEl = document.getElementById("user-bar-name");
       if (!nameEl) return;
-      if (nameEl.textContent === "Anonim" || nameEl.textContent === "" || !nameEl.textContent) {
-        var savedNick = localStorage.getItem("scord_username") || localStorage.getItem("scord_last_nick");
-        if (savedNick) {
-          nameEl.textContent = savedNick;
-          if (window.state) window.state.username = savedNick;
-          localStorage.setItem("scord_username", savedNick);
+      if (nameEl.textContent === "Anonim" || !nameEl.textContent) {
+        var nick = localStorage.getItem("scord_username");
+        if (nick) {
+          nameEl.textContent = nick;
+          if (window.state) window.state.username = nick;
         }
       }
     }, 500);
+
+    console.log("[Fixes] Password system ready");
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     20b. SUNUCU + ARKADAŞ + DM KALICILIĞI
+  ══════════════════════════════════════════════════════════ */
+
+  function patchPersistence() {
+    // App.js'in loadSavedServers'ını patch'le - ghost server'ları temizle
+    if (typeof window.loadSavedServers === "function") {
+      var _origLSS = window.loadSavedServers;
+      window.loadSavedServers = function () {
+        var result = _origLSS.apply(this, arguments);
+        
+        // Left servers listesini temizle
+        try {
+          var leftServers = JSON.parse(localStorage.getItem("scord_left_servers") || "[]");
+          if (leftServers.length > 0 && window.state?.servers) {
+            window.state.servers = window.state.servers.filter(function (s) {
+              return leftServers.indexOf(s.id) === -1;
+            });
+          }
+        } catch (e) {}
+        
+        // Her sunucuya ownerID ekle (yoksa)
+        var identityId = localStorage.getItem("scord_identity_id") || window.state?.peerId;
+        if (identityId && window.state?.servers) {
+          window.state.servers.forEach(function (s) {
+            if (!s.ownerId) s.ownerId = identityId;
+          });
+        }
+        
+        return result;
+      };
+    }
+
+    // saveServerSettings'i patch'le - her değişiklikte identity'ye kaydet
+    if (typeof window.saveServerSettings === "function") {
+      var _origSSS = window.saveServerSettings;
+      window.saveServerSettings = function () {
+        var result = _origSSS.apply(this, arguments);
+        // Tüm veriyi identity altına kaydet
+        var nick = localStorage.getItem("scord_username");
+        var pass = localStorage.getItem("scord_pass");
+        if (nick && pass && window.state) {
+          var key = "scord_identity_" + window._makeIdFromPass(nick, pass);
+          var data = {
+            servers: window.state.servers || [],
+            friends: window.state.friends || [],
+            dms: window.state.dms || {},
+            recentDMs: window.state.recentDMs || [],
+            peerId: window.state.peerId,
+            username: window.state.username,
+            avatarColor: window.state.avatarColor,
+            avatarImage: window.state.avatarImage
+          };
+          try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) {}
+        }
+        return result;
+      };
+    }
+
+    // Identity'den tüm veriyi yükle (startApp'ten önce)
+    var loadedNick = localStorage.getItem("scord_username");
+    var loadedPass = localStorage.getItem("scord_pass");
+    if (loadedNick && loadedPass) {
+      var loadKey = "scord_identity_" + window._makeIdFromPass(loadedNick, loadedPass);
+      try {
+        var savedData = JSON.parse(localStorage.getItem(loadKey));
+        if (savedData && window.state) {
+          if (savedData.servers) window.state.servers = savedData.servers;
+          if (savedData.friends) window.state.friends = savedData.friends;
+          if (savedData.dms) window.state.dms = savedData.dms;
+          if (savedData.recentDMs) window.state.recentDMs = savedData.recentDMs;
+          if (savedData.avatarColor) window.state.avatarColor = savedData.avatarColor;
+          if (savedData.avatarImage) window.state.avatarImage = savedData.avatarImage;
+        }
+      } catch (e) {}
+    }
+    
+    console.log("[Fixes] Persistence system ready");
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     20c. CHAT HEADER FİX + ODA BULUNAMADI HATASI
+  ══════════════════════════════════════════════════════════ */
+
+  function patchChatHeader() {
+    // showChatView'i patch'le - duplicate channel name fix
+    if (typeof window.showChatView === "function") {
+      var _origSCV = window.showChatView;
+      window.showChatView = function (serverId, channelId) {
+        var result = _origSCV.apply(this, arguments);
+        
+        // Çift "#genel" sorununu düzelt
+        var chatName = document.getElementById("chat-channel-name");
+        if (chatName) {
+          chatName.style.display = "none";
+          chatName.textContent = "";
+        }
+        
+        // "Oda bulunamadı" hatasını önlemek için channel'ı kontrol et
+        setTimeout(function () {
+          var activeName = document.getElementById("active-channel-name");
+          if (activeName) {
+            var channel = null;
+            if (window.state?.activeServerId && window.state?.activeChannelId) {
+              var server = window.state.servers.find(function (s) { return s.id === window.state.activeServerId; });
+              if (server) {
+                channel = server.channels.find(function (c) { return c.id === window.state.activeChannelId; });
+              }
+            }
+            // Eğer kanal bulunamadıysa veya isim boşsa, düzelt
+            if (!channel && window.state?.activeChannelId) {
+              // Fallback: channelId'yi isim olarak göster
+              activeName.textContent = window.state.activeChannelId;
+            }
+          }
+        }, 50);
+        
+        return result;
+      };
+    }
+
+    // CSS ile kalıcı fix
+    var style = document.getElementById("scord-chat-design-fix");
+    if (!style) {
+      var s = document.createElement("style");
+      s.id = "scord-chat-design-fix";
+      s.textContent = "#chat-channel-name { display: none !important; }";
+      document.head.appendChild(s);
+    } else {
+      style.textContent += "#chat-channel-name { display: none !important; }";
+    }
+    
+    console.log("[Fixes] Chat header fixed");
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -2157,6 +2503,8 @@ function init() {
       patchServerRail();
       patchMemberStatus();
       patchPasswordSystem();
+      patchPersistence();
+      patchChatHeader();
       patchGlobalBugs();
       patchFriendRequestSystem();
       patchProfileSystem();
