@@ -2822,13 +2822,96 @@ function init() {
   ══════════════════════════════════════════════════════════ */
 
   function patchScreenShare() {
-    // handleVoiceStream fonksiyonunu patch'le - video elementini DOM'a ekle
+    // ============================================================
+    // FIX 1: Screen share audio koruma - sadece video track'ini ekle
+    // ============================================================
+    if (typeof window.startScreenShare === "function" && !window._screenShareFixed) {
+      window._screenShareFixed = true;
+      var _origSSS = window.startScreenShare;
+      window.startScreenShare = async function () {
+        try {
+          // Orijinal fonksiyonu çağır
+          var result = await _origSSS.apply(this, arguments);
+          
+          // ŞİMDİ: audio track'lerini düzelt - screen share sesi MİKROFONUN yerine geçmesin
+          if (window.state?.mesh && window.state?.screenStream) {
+            var stream = window.state.screenStream;
+            var peers = window.state.mesh.peers || {};
+            
+            Object.values(peers).forEach(function (peerObj) {
+              var pc = peerObj.pc;
+              if (!pc || pc.connectionState === "closed") return;
+              
+              // Audio sender'ı bul - screen share audio'su ile replace edilmiş olabilir
+              var audioSender = pc.getSenders().find(function (s) { return s.track && s.track.kind === "audio"; });
+              
+              // Eğer audio sender varsa ve track'i screen share stream'inden geliyorsa
+              // (yani replace edilmişse), orijinal mic track'ini geri yükle
+              if (audioSender && stream.getAudioTracks().indexOf(audioSender.track) !== -1) {
+                // Screen share'ın audio track'ini sender'dan çıkar
+                // NOT: replaceTrack(null) göndermeyi durdurur
+                // En iyisi: screen share sesini KALDIR, sadece video bırak
+                try {
+                  // replaceTrack(null) ile audio'yu durdur (mic kesintisiz devam eder)
+                  // Çünkü mic track'i ayrı bir stream'de
+                  audioSender.replaceTrack(null).catch(function () {});
+                } catch (e) {}
+              }
+            });
+          }
+          
+          return result;
+        } catch (e) {
+          console.error("[Fixes] startScreenShare error:", e);
+          throw e;
+        }
+      };
+    }
+    
+    // ============================================================
+    // FIX 2: Screen share bittiğinde mic'i kurtar + UI temizle
+    // ============================================================
+    if (typeof window.stopScreenShare === "function" && !window._screenStopFixed) {
+      window._screenStopFixed = true;
+      var _origStopSS = window.stopScreenShare;
+      window.stopScreenShare = function () {
+        try {
+          // ÖNCE: state.screenStream'den audio track'lerini durdurma
+          // (orijinal stopScreenShare stream.getTracks().forEach(t => t.stop()) yapar)
+          // Ama mic track'i replace edilmiş olabilir - onu koru
+          
+          // Screen share kalktı mesajını broadcast et (orijinal fonksiyon öncesi)
+          if (window.state?.mesh) {
+            window.state.mesh.broadcast({
+              type: "screen_status",
+              sharing: false,
+              channelId: window.state.voiceChannelId || window.state.activeChannelId
+            });
+          }
+          
+          _origStopSS.apply(this, arguments);
+          
+          // UI'ı force refresh
+          if (window.state?.activeServerId && window.state?.voiceChannelId) {
+            setTimeout(function () {
+              if (typeof window.renderVoiceParticipants === "function") {
+                window.renderVoiceParticipants(window.state.activeServerId, window.state.voiceChannelId);
+              }
+            }, 200);
+          }
+        } catch (e) {
+          console.error("[Fixes] stopScreenShare error:", e);
+        }
+      };
+    }
+    
+    // ============================================================
+    // FIX 3: handleVoiceStream - video elementini DOM'a ekle
+    // ============================================================
     if (typeof window.handleVoiceStream === "function") {
       var _origHVS = window.handleVoiceStream;
       window.handleVoiceStream = function (peerId, stream) {
         _origHVS(peerId, stream);
-        
-        // Video elementi DOM'da yoksa ekle
         var video = window.state?.remoteMedia?.[peerId];
         if (video && !video.parentNode) {
           video.style.cssText = "position:absolute;width:1px;height:1px;opacity:0.01;pointer-events:none;";
@@ -2837,11 +2920,12 @@ function init() {
       };
     }
     
-    // handleTrackAdded'i patch'le - screen share track'lerini de işle
+    // ============================================================
+    // FIX 4: handleTrackAdded - screen share track'lerini de işle
+    // ============================================================
     if (typeof window.handleTrackAdded === "function") {
       var _origHTA = window.handleTrackAdded;
       window.handleTrackAdded = function (peerId, track, stream) {
-        // ÖNCE: state.remoteMedia[peerId] yoksa oluştur
         if (!window.state) window.state = {};
         if (!window.state.remoteMedia) window.state.remoteMedia = {};
         if (!window.state.remoteMedia[peerId]) {
@@ -2855,10 +2939,8 @@ function init() {
           window.state.remoteMedia[peerId] = video;
         }
         
-        // SONRA: orijinal handler'ı çağır
         _origHTA(peerId, track, stream);
         
-        // Force re-render voice panel after screen share track received
         if (track.kind === "video") {
           setTimeout(function () {
             if (window.state?.activeServerId && window.state?.voiceChannelId) {
@@ -2871,7 +2953,9 @@ function init() {
       };
     }
     
-    // screen_status mesajlarını dinle - force re-render
+    // ============================================================
+    // FIX 5: screen_status mesajlarını dinle - force re-render
+    // ============================================================
     if (typeof window.handleServerMessage === "function") {
       var _origHSM2 = window.handleServerMessage;
       window.handleServerMessage = function (data) {
@@ -2885,19 +2969,114 @@ function init() {
               }
             }
           }, 300);
+          
+          // Screen share kapandıysa (sharing=false), video elementlerini temizle
+          if (!data.sharing && data.from) {
+            if (window.state?.remoteMedia?.[data.from]) {
+              try {
+                window.state.remoteMedia[data.from].srcObject = null;
+                window.state.remoteMedia[data.from].remove();
+                delete window.state.remoteMedia[data.from];
+              } catch (e) {}
+            }
+          }
         }
         
         return result;
       };
     }
     
-    // İzle/Watch butonunu ekle - renderVoiceParticipants sonrası
+    // ============================================================
+    // FIX 6: Watch button + CSS tasarım fix
+    // ============================================================
+    // CSS stili ekle
+    var watchStyle = document.getElementById("scord-watch-style");
+    if (!watchStyle) {
+      var ws = document.createElement("style");
+      ws.id = "scord-watch-style";
+      ws.textContent = `
+        .scord-watch-btn {
+          padding: 8px 16px !important;
+          border: none !important;
+          border-radius: 8px !important;
+          background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+          color: #fff !important;
+          cursor: pointer !important;
+          font-size: 13px !important;
+          font-weight: 600 !important;
+          margin-top: 8px !important;
+          display: block !important;
+          width: 100% !important;
+          transition: all 0.2s ease !important;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3) !important;
+        }
+        .scord-watch-btn:hover {
+          transform: translateY(-1px) !important;
+          box-shadow: 0 4px 16px rgba(99, 102, 241, 0.5) !important;
+        }
+        .scord-watch-btn:active {
+          transform: translateY(0) !important;
+        }
+        /* Screen overlay video container */
+        .screen-overlay-video {
+          width: 100% !important;
+          height: 100% !important;
+          object-fit: contain !important;
+          background: #000 !important;
+        }
+        .screen-overlay {
+          position: fixed !important;
+          top: 0 !important;
+          left: 0 !important;
+          width: 100% !important;
+          height: 100% !important;
+          background: rgba(0,0,0,0.9) !important;
+          z-index: 999999 !important;
+          display: flex !important;
+          align-items: center !important;
+          justify-content: center !important;
+        }
+        .screen-overlay-close {
+          position: absolute !important;
+          top: 16px !important;
+          right: 16px !important;
+          padding: 8px 20px !important;
+          border: none !important;
+          border-radius: 8px !important;
+          background: rgba(255,255,255,0.1) !important;
+          color: #fff !important;
+          cursor: pointer !important;
+          font-size: 14px !important;
+          font-weight: 600 !important;
+          backdrop-filter: blur(8px) !important;
+          z-index: 10 !important;
+        }
+        .screen-overlay-close:hover {
+          background: rgba(255,255,255,0.2) !important;
+        }
+        .screen-overlay-label {
+          position: absolute !important;
+          bottom: 16px !important;
+          left: 50% !important;
+          transform: translateX(-50%) !important;
+          padding: 6px 16px !important;
+          border-radius: 8px !important;
+          background: rgba(0,0,0,0.6) !important;
+          color: #fff !important;
+          font-size: 13px !important;
+          backdrop-filter: blur(4px) !important;
+          z-index: 10 !important;
+        }
+      `;
+      document.head.appendChild(ws);
+    }
+    
+    // Watch butonunu ekle
     if (typeof window.renderVoiceParticipants === "function") {
       var _origRVP = window.renderVoiceParticipants;
       window.renderVoiceParticipants = function (serverId, channelId) {
         var result = _origRVP.apply(this, arguments);
         
-        // Watch butonlarını kontrol et ve ekle
         setTimeout(function () {
           var cards = document.querySelectorAll(".vpc-card");
           cards.forEach(function (card) {
@@ -2908,9 +3087,7 @@ function init() {
             var watchBtn = document.createElement("button");
             watchBtn.className = "scord-watch-btn";
             watchBtn.textContent = "🔍 İzle";
-            watchBtn.style.cssText = "padding:6px 14px;border:none;border-radius:8px;background:var(--accent,#6366f1);color:#fff;cursor:pointer;font-size:12px;font-weight:600;margin-top:8px;display:block;width:100%;";
             
-            // Peer ID'yi bul
             var peerId = card.dataset.peerId || card.dataset.memberId;
             if (!peerId) {
               var nameEl = card.querySelector(".vpc-name");
@@ -2932,7 +3109,7 @@ function init() {
       };
     }
     
-    console.log("[Fixes] Screen share + watch button patch applied");
+    console.log("[Fixes] Screen share patch applied (audio fix + UI)");
   }
 
   init();
