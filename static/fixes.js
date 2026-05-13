@@ -106,7 +106,8 @@
     perfStyle.id = "scord-perf-gpu";
     perfStyle.textContent = `
       /* GPU Acceleration for animations */
-      .rail-icon, .server-rail-icon, .channel-icon, .member-avatar {
+      .rail-icon, .server-rail-icon, .channel-icon, .member-avatar,
+      .msg-row, .member-item, .channel-item, .vpc-card {
         will-change: transform;
         transform: translateZ(0);
         backface-visibility: hidden;
@@ -133,6 +134,14 @@
           animation-duration: 0.01ms !important;
           transition-duration: 0.01ms !important;
         }
+      }
+      
+      /* CSS contain - render performansı */
+      .messages-area, .channel-list, .members-list {
+        contain: content;
+      }
+      .server-rail {
+        contain: strict;
       }
     `;
     document.head.appendChild(perfStyle);
@@ -944,38 +953,28 @@
       var _origSMB = window.startMusicBot;
       window.startMusicBot = function (videoId, startAt) {
         // ÖNCE: YT.Player'ı taşıyacak dock'u oluştur
-        var dockInfo = _createMusicDock(videoId);
+        var dock = _createMusicDock(videoId);
         
-        // YT iframe taşınırsa API bağlantısı kopar ve siyah ekran olur.
-        // Bu yüzden YT.Player oluşturulmadan ÖNCE div'i doğru yere koyuyoruz.
-        var ytPlayer = document.getElementById("yt-player");
-        if (!ytPlayer) {
-          ytPlayer = document.createElement("div");
-          ytPlayer.id = "yt-player";
-        }
-        var ytContainer = document.getElementById("music-yt-container");
-        if (ytContainer && ytPlayer.parentNode !== ytContainer) {
-          ytContainer.appendChild(ytPlayer);
-          ytPlayer.style.width = "100%";
-          ytPlayer.style.height = "100%";
-        }
-
-        // SONRA: orijinal startMusicBot'u çağır (YT.Player'ı ytContainer içinde oluşturacak)
+        // SONRA: orijinal startMusicBot'u çağır (YT.Player'ı oluşturur)
         try {
           _origSMB(videoId, startAt);
         } catch (e) {
           console.error("[Fixes] startMusicBot error:", e);
         }
         
-        var sub = document.getElementById("music-subtitle");
-        if (sub) sub.textContent = videoId || "Çalıyor...";
-        
-        // Dock'u otomatik olarak genişlet ki video görünsün
-        setTimeout(function() {
-          var pw = document.getElementById("music-player-wrap");
-          if (pw && pw.style.display === "none") {
-            _toggleMusicPlayer();
+        // YT.Player oluştuktan sonra #yt-player'ı dock'a taşı
+        setTimeout(function () {
+          var ytPlayer = document.getElementById("yt-player");
+          var ytContainer = document.getElementById("music-yt-container");
+          if (ytPlayer && ytContainer) {
+            ytContainer.innerHTML = "";
+            ytContainer.appendChild(ytPlayer);
+            ytPlayer.style.width = "100%";
+            ytPlayer.style.height = "100%";
           }
+          
+          var sub = document.getElementById("music-subtitle");
+          if (sub) sub.textContent = videoId || "Çalıyor...";
         }, 500);
       };
     }
@@ -1565,29 +1564,33 @@
       console.log("[Fixes] Identity restored:", savedNick, savedId);
     }
 
-    // Setup ekranına şifre alanı ekle + otomatik giriş
-    var setupCheck = setInterval(function () {
-      var setupOverlay = document.getElementById("setup-overlay");
-      var setupCard = setupOverlay ? setupOverlay.querySelector(".setup-card") : null;
-      if (!setupCard) return;
-      if (setupCard.querySelector(".scord-pass-field")) {
+    // OTOMATİK GİRİŞ - kayıtlı kimlik varsa setup'ı beklemeden direkt startApp
+    if (savedNick && savedPass && savedId && typeof window.startApp === "function" && !window._autoLoginDone) {
+      window._autoLoginDone = true;
+      // setup overlay'i gizle, app'i göster
+      var ov = document.getElementById("setup-overlay");
+      if (ov) { ov.classList.remove("active"); ov.style.display = "none"; }
+      var appEl = document.getElementById("app");
+      if (appEl) appEl.classList.remove("hidden");
+      // startApp'i çağır
+      try { window.startApp(); } catch (e) { console.warn("[Fixes] auto-startApp:", e); }
+    }
+
+    // Setup ekranına şifre alanı ekle (sadece YENİ kullanıcılar için)
+    if (!savedNick || !savedPass || !savedId) {
+      var setupCheck = setInterval(function () {
+        var setupOverlay = document.getElementById("setup-overlay");
+        var setupCard = setupOverlay ? setupOverlay.querySelector(".setup-card") : null;
+        if (!setupCard) return;
+        if (setupCard.querySelector(".scord-pass-field")) {
+          clearInterval(setupCheck);
+          return;
+        }
         clearInterval(setupCheck);
-        return;
-      }
-      clearInterval(setupCheck);
 
       var nickInput = document.getElementById("username-input");
       var enterBtn = setupCard.querySelector("#enter-btn");
       if (!nickInput || !enterBtn) return;
-
-      // Kayıtlı kimlik varsa otomatik giriş yap
-      if (savedNick && savedPass && savedId) {
-        if (typeof startApp === "function") {
-          nickInput.value = savedNick;
-          startApp();
-          return;
-        }
-      }
 
       // Şifre alanını ekle
       var formGroup = setupCard.querySelector(".form-group");
@@ -1696,7 +1699,7 @@
           if (window.state) window.state.username = nick;
         }
       }
-    }, 500);
+    }, 1500);
 
     console.log("[Fixes] Password system ready");
   }
@@ -2190,7 +2193,6 @@
       var ci = document.getElementById("chat-input");
       if (!ci) return;
       clearInterval(_safeChatInterval);
-      // Orijinal event listener'ların çalıştığından emin ol
       if (!ci.dataset._fixChecked) {
         ci.dataset._fixChecked = "1";
         ci.addEventListener("keydown", function (e) {
@@ -2200,7 +2202,7 @@
           }
         });
       }
-    }, 500);
+    }, 1000);
 
     // 4) handleIncomingP2P wrapper chain - app.js'deki local değişken fix
     // app.js'de onMessage callback'i bir local handleIncomingP2P değişkenini kullanır,
@@ -2524,7 +2526,8 @@ function init() {
       patchDiscordAnimations();
       patchServerIcons();
       patchScreenShare();
-
+      patchScreenOverlay();
+      
       var _obsTimer = null;
       var obs = new MutationObserver(function () {
         if (_obsTimer) return;
@@ -2719,7 +2722,12 @@ function init() {
         icon.style.transition = "border-radius 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease";
       });
     });
-    serverRailObserver.observe(document.body, { childList: true, subtree: true });
+    // Scope: sadece server-rail container'ını izle
+    setTimeout(function () {
+      var rail = document.getElementById("server-rail") || document.querySelector(".server-rail");
+      if (rail) serverRailObserver.observe(rail, { childList: true, subtree: true });
+      else serverRailObserver.observe(document.body, { childList: true, subtree: true });
+    }, 1000);
 
     console.log("[Fixes] Discord-style animations enabled");
 
@@ -3120,6 +3128,67 @@ function init() {
     }
     
     console.log("[Fixes] Screen share patch applied (audio fix + UI)");
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     SCREEN OVERLAY TAM EKRAN BUTONU
+  ══════════════════════════════════════════════════════════ */
+
+  function patchScreenOverlay() {
+    if (typeof window.openScreenOverlay === "function") {
+      var _origOSO = window.openScreenOverlay;
+      window.openScreenOverlay = function (peerId, username) {
+        var result = _origOSO.apply(this, arguments);
+        
+        // Overlay'e fullscreen butonu ekle
+        setTimeout(function () {
+          var overlay = document.getElementById("screen-overlay");
+          if (!overlay || overlay.querySelector(".scord-fs-btn")) return;
+          
+          var video = overlay.querySelector(".screen-overlay-video");
+          if (!video) return;
+          
+          var fsBtn = document.createElement("button");
+          fsBtn.className = "scord-fs-btn";
+          fsBtn.innerHTML = "⛶ Tam Ekran";
+          fsBtn.title = "Tam ekran yap";
+          fsBtn.style.cssText = "position:absolute;bottom:60px;right:20px;padding:8px 18px;border:none;border-radius:8px;background:linear-gradient(135deg,rgba(99,102,241,0.9),rgba(139,92,246,0.9));color:#fff;cursor:pointer;font-size:13px;font-weight:600;z-index:20;backdrop-filter:blur(8px);box-shadow:0 4px 16px rgba(99,102,241,0.4);transition:all 0.2s ease;";
+          
+          fsBtn.onmouseover = function () { this.style.transform = "scale(1.05)"; this.style.boxShadow = "0 6px 20px rgba(99,102,241,0.6)"; };
+          fsBtn.onmouseout = function () { this.style.transform = "scale(1)"; this.style.boxShadow = "0 4px 16px rgba(99,102,241,0.4)"; };
+          
+          fsBtn.onclick = function (e) {
+            e.stopPropagation();
+            if (video.requestFullscreen) {
+              video.requestFullscreen();
+            } else if (video.webkitRequestFullscreen) {
+              video.webkitRequestFullscreen();
+            } else if (video.msRequestFullscreen) {
+              video.msRequestFullscreen();
+            }
+          };
+          
+          overlay.appendChild(fsBtn);
+          
+          // Kapat butonunu da güncelle
+          var closeBtn = overlay.querySelector(".screen-overlay-close");
+          if (closeBtn) {
+            closeBtn.style.cssText = "position:absolute;top:16px;right:16px;padding:10px 24px;border:none;border-radius:10px;background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;cursor:pointer;font-size:14px;font-weight:600;z-index:20;box-shadow:0 4px 16px rgba(239,68,68,0.4);transition:all 0.2s ease;";
+            closeBtn.onmouseover = function () { this.style.transform = "scale(1.05)"; };
+            closeBtn.onmouseout = function () { this.style.transform = "scale(1)"; };
+          }
+          
+          // Label'ı güncelle
+          var label = overlay.querySelector(".screen-overlay-label");
+          if (label) {
+            label.style.cssText = "position:absolute;bottom:16px;left:50%;transform:translateX(-50%);padding:8px 20px;border-radius:10px;background:rgba(0,0,0,0.7);color:#fff;font-size:13px;backdrop-filter:blur(4px);z-index:10;";
+          }
+        }, 100);
+        
+        return result;
+      };
+    }
+    console.log("[Fixes] Screen overlay fullscreen button added");
   }
 
   init();
