@@ -1,6 +1,7 @@
 (function () {
   "use strict";
   console.log("[Fixes] LOADED - v2.5");
+  window._scordFixesLoaded = true;
   
   var _API = typeof API_BASE !== "undefined" ? API_BASE : "/api";
 

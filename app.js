@@ -45,6 +45,7 @@ let state = {
     peerId: null,
     username: "",
     avatarColor: "#7c3aed",
+    _appliedTheme: null,
     avatarImage: null,
     appBackground: null,
     voiceSettings: { micId: "default", volume: 1, filter: "none", noiseSuppression: true, echoCancellation: false, autoGainControl: false, gateThreshold: 8, gateAttack: 0.008, gateRelease: 0.05 },
@@ -119,6 +120,9 @@ let state = {
     compactMode: false,
     _qsOpen: false,
 };
+
+// fixes.js patches rely on window.state — link it to the app's local state
+window.state = state;
 
 const ENABLE_SERVER_SYSTEM_CHAT_NOTICES = false;
 
@@ -6468,7 +6472,6 @@ function assignRole(peerId, role, server) {
 function leaveServer(serverId) {
     const idx = state.servers.findIndex(s => s.id === serverId);
     if (idx === -1) return;
-    // Önce sesli kanaldan çık
     if (state.voiceChannelId) {
         try { leaveVoiceChannel(); } catch (e) {}
     }
@@ -6477,6 +6480,36 @@ function leaveServer(serverId) {
     state.voiceChannelId = null;
     if (state.mesh) { state.mesh.disconnect(); state.mesh = null; }
     state.servers.splice(idx, 1);
+    // Clean all localStorage keys for this server
+    try { localStorage.removeItem("scord_server_" + serverId); } catch (e) {}
+    try {
+        var saved = JSON.parse(localStorage.getItem("scord_saved_servers") || "[]");
+        var filtered = saved.filter(function (s) { return s.id !== serverId; });
+        if (saved.length !== filtered.length) {
+            localStorage.setItem("scord_saved_servers", JSON.stringify(filtered));
+        }
+    } catch (e) {}
+    // Add to left servers list so it never reappears
+    try {
+        var leftList = JSON.parse(localStorage.getItem("scord_left_servers") || "[]");
+        if (leftList.indexOf(serverId) === -1) {
+            leftList.push(serverId);
+            localStorage.setItem("scord_left_servers", JSON.stringify(leftList));
+        }
+    } catch (e) {}
+    // If identity store exists, also clean it
+    try {
+        var nick = localStorage.getItem("scord_username");
+        var pass = localStorage.getItem("scord_pass");
+        if (nick && pass) {
+            var idKey = "scord_identity_" + window._makeIdFromPass(nick, pass);
+            var idData = JSON.parse(localStorage.getItem(idKey));
+            if (idData && idData.servers) {
+                idData.servers = idData.servers.filter(function (s) { return s.id !== serverId; });
+                localStorage.setItem(idKey, JSON.stringify(idData));
+            }
+        }
+    } catch (e) {}
     renderServerRail();
     showHomeView();
     toast("Sunucudan ayrıldın.", "info");
@@ -21823,6 +21856,11 @@ function init() {
     patchThemeColors();
 
     function ready() {
+      // fixes.js loads after app.js and handles all patches — skip if already loaded
+      if (window._scordFixesLoaded) {
+        console.log("[App] Duplicate patches skipped (handled by fixes.js)");
+        return;
+      }
       console.log("[Fixes] Ready, applying patches...");
       patchSaveServerSettings();
       patchWSHandler();

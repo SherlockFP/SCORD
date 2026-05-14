@@ -643,6 +643,70 @@
             .pass-toggle-btn:hover {
                 color: var(--text-normal);
             }
+
+            /* Stream Fullscreen Button */
+            .stream-fullscreen-btn {
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                background: rgba(0,0,0,0.6);
+                border: 1px solid rgba(255,255,255,0.2);
+                color: #fff;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 12px;
+                cursor: pointer;
+                opacity: 0;
+                transition: opacity 0.2s;
+                z-index: 100;
+                backdrop-filter: blur(4px);
+            }
+            .video-container:hover .stream-fullscreen-btn,
+            .voice-video-item:hover .stream-fullscreen-btn {
+                opacity: 1;
+            }
+            .stream-fullscreen-btn:hover {
+                background: var(--accent);
+            }
+
+            /* Server Context Menu */
+            .scord-ctx-menu {
+                position: fixed;
+                background: var(--bg-elevated);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+                padding: 4px;
+                z-index: 9999;
+                min-width: 160px;
+                backdrop-filter: blur(12px);
+                animation: ctxFadeIn 0.15s ease-out;
+            }
+            @keyframes ctxFadeIn {
+                from { opacity: 0; transform: scale(0.95); }
+                to { opacity: 1; transform: scale(1); }
+            }
+            .scord-ctx-item {
+                padding: 8px 12px;
+                border-radius: 4px;
+                font-size: 14px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                transition: background 0.1s;
+            }
+            .scord-ctx-item:hover {
+                background: var(--accent);
+                color: #fff;
+            }
+            .scord-ctx-item.danger {
+                color: #ff5555;
+            }
+            .scord-ctx-item.danger:hover {
+                background: #ff5555;
+                color: #fff;
+            }
         `;
         document.head.appendChild(style);
 
@@ -1043,6 +1107,190 @@
         }, 60000); // Check every minute
     }
 
+    // 11. SERVER CONTEXT MENU (Leave Server) + Health Check
+    function applyServerManagement() {
+        // Add offline server CSS
+        if (!document.getElementById("scord-server-health-css")) {
+            var hs = document.createElement("style");
+            hs.id = "scord-server-health-css";
+            hs.textContent = ".rail-icon.offline{opacity:0.4;filter:grayscale(0.8);pointer-events:auto;}.rail-icon.offline:hover{opacity:0.7;filter:grayscale(0.5);}";
+            document.head.appendChild(hs);
+        }
+
+        // Periodically update server rail icons with offline status
+        setInterval(() => {
+            if (!window.state || !window.state.servers) return;
+            document.querySelectorAll(".rail-icon, .rail-server-guild").forEach(el => {
+                var sid = el.dataset ? (el.dataset.serverId || el.dataset.server_id) : null;
+                if (!sid && el.getAttribute) sid = el.getAttribute("data-server-id");
+                if (!sid) return;
+                var server = window.state.servers.find(function(s) { return s.id === sid; });
+                if (server && server._offline) {
+                    el.classList.add("offline");
+                } else {
+                    el.classList.remove("offline");
+                }
+            });
+        }, 2000);
+
+        // Right-click context menu on server icons
+        document.addEventListener("contextmenu", (e) => {
+            const icon = e.target.closest(".rail-icon");
+            if (!icon) return;
+            
+            const serverId = icon.dataset.serverId || icon.getAttribute("data-id");
+            if (!serverId || serverId === "home") return;
+
+            e.preventDefault();
+
+            const old = document.querySelector(".scord-ctx-menu");
+            if (old) old.remove();
+
+            const menu = document.createElement("div");
+            menu.className = "scord-ctx-menu";
+            menu.style.left = e.pageX + "px";
+            menu.style.top = e.pageY + "px";
+
+            const leaveItem = document.createElement("div");
+            leaveItem.className = "scord-ctx-item danger";
+            leaveItem.innerHTML = "<span>🚪</span> Sunucudan Ayrıl";
+            leaveItem.onclick = () => {
+                if (confirm("Bu sunucudan ayrılmak istediğine emin misin?")) {
+                    if (typeof window.leaveServer === "function") {
+                        window.leaveServer(serverId);
+                    }
+                }
+                menu.remove();
+            };
+
+            const cancelItem = document.createElement("div");
+            cancelItem.className = "scord-ctx-item";
+            cancelItem.innerHTML = "<span>✕</span> İptal";
+            cancelItem.onclick = () => menu.remove();
+
+            menu.appendChild(leaveItem);
+            menu.appendChild(cancelItem);
+            document.body.appendChild(menu);
+
+            const close = (evt) => {
+                if (!menu.contains(evt.target)) {
+                    menu.remove();
+                    document.removeEventListener("click", close);
+                }
+            };
+            setTimeout(() => document.addEventListener("click", close), 10);
+        });
+
+        // Server health check — periodically ping each server and mark offline if unreachable
+        const _API = typeof API_BASE !== "undefined" ? API_BASE : "/api";
+        setInterval(() => {
+            if (!window.state || !window.state.servers) return;
+            window.state.servers.forEach(server => {
+                if (!server._healthChecked) {
+                    server._healthChecked = true;
+                    fetch(_API + "/rooms/" + server.id)
+                        .then(res => {
+                            if (res.status === 404 || res.status >= 500) {
+                                server._offline = true;
+                                if (typeof window.renderServerRail === "function") {
+                                    window.renderServerRail();
+                                }
+                            } else {
+                                server._offline = false;
+                            }
+                        })
+                        .catch(() => {
+                            server._offline = true;
+                            if (typeof window.renderServerRail === "function") {
+                                window.renderServerRail();
+                            }
+                        });
+                }
+            });
+        }, 5000);
+
+        // Periodically re-check failed servers
+        setInterval(() => {
+            if (!window.state || !window.state.servers) return;
+            window.state.servers.forEach(server => {
+                if (server._offline) {
+                    server._healthChecked = false; // trigger re-check
+                }
+            });
+        }, 60000);
+    }
+
+    // 12. STREAM FULLSCREEN & BUG FIX
+    function applyStreamFixes() {
+        // Add fullscreen button to videos
+        setInterval(() => {
+            const videos = document.querySelectorAll("video");
+            videos.forEach(v => {
+                if (v.dataset.fsHooked) return;
+                v.dataset.fsHooked = "true";
+
+                const container = v.parentElement;
+                if (!container) return;
+
+                if (getComputedStyle(container).position === "static") {
+                    container.style.position = "relative";
+                }
+
+                const fsBtn = document.createElement("button");
+                fsBtn.className = "stream-fullscreen-btn";
+                fsBtn.innerHTML = "⛶ Tam Ekran";
+                fsBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    if (v.requestFullscreen) v.requestFullscreen();
+                    else if (v.webkitRequestFullscreen) v.webkitRequestFullscreen();
+                    else if (v.msRequestFullscreen) v.msRequestFullscreen();
+                };
+                container.appendChild(fsBtn);
+            });
+        }, 2000);
+
+        // Listen for stream_stop via handleIncomingP2P (P2P mesh channel)
+        if (typeof window.handleIncomingP2P === "function") {
+            const origHandleP2P = window.handleIncomingP2P;
+            window.handleIncomingP2P = function(fromPeerId, data, roomId) {
+                if (data && data.type === "stream_stop") {
+                    console.log("[Fixes V2] Stream stop from", fromPeerId);
+                    if (window.state && window.state.mesh && window.state.mesh.peers) {
+                        const video = document.querySelector(`video[data-peer-id="${fromPeerId}"]`);
+                        if (video) {
+                            const container = video.closest(".video-container") || video.parentElement;
+                            if (container) {
+                                container.remove();
+                            } else {
+                                video.remove();
+                            }
+                        }
+                        if (window.state.remoteMedia && window.state.remoteMedia[fromPeerId]) {
+                            try { window.state.remoteMedia[fromPeerId].srcObject = null; } catch(e) {}
+                            delete window.state.remoteMedia[fromPeerId];
+                        }
+                    }
+                    return;
+                }
+                return origHandleP2P.apply(this, arguments);
+            };
+        }
+        
+        // Broadcast stream_stop on screen share end (includes peerId for remote cleanup)
+        const origStopScreenShare = window.stopScreenShare;
+        if (origStopScreenShare) {
+            window.stopScreenShare = function() {
+                if (window.state && window.state.mesh) {
+                    window.state.mesh.broadcast({
+                        type: "stream_stop",
+                        peerId: window.state.peerId
+                    });
+                }
+                return origStopScreenShare.apply(this, arguments);
+            };
+        }
+    }
+
     // INITIALIZATION
     function initV2() {
         console.log("[Fixes V2] Starting...");
@@ -1056,6 +1304,8 @@
             applySoundEffects();
             applyPremiumServerSettings();
             applyPerformanceBoost();
+            applyServerManagement();
+            applyStreamFixes();
             console.log("[Fixes V2] All patches applied successfully");
         }, 1500);
     }
