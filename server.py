@@ -492,9 +492,7 @@ async def save_history_message(room_id: str, body: dict):
     if len(room.messages[ch_id]) > 10000:
         room.messages[ch_id].pop(0)
     
-    # Only save to disk periodically or on important changes? 
-    # For now, save on every message is safer but heavier.
-    # save_db() 
+    schedule_save_db()
     return {"success": True}
 
 @app.post("/api/rooms/{room_id}/icon")

@@ -9816,30 +9816,40 @@ button, .btn, .rail-icon, .channel-item, .member-item, .vpc-card, .msg-row {
 
 /* ── Stream Fullscreen Button ────────────────────── */
 .stream-fullscreen-btn {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  background: rgba(0, 0, 0, 0.6) !important;
+  position: absolute !important;
+  top: 10px !important;
+  right: 10px !important;
+  background: rgba(0, 0, 0, 0.65) !important;
   border: 1px solid rgba(255, 255, 255, 0.2) !important;
   color: #fff !important;
-  padding: 6px 14px !important;
+  padding: 8px 16px !important;
   border-radius: 8px !important;
-  font-size: 12px !important;
+  font-size: 13px !important;
   font-weight: 600 !important;
   cursor: pointer !important;
-  opacity: 0;
-  transition: opacity 0.2s ease, transform 0.2s ease !important;
-  z-index: 100;
-  backdrop-filter: blur(6px) !important;
+  opacity: 0.8 !important;
+  transition: all 0.2s ease !important;
+  z-index: 100 !important;
+  backdrop-filter: blur(8px) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
+  line-height: 1 !important;
+}
+.stream-fullscreen-btn::before {
+  content: "⛶";
+  font-size: 16px;
 }
 .video-container:hover .stream-fullscreen-btn,
 .voice-video-item:hover .stream-fullscreen-btn,
-.vpc-card:hover .stream-fullscreen-btn {
-  opacity: 1 !important;
-}
+.vpc-card:hover .stream-fullscreen-btn,
 .stream-fullscreen-btn:hover {
+  opacity: 1 !important;
   transform: scale(1.05) !important;
-  background: var(--accent) !important;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+  border-color: transparent !important;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4) !important;
 }
 
 /* ── Setup Overlay Premium ───────────────────────── */
@@ -9883,6 +9893,18 @@ button, .btn, .rail-icon, .channel-item, .member-item, .vpc-card, .msg-row {
 /* ── Smooth Scrolling ────────────────────────────── */
 .messages-area, .channel-list, .members-list, .dm-body {
   scroll-behavior: smooth;
+}
+
+/* ── Performance: content-visibility for long lists ── */
+.messages-area, .channel-list, .members-list, .dm-body, #voice-members-list {
+  content-visibility: auto;
+  contain-intrinsic-size: 500px;
+}
+
+/* ── Performance: GPU rendering ──────────────────── */
+.server-rail, .channel-sidebar, .chat-view, .voice-view {
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 /* ── Reduced Motion ──────────────────────────────── */

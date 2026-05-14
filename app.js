@@ -520,10 +520,12 @@ function applyAvatarToElement(el, color, image, name) {
 }
 
 function toast(message, type = "info") {
+    const container = document.getElementById("toast-container");
+    if (!container) return;
     const el = document.createElement("div");
     el.className = `toast ${type}`;
     el.textContent = message;
-    document.getElementById("toast-container").appendChild(el);
+    container.appendChild(el);
     setTimeout(() => el.remove(), SCORD_T().TOAST_DURATION_MS ?? 4000);
 }
 
@@ -550,16 +552,21 @@ function playSound(frequency = 440, duration = 200, type = "sine") {
 }
 
 function showModal(title, bodyHTML, footerHTML) {
-    document.getElementById("modal-title").textContent = title;
+    const titleEl = document.getElementById("modal-title");
+    if (titleEl) titleEl.innerHTML = title;
     const modal = document.getElementById("modal");
     modal?.classList.toggle("modal--wide-settings", typeof bodyHTML === "string" && bodyHTML.includes("scord-settings-shell"));
     modal?.classList.toggle("modal--profile", typeof bodyHTML === "string" && bodyHTML.includes("profile-pro-card"));
     const mb = document.getElementById("modal-body");
-    mb.innerHTML = "";
-    if (typeof bodyHTML === "string") mb.innerHTML = bodyHTML;
-    else if (bodyHTML && bodyHTML.nodeType === 1) mb.appendChild(bodyHTML);
-    document.getElementById("modal-footer").innerHTML = footerHTML || "";
-    document.getElementById("modal-backdrop").classList.remove("hidden");
+    if (mb) {
+        mb.innerHTML = "";
+        if (typeof bodyHTML === "string") mb.innerHTML = bodyHTML;
+        else if (bodyHTML && bodyHTML.nodeType === 1) mb.appendChild(bodyHTML);
+    }
+    const footerEl = document.getElementById("modal-footer");
+    if (footerEl) footerEl.innerHTML = footerHTML || "";
+    const backdrop = document.getElementById("modal-backdrop");
+    if (backdrop) backdrop.classList.remove("hidden");
 }
 
 function mergeRoomPayloadIntoServer(server, payload) {
@@ -701,6 +708,7 @@ function updateLastActive() {
         setStatus("online", state.customStatus, state.statusEmoji);
     }
 }
+window.setStatus = setStatus;
 
 function loadStatusFromStorage() {
     const savedStatus = localStorage.getItem("scord_status") || "online";
@@ -817,6 +825,7 @@ document.addEventListener("click", updateLastActive);
 document.addEventListener("scroll", updateLastActive);
 
 // Status Picker Modal
+window.STATUS_TYPES = STATUS_TYPES; // expose for fixes.js
 function showStatusPicker() {
     const modalContent = `
         <div class="status-picker">
@@ -939,6 +948,7 @@ function showStatusEmojiPicker() {
         }, 100);
     }
 }
+window.showStatusPicker = showStatusPicker;
 
 // Handle status updates from other users
 function handleStatusUpdate(data) {
@@ -958,6 +968,7 @@ function handleStatusUpdate(data) {
     // Update UI if member is visible
     updateMemberList();
 }
+window.updateStatusBar = updateStatusBar;
 
 // Activity System
 const ACTIVITY_TYPES = {
@@ -2328,9 +2339,7 @@ function showChatView(serverId, channelId) {
 
     // Update channel name in header
     const channelNameEl = document.getElementById("active-channel-name");
-    const chatChannelNameEl = document.getElementById("chat-channel-name");
     if (channelNameEl) channelNameEl.textContent = channel.name;
-    if (chatChannelNameEl) chatChannelNameEl.textContent = channel.name;
 
     // Auto-focus chat input
     setTimeout(() => document.getElementById("chat-input")?.focus(), 100);
@@ -2403,10 +2412,12 @@ function _renderServerRailImpl() {
         btn.title = server.name;
 
         if (server.icon_url) {
-            btn.innerHTML = `<img src="${server.icon_url}" alt="" class="rail-guild-img" />`;
+            var ic = server.icon_url;
+            btn.innerHTML = '<img src="' + ic.replace(/"/g, '&quot;') + '" alt="" class="rail-guild-img" style="width:100%;height:100%;object-fit:cover;" onerror="this.parentElement._imgFailed=true;var p=this.parentElement;p.innerHTML=\'\';p.textContent=p._serverInitials||\'?\';p.style.background=p._serverColor||\'var(--accent-light)\';p.style.padding=\'\';" />';
+            btn._serverInitials = window.initials ? window.initials(server.name) : (server.name ? server.name.charAt(0).toUpperCase() : "?");
+            btn._serverColor = server.color || "var(--accent-light)";
             btn.style.background = "var(--bg-deep)";
             btn.style.padding = "0";
-            btn.textContent = "";
         } else {
             btn.textContent = initials(server.name);
             btn.style.background = server.color || "var(--accent-light)";
@@ -3715,9 +3726,8 @@ async function renameChannel(serverId, channelId) {
             }
             updateChannelSidebar(serverId);
             if (state.activeChannelId === channelId) {
-                document.getElementById("active-channel-name").textContent = updatedCh.name;
-                const chatName = document.getElementById("chat-channel-name");
-                if (chatName) chatName.textContent = updatedCh.name;
+    const activeName = document.getElementById("active-channel-name");
+    if (activeName) activeName.textContent = updatedCh.name;
             }
             toast("Kanal adı güncellendi.", "success");
         } else {
@@ -4325,9 +4335,8 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
                 if (state.activeServerId === serverId) {
                     updateChannelSidebar(serverId);
                     if (state.activeChannelId === channelId) {
-                        document.getElementById("active-channel-name").textContent = name;
-                        const chatName = document.getElementById("chat-channel-name");
-                        if (chatName) chatName.textContent = name;
+                        const activeName = document.getElementById("active-channel-name");
+                        if (activeName) activeName.textContent = name;
                     }
                 }
                 toast(`Kanal adı güncellendi: #${name}`, "info");
@@ -9676,6 +9685,9 @@ function loadSavedServers() {
                 if (!state.servers.find(s => s.id === data.id)) {
                     state.servers.push({
                         ...data,
+                        channels: data.channels || [],
+                        messages: data.messages || {},
+                        peer_roles: data.peer_roles || {},
                         voiceMembers: {},
                         voiceSessionHost: {},
                         unread: {}

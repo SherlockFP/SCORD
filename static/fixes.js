@@ -970,8 +970,9 @@
           var ytPlayer = document.getElementById("yt-player");
           var ytContainer = document.getElementById("music-yt-container");
           if (ytPlayer && ytContainer) {
-            ytContainer.innerHTML = "";
-            ytContainer.appendChild(ytPlayer);
+            if (ytPlayer.parentNode !== ytContainer) {
+              ytContainer.appendChild(ytPlayer);
+            }
             ytPlayer.style.width = "100%";
             ytPlayer.style.height = "100%";
           }
@@ -1555,10 +1556,16 @@
       return "id_" + Math.abs(h).toString(36);
     };
 
-    // Kayıtlı kimliği yükle
+    // Kayıtlı kimliği yükle (sadece restore et, auto-login yapma)
     var savedNick = localStorage.getItem("scord_username");
     var savedPass = localStorage.getItem("scord_pass");
     var savedId = localStorage.getItem("scord_identity_id");
+
+    // Eğer username var ama pass yoksa temizle
+    if (savedNick && (!savedPass || !savedId)) {
+      try { localStorage.removeItem("scord_username"); } catch (e) {}
+      savedNick = null;
+    }
 
     if (savedNick && savedPass && savedId) {
       window.state.peerId = savedId;
@@ -1567,20 +1574,7 @@
       console.log("[Fixes] Identity restored:", savedNick, savedId);
     }
 
-    // OTOMATİK GİRİŞ - kayıtlı kimlik varsa setup'ı beklemeden direkt startApp
-    if (savedNick && savedPass && savedId && typeof window.startApp === "function" && !window._autoLoginDone) {
-      window._autoLoginDone = true;
-      // setup overlay'i gizle, app'i göster
-      var ov = document.getElementById("setup-overlay");
-      if (ov) { ov.classList.remove("active"); ov.style.display = "none"; }
-      var appEl = document.getElementById("app");
-      if (appEl) appEl.classList.remove("hidden");
-      // startApp'i çağır
-      try { window.startApp(); } catch (e) { console.warn("[Fixes] auto-startApp:", e); }
-    }
-
-    // Setup ekranına şifre alanı ekle (sadece YENİ kullanıcılar için)
-    if (!savedNick || !savedPass || !savedId) {
+    // Şifre alanını her zaman ekle (asla auto-login yapma, kullanıcı her girişte şifre girsin)
       var setupCheck = setInterval(function () {
         var setupOverlay = document.getElementById("setup-overlay");
         var setupCard = setupOverlay ? setupOverlay.querySelector(".setup-card") : null;
@@ -1611,14 +1605,18 @@
 
       var passInput = document.getElementById("scord-pass-input");
 
-      // Disabled state
+      // Kayıtlı şifre varsa pre-fill yap
+      if (savedPass && passInput) {
+        passInput.value = savedPass;
+      }
+
+      // Disabled state — her iki alan da dolu olmalı
       function updDisabled() {
         var n = document.getElementById("username-input")?.value?.trim();
         var p = document.getElementById("scord-pass-input")?.value || "";
         newBtn.disabled = !n || !p;
       }
-      if (savedNick) newBtn.disabled = false;
-      else newBtn.disabled = true;
+      updDisabled();
 
       if (nickInput) nickInput.addEventListener("input", updDisabled);
       if (passInput) passInput.addEventListener("input", updDisabled);

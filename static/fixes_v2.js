@@ -949,11 +949,35 @@
                     window.state.friends = [];
                 }
                 
-                const dms = localStorage.getItem("scord_recent_dms");
-                if (dms) {
-                    try { window.state.recentDMs = JSON.parse(dms); } catch(e){}
+                const recentDMs = localStorage.getItem("scord_recent_dms");
+                if (recentDMs) {
+                    try { window.state.recentDMs = JSON.parse(recentDMs); } catch(e){}
                 } else {
                     window.state.recentDMs = [];
+                }
+                
+                const blocked = localStorage.getItem("scord_blocked_peers");
+                if (blocked) {
+                    try { window.state.blockedPeers = JSON.parse(blocked); } catch(e){}
+                } else {
+                    window.state.blockedPeers = [];
+                }
+                
+                const friendReqs = localStorage.getItem("scord_friend_requests");
+                if (friendReqs) {
+                    try { window.state._friendRequests = JSON.parse(friendReqs); } catch(e){}
+                }
+                
+                const pendingReqs = localStorage.getItem("scord_pending_requests");
+                if (pendingReqs) {
+                    try { window.state._pendingRequests = JSON.parse(pendingReqs); } catch(e){}
+                }
+                
+                const dms = localStorage.getItem("scord_dms");
+                if (dms) {
+                    try { window.state.dms = JSON.parse(dms); } catch(e){}
+                } else {
+                    window.state.dms = {};
                 }
                 
                 if (typeof window.renderHomeSidebar === "function" && !window.state.activeServerId) {
@@ -1105,6 +1129,17 @@
                 });
             }
         }, 60000); // Check every minute
+    }
+
+    // 10b. GLOBAL RIGHT-CLICK — browser default menüsünü engelle
+    function applyGlobalContextMenu() {
+        document.addEventListener("contextmenu", (e) => {
+            // Eğer zaten custom bir handler varsa (e.defaultPrevented), karışma
+            if (e.defaultPrevented) return;
+            // Input alanlarında default'a izin ver
+            if (e.target.closest("input, textarea, [contenteditable]")) return;
+            e.preventDefault();
+        }, false);
     }
 
     // 11. SERVER CONTEXT MENU (Leave Server) + Health Check
@@ -1304,6 +1339,7 @@
             applySoundEffects();
             applyPremiumServerSettings();
             applyPerformanceBoost();
+            applyGlobalContextMenu();
             applyServerManagement();
             applyStreamFixes();
             console.log("[Fixes V2] All patches applied successfully");
