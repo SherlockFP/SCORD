@@ -419,6 +419,23 @@ def _can_control_music(room: Room, peer_id: str) -> bool:
 def list_rooms():
     return [r.to_dict() for r in rooms.values()]
 
+@app.post("/api/auth/verify")
+def verify_password(body: dict):
+    """Verify password for identity generation."""
+    username = body.get("username", "").strip().lower()
+    password = body.get("password", "")
+    if not username or not password:
+        return {"valid": False, "error": "Username and password required"}
+    if len(username) < 2 or len(password) < 1:
+        return {"valid": False, "error": "Invalid credentials"}
+    h = 0
+    seed = f"{username}:{password}:scord-v2"
+    for ch in seed:
+        h = ((h << 5) - h) + ord(ch)
+        h &= 0xFFFFFFFF
+    identity_id = f"sc_{abs(h) & 0xFFFFFFFF:08x}"
+    return {"valid": True, "identity_id": identity_id, "username": username}
+
 @app.get("/api/config")
 def get_runtime_config():
     """
