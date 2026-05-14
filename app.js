@@ -121,12 +121,10 @@ var __rawState = {
     _qsOpen: false,
 };
 
-// Store-backed Proxy — reads/writes otomatik olarak store'lara yönlenir
-// stores/index.js'deki SCORD_STORES ile eşleşen property'ler store'a gider
-// Eşleşmeyenler __rawState'de kalır (backward compat)
-let state = window.__createStateProxy(__rawState);
+// Simple state object — no proxy needed
+let state = __rawState;
 
-// fixes.js patches rely on window.state — link it to the app's local state
+// fixes.js patches rely on window.state
 window.state = state;
 
 const ENABLE_SERVER_SYSTEM_CHAT_NOTICES = false;
