@@ -1543,166 +1543,187 @@
   ══════════════════════════════════════════════════════════ */
 
   function patchPasswordSystem() {
-    if (!window.state) return;
-
-    // Şifreden unique ID oluştur
-    window._makeIdFromPass = function (nick, pass) {
-      var h = 0;
-      var str = (nick || "").toLowerCase().trim() + ":" + (pass || "");
-      for (var i = 0; i < str.length; i++) {
-        h = ((h << 5) - h) + str.charCodeAt(i);
-        h |= 0;
-      }
-      return "id_" + Math.abs(h).toString(36);
-    };
-
-    // Kayıtlı kimliği yükle (sadece restore et, auto-login yapma)
-    var savedNick = localStorage.getItem("scord_username");
-    var savedPass = localStorage.getItem("scord_pass");
-    var savedId = localStorage.getItem("scord_identity_id");
-
-    // Eğer username var ama pass yoksa temizle
-    if (savedNick && (!savedPass || !savedId)) {
-      try { localStorage.removeItem("scord_username"); } catch (e) {}
-      savedNick = null;
-    }
-
-    if (savedNick && savedPass && savedId) {
-      window.state.peerId = savedId;
-      window.state.username = savedNick;
-      if (!window.state._savedNick) window.state._savedNick = savedNick;
-      console.log("[Fixes] Identity restored:", savedNick, savedId);
-    }
-
-    // Şifre alanını her zaman ekle (asla auto-login yapma, kullanıcı her girişte şifre girsin)
-      var setupCheck = setInterval(function () {
-        var setupOverlay = document.getElementById("setup-overlay");
-        var setupCard = setupOverlay ? setupOverlay.querySelector(".setup-card") : null;
-        if (!setupCard) return;
-        if (setupCard.querySelector(".scord-pass-field")) {
-          clearInterval(setupCheck);
-          return;
+    try {
+      // Şifreden unique ID oluştur
+      window._makeIdFromPass = function (nick, pass) {
+        var h = 0;
+        var str = (nick || "").toLowerCase().trim() + ":" + (pass || "");
+        for (var i = 0; i < str.length; i++) {
+          h = ((h << 5) - h) + str.charCodeAt(i);
+          h |= 0;
         }
-        clearInterval(setupCheck);
-
-      var nickInput = document.getElementById("username-input");
-      var enterBtn = setupCard.querySelector("#enter-btn");
-      if (!nickInput || !enterBtn) return;
-
-      // Şifre alanını ekle
-      var formGroup = setupCard.querySelector(".form-group");
-      if (!formGroup) return;
-      
-      var passHtml = '<div class="form-group scord-pass-field" style="margin-top:12px;"><label for="scord-pass-input">Şifre</label><input id="scord-pass-input" type="password" placeholder="Şifreni gir (her girişte aynı)" maxlength="64" autocomplete="off" style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:#fff;font-size:14px;outline:none;box-sizing:border-box;" /></div>';
-      formGroup.insertAdjacentHTML("afterend", passHtml);
-
-      // Butonu güncelle
-      enterBtn.textContent = "Giriş Yap";
-
-      // Orijinal handler'ı kaldırmak için butonu klonla
-      var newBtn = enterBtn.cloneNode(true);
-      if (enterBtn.parentNode) enterBtn.parentNode.replaceChild(newBtn, enterBtn);
-
-      var passInput = document.getElementById("scord-pass-input");
-
-      // Kayıtlı şifre varsa pre-fill yap
-      if (savedPass && passInput) {
-        passInput.value = savedPass;
-      }
-
-      // Disabled state — her iki alan da dolu olmalı
-      function updDisabled() {
-        var n = document.getElementById("username-input")?.value?.trim();
-        var p = document.getElementById("scord-pass-input")?.value || "";
-        newBtn.disabled = !n || !p;
-      }
-      updDisabled();
-
-      if (nickInput) nickInput.addEventListener("input", updDisabled);
-      if (passInput) passInput.addEventListener("input", updDisabled);
-      
-      // Capture phase ile Enter'ı yakala
-      if (nickInput) {
-        nickInput.addEventListener("keydown", function(e) {
-          if (e.key === "Enter") {
-            e.stopPropagation();
-            e.preventDefault();
-            if (!newBtn.disabled) newBtn.click();
-          }
-        }, true);
-      }
-      if (passInput) {
-        passInput.addEventListener("keydown", function(e) {
-          if (e.key === "Enter" && !newBtn.disabled) newBtn.click();
-        });
-      }
-
-      // Buton click
-      newBtn.onclick = function () {
-        var nick = nickInput?.value?.trim();
-        var pass = passInput?.value || "";
-        if (!nick || !pass) {
-          if (typeof toast === "function") toast("Nick ve şifre gerekli.", "error");
-          return;
-        }
-        
-        // Identity oluştur
-        var identityId = window._makeIdFromPass(nick, pass);
-        window.state.peerId = identityId;
-        window.state.username = nick;
-        window.state._savedNick = nick;
-        window.state._savedPass = pass;
-        
-        localStorage.setItem("scord_username", nick);
-        localStorage.setItem("scord_pass", pass);
-        localStorage.setItem("scord_identity_id", identityId);
-        localStorage.setItem("scord_peer_id", identityId);
-        
-        console.log("[Fixes] Identity created:", nick, identityId);
-        
-        // startApp
-        if (typeof startApp === "function" && !window._startAppRunning) {
-          try { startApp(); } catch (e) { console.error("[Fixes] startApp error:", e); }
-        }
+        return "id_" + Math.abs(h).toString(36);
       };
-    }, 200);
 
-    // startApp patch - "Anonim" fix
-    var _origSA = window.startApp;
-    if (_origSA && !window._scordSafix) {
-      window._scordSafix = true;
-      window.startApp = function () {
-        var savedNick = localStorage.getItem("scord_username");
-        if (savedNick && window.state) {
+      // Kayıtlı kimliği yükle
+      var savedNick = localStorage.getItem("scord_username");
+      var savedPass = localStorage.getItem("scord_pass");
+      var savedId = localStorage.getItem("scord_identity_id");
+
+      if (savedNick && (!savedPass || !savedId)) {
+        try { localStorage.removeItem("scord_username"); } catch (e) {}
+        savedNick = null;
+      }
+
+      // Restore identity (ama auto-login yapma — kullanıcı hep tıklasın)
+      if (savedNick && savedPass && savedId) {
+        if (window.state) {
+          window.state.peerId = savedId;
           window.state.username = savedNick;
-        }
-        
-        var result;
-        try { result = _origSA.apply(this, arguments); } catch (e) {}
-        
-        var nameEl = document.getElementById("user-bar-name");
-        if (savedNick && nameEl && (nameEl.textContent === "Anonim" || !nameEl.textContent)) {
-          nameEl.textContent = savedNick;
-        }
-        
-        return result;
-      };
-    }
-    
-    // Watchdog - her ihtimale karşı "Anonim"i düzelt
-    setInterval(function () {
-      var nameEl = document.getElementById("user-bar-name");
-      if (!nameEl) return;
-      if (nameEl.textContent === "Anonim" || !nameEl.textContent) {
-        var nick = localStorage.getItem("scord_username");
-        if (nick) {
-          nameEl.textContent = nick;
-          if (window.state) window.state.username = nick;
+          window.state._savedNick = savedNick;
+          window.state._savedPass = savedPass;
         }
       }
-    }, 1500);
 
-    console.log("[Fixes] Password system ready");
+      // Setup ekranının DOM'una şifre alanını ekle — MutationObserver ile
+      var obs = new MutationObserver(function () {
+        var card = document.querySelector("#setup-overlay .setup-card");
+        if (!card) return;
+        if (card.querySelector(".scord-pass-field")) { obs.disconnect(); return; }
+        obs.disconnect();
+
+        var nickInput = document.getElementById("username-input");
+        var enterBtn = card.querySelector("#enter-btn");
+        var formGroup = card.querySelector(".form-group");
+        if (!nickInput || !enterBtn || !formGroup) return;
+      });
+      // Start observing the DOM
+      obs.observe(document.body, { childList: true, subtree: true });
+      
+      // Also check immediately in case DOM already exists
+      setTimeout(function () {
+        var card = document.querySelector("#setup-overlay .setup-card");
+        if (card && !card.querySelector(".scord-pass-field")) {
+          obs.disconnect();
+          obs._triggerManually = true;
+          obs.callback();
+        }
+      }, 500);
+
+      // Also fallback: check every 2 seconds in case observer misses it
+      var _interval = setInterval(function () {
+        var card = document.querySelector("#setup-overlay .setup-card");
+        if (card && !card.querySelector(".scord-pass-field")) {
+          clearInterval(_interval);
+          // Manually trigger the inject logic
+          var nickInput = document.getElementById("username-input");
+        var enterBtn = card.querySelector("#enter-btn");
+        var formGroup = card.querySelector(".form-group");
+        if (!nickInput || !enterBtn || !formGroup) return;
+
+        // Şifre alanını ekle
+        formGroup.insertAdjacentHTML("afterend",
+          '<div class="form-group scord-pass-field" style="margin-top:12px;">' +
+          '<label for="scord-pass-input">Şifre</label>' +
+          '<input id="scord-pass-input" type="password" placeholder="Şifreni gir" maxlength="64" autocomplete="off" ' +
+          'style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid var(--border);' +
+          'background:rgba(255,255,255,0.06);color:#fff;font-size:14px;outline:none;box-sizing:border-box;" /></div>'
+        );
+
+        enterBtn.textContent = "Giriş Yap";
+
+        // Replace button to remove old handlers
+        var newBtn = enterBtn.cloneNode(true);
+        if (enterBtn.parentNode) enterBtn.parentNode.replaceChild(newBtn, enterBtn);
+
+        var passInput = document.getElementById("scord-pass-input");
+
+        // Pre-fill if saved
+        if (savedNick && nickInput) nickInput.value = savedNick;
+        if (savedPass && passInput) passInput.value = savedPass;
+
+        function updDisabled() {
+          var n = document.getElementById("username-input")?.value?.trim();
+          var p = document.getElementById("scord-pass-input")?.value || "";
+          newBtn.disabled = !n || !p;
+        }
+        updDisabled();
+
+        if (nickInput) nickInput.addEventListener("input", updDisabled);
+        if (passInput) passInput.addEventListener("input", updDisabled);
+
+        if (nickInput) {
+          nickInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.stopPropagation(); e.preventDefault(); if (!newBtn.disabled) newBtn.click(); }
+          }, true);
+        }
+        if (passInput) {
+          passInput.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" && !newBtn.disabled) newBtn.click();
+          });
+        }
+
+        newBtn.onclick = function () {
+          var nick = nickInput?.value?.trim();
+          var pass = passInput?.value || "";
+          if (!nick || !pass) {
+            if (typeof toast === "function") toast("Nick ve şifre gerekli.", "error");
+            return;
+          }
+          var identityId = window._makeIdFromPass(nick, pass);
+          if (window.state) {
+            window.state.peerId = identityId;
+            window.state.username = nick;
+            window.state._savedNick = nick;
+            window.state._savedPass = pass;
+          }
+          localStorage.setItem("scord_username", nick);
+          localStorage.setItem("scord_pass", pass);
+          localStorage.setItem("scord_identity_id", identityId);
+          localStorage.setItem("scord_peer_id", identityId);
+          if (typeof startApp === "function") {
+            try { startApp(); } catch (e) { console.error("[Fixes] startApp error:", e); }
+          }
+        };
+      });
+
+      // Setup overlay varsa direkt izle, yoksa body'de bekle
+      var target = document.getElementById("setup-overlay") || document.body;
+      obs.observe(target, { childList: true, subtree: true });
+
+      // Hemen kontrol et (DOM zaten hazırsa observer tetiklenmez)
+      var card = document.querySelector("#setup-overlay .setup-card");
+      if (card && !card.querySelector(".scord-pass-field")) {
+        // Observer'ı zorla tetikle
+        var fake = document.createElement("div");
+        card.appendChild(fake);
+        card.removeChild(fake);
+      }
+
+      // Fallback: 1 saniye sonra hala yoksa body'den tekrar dene
+      setTimeout(function () {
+        if (!document.querySelector("#setup-overlay .setup-card .scord-pass-field")) {
+          obs.disconnect();
+          obs.observe(document.body, { childList: true, subtree: true });
+          // Bir kere daha dene
+          var card2 = document.querySelector("#setup-overlay .setup-card");
+          if (card2 && !card2.querySelector(".scord-pass-field")) {
+            var fake2 = document.createElement("div");
+            card2.appendChild(fake2);
+            card2.removeChild(fake2);
+          }
+        }
+      }, 1000);
+
+      // startApp patch - "Anonim" fix
+      var _origSA = window.startApp;
+      if (_origSA && !window._scordSafix) {
+        window._scordSafix = true;
+        window.startApp = function () {
+          var nick = localStorage.getItem("scord_username");
+          if (nick && window.state) window.state.username = nick;
+          var result;
+          try { result = _origSA.apply(this, arguments); } catch (e) {}
+          var nameEl = document.getElementById("user-bar-name");
+          if (nick && nameEl && (nameEl.textContent === "Anonim" || !nameEl.textContent)) nameEl.textContent = nick;
+          return result;
+        };
+      }
+
+      console.log("[Fixes] Password system ready");
+    } catch (e) {
+      console.error("[Fixes] Password system error:", e);
+    }
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -2499,35 +2520,39 @@ function init() {
 
     function ready() {
       console.log("[Fixes] Ready, applying patches...");
-      patchSaveServerSettings();
-      patchWSHandler();
-      hookSounds();
-      enhanceDMOverlay();
-      patchMusicBot();
-      patchMessageDeletePermission();
-      patchDMCloseButton();
-      patchOpenDM();
-      patchContextMenu();
-      patchThreadBug();
-      fixChatDesign();
-      patchDMContextMenu();
-      patchGameActivity();
-      patchClearMessages();
-      patchServerRail();
-      patchMemberStatus();
-      patchPasswordSystem();
-      patchPersistence();
-      patchChatHeader();
-      patchGlobalBugs();
-      patchFriendRequestSystem();
-      patchProfileSystem();
-      patchStatusBar();
-      patchPerformance();
-      patchAnimatedEmojis();
-      patchDiscordAnimations();
-      patchServerIcons();
-      patchScreenShare();
-      patchScreenOverlay();
+
+      // Site zoom: %110 (kullanıcı isteği)
+      document.documentElement.style.zoom = "1.1";
+
+      try { patchSaveServerSettings(); } catch (e) { console.warn("[Fixes] patchSaveServerSettings:", e); }
+      try { patchWSHandler(); } catch (e) { console.warn("[Fixes] patchWSHandler:", e); }
+      try { hookSounds(); } catch (e) { console.warn("[Fixes] hookSounds:", e); }
+      try { enhanceDMOverlay(); } catch (e) { console.warn("[Fixes] enhanceDMOverlay:", e); }
+      try { patchMusicBot(); } catch (e) { console.warn("[Fixes] patchMusicBot:", e); }
+      try { patchMessageDeletePermission(); } catch (e) { console.warn("[Fixes] patchMessageDeletePermission:", e); }
+      try { patchDMCloseButton(); } catch (e) { console.warn("[Fixes] patchDMCloseButton:", e); }
+      try { patchOpenDM(); } catch (e) { console.warn("[Fixes] patchOpenDM:", e); }
+      try { patchContextMenu(); } catch (e) { console.warn("[Fixes] patchContextMenu:", e); }
+      try { patchThreadBug(); } catch (e) { console.warn("[Fixes] patchThreadBug:", e); }
+      try { fixChatDesign(); } catch (e) { console.warn("[Fixes] fixChatDesign:", e); }
+      try { patchDMContextMenu(); } catch (e) { console.warn("[Fixes] patchDMContextMenu:", e); }
+      try { patchGameActivity(); } catch (e) { console.warn("[Fixes] patchGameActivity:", e); }
+      try { patchClearMessages(); } catch (e) { console.warn("[Fixes] patchClearMessages:", e); }
+      try { patchServerRail(); } catch (e) { console.warn("[Fixes] patchServerRail:", e); }
+      try { patchMemberStatus(); } catch (e) { console.warn("[Fixes] patchMemberStatus:", e); }
+      try { patchPasswordSystem(); } catch (e) { console.warn("[Fixes] patchPasswordSystem:", e); }
+      try { patchPersistence(); } catch (e) { console.warn("[Fixes] patchPersistence:", e); }
+      try { patchChatHeader(); } catch (e) { console.warn("[Fixes] patchChatHeader:", e); }
+      try { patchGlobalBugs(); } catch (e) { console.warn("[Fixes] patchGlobalBugs:", e); }
+      try { patchFriendRequestSystem(); } catch (e) { console.warn("[Fixes] patchFriendRequestSystem:", e); }
+      try { patchProfileSystem(); } catch (e) { console.warn("[Fixes] patchProfileSystem:", e); }
+      try { patchStatusBar(); } catch (e) { console.warn("[Fixes] patchStatusBar:", e); }
+      try { patchPerformance(); } catch (e) { console.warn("[Fixes] patchPerformance:", e); }
+      try { patchAnimatedEmojis(); } catch (e) { console.warn("[Fixes] patchAnimatedEmojis:", e); }
+      try { patchDiscordAnimations(); } catch (e) { console.warn("[Fixes] patchDiscordAnimations:", e); }
+      try { patchServerIcons(); } catch (e) { console.warn("[Fixes] patchServerIcons:", e); }
+      try { patchScreenShare(); } catch (e) { console.warn("[Fixes] patchScreenShare:", e); }
+      try { patchScreenOverlay(); } catch (e) { console.warn("[Fixes] patchScreenOverlay:", e); }
       
       var _obsTimer = null;
       var obs = new MutationObserver(function () {

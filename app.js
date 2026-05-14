@@ -40,8 +40,8 @@ const EMOJIS = ["😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", 
     "💬", "👁️", "🧠", "💡", "🎮", "🎧", "🎵", "🎶", "🎤", "🎬", "🎭", "🎨",
     "💀", "💩", "🤡", "👻", "👽", "👾", "🤖", "😺", "😸", "😹", "😻", "😼", "😽", "🙀", "😿", "😾"];
 
-/* ── Local state ──────────────────────────────────────────── */
-let state = {
+/* ── Local state (Store-backed Proxy) ────────────────────── */
+var __rawState = {
     peerId: null,
     username: "",
     avatarColor: "#7c3aed",
@@ -120,6 +120,11 @@ let state = {
     compactMode: false,
     _qsOpen: false,
 };
+
+// Store-backed Proxy — reads/writes otomatik olarak store'lara yönlenir
+// stores/index.js'deki SCORD_STORES ile eşleşen property'ler store'a gider
+// Eşleşmeyenler __rawState'de kalır (backward compat)
+let state = window.__createStateProxy(__rawState);
 
 // fixes.js patches rely on window.state — link it to the app's local state
 window.state = state;
@@ -2192,6 +2197,14 @@ function startApp() {
     const statusBar = document.getElementById("status-bar");
     if (statusBar) {
         statusBar.addEventListener("click", showStatusPicker);
+    }
+
+    // Mount reactive UI components
+    if (typeof window.StatusBarComponent !== "undefined") {
+        window.StatusBarComponent.mount("#status-bar");
+    }
+    if (typeof window.ServerRailComponent !== "undefined") {
+        window.ServerRailComponent.mount("#server-icons");
     }
 }
 

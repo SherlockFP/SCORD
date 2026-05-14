@@ -9969,3 +9969,15 @@ input, textarea, select, button {
   -webkit-appearance: none;
   appearance: none;
 }
+
+/* ── Site Zoom %110 ──────────────────────────────── */
+html {
+  zoom: 1.1;
+  -moz-transform: scale(1.1);
+  -moz-transform-origin: top left;
+  -moz-width: 90.909%;
+}
+/* overflow fix for zoomed content */
+body {
+  overflow-x: hidden;
+}

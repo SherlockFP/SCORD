@@ -2,6 +2,7 @@
 // Her store kendi fragment'ını yönetir, global proxy otomatik bağlanır
 
 window.SCORD_STORES = {};
+window.__STATE_BRIDGE = {}; // fallback for non-store properties
 
 function defineStore(name, factory) {
     var store = factory();
@@ -53,6 +54,55 @@ window._initStateProxy = function () {
     }
 
     console.log("[Stores] State proxy ready —", Object.keys(keys).length, "properties mapped across", Object.keys(stores).length, "stores");
+};
+
+// app.js'deki `let state = {...}` yerine kullanılacak fabrika
+// Store'lardaki property'leri Proxy ile yönlendirir, olmayanlar fallback'e gider
+window.__createStateProxy = function (fallback) {
+    if (!fallback) fallback = window.__STATE_BRIDGE;
+    window._appStateRef = fallback;
+
+    var stores = window.SCORD_STORES;
+    var keys = {};
+    Object.keys(stores).forEach(function (k) {
+        var s = stores[k];
+        Object.keys(s).forEach(function (prop) {
+            keys[prop] = k;
+        });
+    });
+
+    var handler = {
+        get: function (target, prop) {
+            if (prop === "__isProxy") return true;
+            var storeName = keys[prop];
+            if (storeName) return stores[storeName][prop];
+            return target[prop];
+        },
+        set: function (target, prop, value) {
+            var storeName = keys[prop];
+            if (storeName) {
+                stores[storeName][prop] = value;
+                if (window.__scheduleRender) window.__scheduleRender();
+            } else {
+                target[prop] = value;
+            }
+            return true;
+        },
+        has: function (target, prop) {
+            return !!keys[prop] || prop in target;
+        },
+        ownKeys: function (target) {
+            return Object.keys(keys).concat(Object.keys(target));
+        },
+        getOwnPropertyDescriptor: function (target, prop) {
+            if (keys[prop] || prop in target) {
+                return { configurable: true, enumerable: true };
+            }
+            return undefined;
+        }
+    };
+
+    return new Proxy(fallback, handler);
 };
 
 // Render scheduler — tüm store değişikliklerinden sonra DOM güncellemesini batch'ler

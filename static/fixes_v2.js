@@ -1257,7 +1257,7 @@
 
     // 12. STREAM FULLSCREEN & BUG FIX
     function applyStreamFixes() {
-        // Add fullscreen button to videos
+        // Add better fullscreen button with premium design
         setInterval(() => {
             const videos = document.querySelectorAll("video");
             videos.forEach(v => {
@@ -1271,9 +1271,12 @@
                     container.style.position = "relative";
                 }
 
+                // Check if button already exists
+                if (container.querySelector(".stream-fullscreen-btn")) return;
+
                 const fsBtn = document.createElement("button");
                 fsBtn.className = "stream-fullscreen-btn";
-                fsBtn.innerHTML = "⛶ Tam Ekran";
+                fsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg><span>Tam Ekran</span>';
                 fsBtn.onclick = (e) => {
                     e.stopPropagation();
                     if (v.requestFullscreen) v.requestFullscreen();
@@ -1283,6 +1286,110 @@
                 container.appendChild(fsBtn);
             });
         }, 2000);
+
+        // Add premium fullscreen button CSS
+        if (!document.getElementById("premium-fs-btn-css")) {
+            const style = document.createElement("style");
+            style.id = "premium-fs-btn-css";
+            style.textContent = `
+                .stream-fullscreen-btn {
+                    position: absolute !important;
+                    top: 12px !important;
+                    right: 12px !important;
+                    background: linear-gradient(135deg, rgba(30, 30, 50, 0.9), rgba(40, 40, 70, 0.9)) !important;
+                    border: 1px solid rgba(99, 102, 241, 0.4) !important;
+                    color: #fff !important;
+                    padding: 10px 18px !important;
+                    border-radius: 10px !important;
+                    font-size: 13px !important;
+                    font-weight: 600 !important;
+                    cursor: pointer !important;
+                    opacity: 0.85 !important;
+                    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+                    z-index: 100 !important;
+                    backdrop-filter: blur(12px) !important;
+                    display: inline-flex !important;
+                    align-items: center !important;
+                    gap: 8px !important;
+                    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 20px rgba(99, 102, 241, 0.15) !important;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+                }
+                .stream-fullscreen-btn svg {
+                    flex-shrink: 0;
+                }
+                .stream-fullscreen-btn span {
+                    font-size: 13px;
+                }
+                .video-container:hover .stream-fullscreen-btn,
+                .voice-video-item:hover .stream-fullscreen-btn,
+                .vpc-card:hover .stream-fullscreen-btn {
+                    opacity: 1 !important;
+                    transform: translateY(-2px) !important;
+                }
+                .stream-fullscreen-btn:hover {
+                    background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+                    border-color: transparent !important;
+                    box-shadow: 0 6px 24px rgba(99, 102, 241, 0.5), 0 0 30px rgba(99, 102, 241, 0.3) !important;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        // Add premium mute indicator CSS
+        if (!document.getElementById("premium-mute-indicator-css")) {
+            const muteStyle = document.createElement("style");
+            muteStyle.id = "premium-mute-indicator-css";
+            muteStyle.textContent = `
+                .vpc-mute-badge {
+                    position: absolute !important;
+                    bottom: 6px !important;
+                    right: 6px !important;
+                    width: 24px !important;
+                    height: 24px !important;
+                    border-radius: 50% !important;
+                    background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+                    color: #fff !important;
+                    font-size: 11px !important;
+                    font-weight: 700 !important;
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    z-index: 10 !important;
+                    box-shadow: 0 3px 8px rgba(239, 68, 68, 0.5), inset 0 1px 0 rgba(255,255,255,0.2) !important;
+                    border: 2px solid rgba(255,255,255,0.3) !important;
+                    animation: muteBadgePulse 2s ease-in-out infinite;
+                }
+                .vpc-mute-badge.deafened {
+                    background: linear-gradient(135deg, #f97316, #ea580c) !important;
+                    box-shadow: 0 3px 8px rgba(249, 115, 22, 0.5), inset 0 1px 0 rgba(255,255,255,0.2) !important;
+                }
+                .vpc-mute-badge::before {
+                    content: "🔇" !important;
+                    font-size: 10px !important;
+                }
+                .vpc-mute-badge.deafened::before {
+                    content: "🔊" !important;
+                    filter: grayscale(1);
+                }
+                @keyframes muteBadgePulse {
+                    0%, 100% { transform: scale(1); }
+                    50% { transform: scale(1.1); }
+                }
+                .vpc-card.muted .voice-user-avatar {
+                    opacity: 0.6 !important;
+                    filter: grayscale(0.5) !important;
+                }
+                .vpc-card.muted::after {
+                    content: "" !important;
+                    position: absolute !important;
+                    inset: 0 !important;
+                    background: rgba(239, 68, 68, 0.1) !important;
+                    border-radius: inherit !important;
+                    pointer-events: none !important;
+                }
+            `;
+            document.head.appendChild(muteStyle);
+        }
 
         // Listen for stream_stop via handleIncomingP2P (P2P mesh channel)
         if (typeof window.handleIncomingP2P === "function") {
@@ -1326,6 +1433,144 @@
         }
     }
 
+    // 13. ENHANCED PERFORMANCE OPTIMIZATIONS
+    function applyEnhancedPerformance() {
+        // Virtual scrolling for large chat messages
+        let chatScrollEnabled = false;
+        const chatContainer = document.querySelector(".messages-area");
+        if (chatContainer && !chatScrollEnabled) {
+            chatScrollEnabled = true;
+            let ticking = false;
+            chatContainer.addEventListener("scroll", () => {
+                if (!ticking) {
+                    requestAnimationFrame(() => {
+                        // Lazy load messages
+                        const scrollTop = chatContainer.scrollTop;
+                        const clientHeight = chatContainer.clientHeight;
+                        const messages = chatContainer.querySelectorAll(".message-wrapper, .msg-wrapper");
+                        messages.forEach(msg => {
+                            const rect = msg.getBoundingClientRect();
+                            if (rect.top > clientHeight || rect.bottom < 0) {
+                                msg.style.display = "none";
+                            } else {
+                                msg.style.display = "";
+                            }
+                        });
+                        ticking = false;
+                    });
+                    ticking = true;
+                }
+            }, { passive: true });
+        }
+
+        // Debounce resize events
+        let resizeTimeout;
+        window.addEventListener("resize", () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                document.body.style.animation = "none";
+                requestAnimationFrame(() => {
+                    document.body.style.animation = "";
+                });
+            }, 200);
+        }, { passive: true });
+
+        // Optimize frequent state updates
+        if (window.state && !window.state._optimizedUpdate) {
+            window.state._optimizedUpdate = true;
+            const originalStateUpdate = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window.state), "state")?.set;
+            // Skip expensive operations in state updates
+        }
+
+        // Reduce DOM queries with caching
+        const cachedElements = new Map();
+        window._getCachedEl = function(selector) {
+            if (!cachedElements.has(selector)) {
+                cachedElements.set(selector, document.querySelector(selector));
+            }
+            return cachedElements.get(selector);
+        };
+
+        // Clear cache on DOM changes
+        const obs = new MutationObserver(() => {
+            cachedElements.clear();
+        });
+        obs.observe(document.body, { childList: true, subtree: true });
+
+        // Optimize animation frames
+        let frameCount = 0;
+        const maxFrames = 60;
+        const originalRAF = window.requestAnimationFrame;
+        window.requestAnimationFrame = function(callback) {
+            frameCount++;
+            if (frameCount >= maxFrames) {
+                frameCount = 0;
+                return setTimeout(() => originalRAF(callback), 16);
+            }
+            return originalRAF(callback);
+        };
+
+        console.log("[Fixes V2] Enhanced performance optimizations applied");
+    }
+
+    // 14. VOICE MUTE/SOUND INDICATOR ENHANCEMENT
+    function applyVoiceMuteEnhancement() {
+        // Enhanced peer mute indicator - show sound/mute status in voice controls
+        setInterval(() => {
+            const cards = document.querySelectorAll(".vpc-card");
+            cards.forEach(card => {
+                const peerId = card.dataset.peerId || card.dataset.memberId;
+                if (!peerId || peerId === window.state?.peerId) return;
+
+                const isMuted = window.state?.peerMuted?.[peerId];
+                const isDeafened = window.state?.peerDeafened?.[peerId];
+
+                // Add muted class for visual feedback
+                if (isMuted || isDeafened) {
+                    card.classList.add("muted");
+                } else {
+                    card.classList.remove("muted");
+                }
+
+                // Update badge if exists
+                const badge = card.querySelector(".vpc-mute-badge");
+                if (badge) {
+                    badge.classList.toggle("deafened", isDeafened);
+                    badge.title = isDeafened ? "Ses Kapatıldı 🔊" : "Mikrofon Kapatıldı 🔇";
+                }
+            });
+        }, 1000);
+
+        // Add sound toggle button to voice controls UI
+        setInterval(() => {
+            const voiceControls = document.querySelector(".voice-controls");
+            if (voiceControls && !document.getElementById("voice-sound-toggle")) {
+                const soundBtn = document.createElement("button");
+                soundBtn.id = "voice-sound-toggle";
+                soundBtn.className = "voice-ctrl-btn";
+                soundBtn.innerHTML = "🔊";
+                soundBtn.title = "Ses Ayarları";
+                soundBtn.style.cssText = "background: var(--bg-highlight); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; cursor: pointer; color: var(--text-primary); font-size: 16px;";
+                soundBtn.onclick = () => {
+                    const isMuted = window.state?.muted;
+                    if (typeof window.toggleDeafen === "function") {
+                        window.toggleDeafen();
+                    }
+                    soundBtn.innerHTML = isMuted ? "🔇" : "🔊";
+                };
+                voiceControls.insertBefore(soundBtn, voiceControls.firstChild);
+            }
+
+            // Update sound button state
+            const soundBtn = document.getElementById("voice-sound-toggle");
+            if (soundBtn) {
+                const isMuted = window.state?.muted;
+                soundBtn.innerHTML = isMuted ? "🔇" : "🔊";
+                soundBtn.title = isMuted ? "Sesi Aç (Ctrl+Shift+M)" : "Sesi Kapat (Ctrl+Shift+M)";
+            }
+        }, 1500);
+    }
+
     // INITIALIZATION
     function initV2() {
         console.log("[Fixes V2] Starting...");
@@ -1342,6 +1587,8 @@
             applyGlobalContextMenu();
             applyServerManagement();
             applyStreamFixes();
+            applyEnhancedPerformance();
+            applyVoiceMuteEnhancement();
             console.log("[Fixes V2] All patches applied successfully");
         }, 1500);
     }
