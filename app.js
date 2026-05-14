@@ -22622,5 +22622,258 @@ function init() {
     console.log("[Fixes] Screen overlay fullscreen button added");
   }
 
-  init();
+init();
 })();
+
+// ══════════════════════════════════════════════════════════
+// PATCH: SCREEN FULL BUTTON DESIGN
+// ══════════════════════════════════════════════════════════
+(function patchScreenFullBtn() {
+  // Add premium CSS for screen full button
+  if (!document.getElementById("screen-full-btn-css")) {
+    var style = document.createElement("style");
+    style.id = "screen-full-btn-css";
+    style.textContent = `
+      .screen-full-btn {
+        position: absolute !important;
+        top: 16px !important;
+        right: 80px !important;
+        background: linear-gradient(135deg, rgba(30, 30, 50, 0.95), rgba(40, 40, 70, 0.95)) !important;
+        border: 1px solid rgba(99, 102, 241, 0.5) !important;
+        color: #fff !important;
+        padding: 10px 20px !important;
+        border-radius: 10px !important;
+        font-size: 13px !important;
+        font-weight: 600 !important;
+        cursor: pointer !important;
+        z-index: 15 !important;
+        backdrop-filter: blur(12px) !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 8px !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 25px rgba(99, 102, 241, 0.2) !important;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+      }
+      .screen-full-btn::before {
+        content: "⛶" !important;
+        font-size: 16px !important;
+      }
+      .screen-full-btn:hover {
+        background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+        border-color: transparent !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 28px rgba(99, 102, 241, 0.5), 0 0 35px rgba(99, 102, 241, 0.3) !important;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // Add fullscreen button to screen overlay
+  var fsInterval = setInterval(function() {
+    var overlay = document.querySelector(".screen-overlay");
+    if (!overlay) return;
+    clearInterval(fsInterval);
+    
+    if (overlay.querySelector(".screen-full-btn")) return;
+    
+    var video = overlay.querySelector("video");
+    var btn = document.createElement("button");
+    btn.className = "screen-full-btn";
+    btn.innerHTML = '<span>Tam Ekran</span>';
+    btn.onclick = function() {
+      if (video) {
+        if (video.requestFullscreen) video.requestFullscreen();
+        else if (video.webkitRequestFullscreen) video.webkitRequestFullscreen();
+      }
+    };
+    overlay.appendChild(btn);
+  }, 500);
+})();
+
+// ══════════════════════════════════════════════════════════
+// PATCH: VOICE SOUND BUTTONS DESIGN
+// ══════════════════════════════════════════════════════════
+(function patchVoiceSoundButtons() {
+  // Add voice control buttons CSS
+  if (!document.getElementById("voice-sound-btns-css")) {
+    var style = document.createElement("style");
+    style.id = "voice-sound-btns-css";
+    style.textContent = `
+      .voice-sound-btn {
+        background: linear-gradient(135deg, rgba(30, 30, 50, 0.9), rgba(40, 40, 70, 0.9)) !important;
+        border: 1px solid rgba(99, 102, 241, 0.4) !important;
+        color: #fff !important;
+        padding: 10px 16px !important;
+        border-radius: 10px !important;
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        cursor: pointer !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 6px !important;
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3) !important;
+        transition: all 0.2s ease !important;
+      }
+      .voice-sound-btn:hover {
+        background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 5px 20px rgba(99, 102, 241, 0.4) !important;
+      }
+      .voice-sound-btn.active {
+        background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+        border-color: rgba(239, 68, 68, 0.5) !important;
+      }
+      .voice-sound-btn.active:hover {
+        background: linear-gradient(135deg, #dc2626, #b91c1c) !important;
+      }
+      /* Mute badge */
+      .vpc-mute-badge {
+        position: absolute !important;
+        bottom: 6px !important;
+        right: 6px !important;
+        width: 22px !important;
+        height: 22px !important;
+        border-radius: 50% !important;
+        background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+        color: #fff !important;
+        font-size: 10px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        z-index: 10 !important;
+        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.5) !important;
+      }
+      .vpc-mute-badge.deafened {
+        background: linear-gradient(135deg, #f97316, #ea580c) !important;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // Add sound toggle buttons to voice controls
+  var soundInterval = setInterval(function() {
+    var voiceControls = document.querySelector(".voice-controls");
+    if (!voiceControls) return;
+    clearInterval(soundInterval);
+
+    // Add mute toggle button
+    if (!document.getElementById("voice-mute-toggle")) {
+      var muteBtn = document.createElement("button");
+      muteBtn.id = "voice-mute-toggle";
+      muteBtn.className = "voice-sound-btn";
+      muteBtn.title = "Mikrofon Aç/Kapat (Ctrl+M)";
+      muteBtn.innerHTML = state.muted ? "🔇" : "🎤";
+      muteBtn.onclick = function() {
+        if (typeof toggleMicrophone === "function") toggleMicrophone();
+      };
+      voiceControls.insertBefore(muteBtn, voiceControls.firstChild);
+    }
+
+    // Add deafen toggle button
+    if (!document.getElementById("voice-deafen-toggle")) {
+      var deafenBtn = document.createElement("button");
+      deafenBtn.id = "voice-deafen-toggle";
+      deafenBtn.className = "voice-sound-btn";
+      deafenBtn.title = "Ses Aç/Kapat (Ctrl+Shift+M)";
+      deafenBtn.innerHTML = state.deafened ? "🔇" : "🔊";
+      deafenBtn.onclick = function() {
+        if (typeof toggleDeafen === "function") toggleDeafen();
+      };
+      voiceControls.insertBefore(deafenBtn, voiceControls.firstChild);
+    }
+  }, 1000);
+
+  // Update button states
+  setInterval(function() {
+    var muteBtn = document.getElementById("voice-mute-toggle");
+    var deafenBtn = document.getElementById("voice-deafen-toggle");
+    if (muteBtn) {
+      muteBtn.innerHTML = state.muted ? "🔇" : "🎤";
+      muteBtn.classList.toggle("active", state.muted);
+      muteBtn.title = state.muted ? "Mikrofon kapalı - açmak için tıkla" : "Mikrofon açık - kapatmak için tıkla";
+    }
+    if (deafenBtn) {
+      deafenBtn.innerHTML = state.deafened ? "🔇" : "🔊";
+      deafenBtn.classList.toggle("active", state.deafened);
+      deafenBtn.title = state.deafened ? "Ses kapalı - açmak için tıkla" : "Ses açık - kapatmak için tıkla";
+    }
+  }, 500);
+})();
+
+// ══════════════════════════════════════════════════════════
+// PATCH: PASSWORD LOGIN HANDLER
+// ══════════════════════════════════════════════════════════
+(function patchPasswordLogin() {
+  // Handle password field in login
+  var passInterval = setInterval(function() {
+    var enterBtn = document.getElementById("enter-btn");
+    var passInput = document.getElementById("scord-pass-input");
+    if (!enterBtn || !passInput) return;
+    clearInterval(passInterval);
+
+    enterBtn.textContent = "Giriş Yap";
+
+    // Enable button when both fields have values
+    function updateBtnState() {
+      var nick = document.getElementById("username-input")?.value?.trim();
+      var pass = passInput.value;
+      enterBtn.disabled = !nick || !pass;
+    }
+    updateBtnState();
+    passInput.addEventListener("input", updateBtnState);
+    document.getElementById("username-input")?.addEventListener("input", updateBtnState);
+
+    // Handle login click
+    if (!enterBtn.dataset.passwordPatched) {
+      enterBtn.dataset.passwordPatched = "1";
+      enterBtn.onclick = function() {
+        var nick = document.getElementById("username-input")?.value?.trim();
+        var pass = passInput.value;
+        if (!nick || !pass) {
+          toast("Kullanıcı adı ve şifre gerekli!", "error");
+          return;
+        }
+        
+        // Generate identity from nick+pass
+        var h = 0;
+        var str = nick.toLowerCase().trim() + ":" + pass;
+        for (var i = 0; i < str.length; i++) {
+          h = ((h << 5) - h) + str.charCodeAt(i);
+          h |= 0;
+        }
+        var identityId = "id_" + Math.abs(h).toString(36);
+        
+        state.peerId = identityId;
+        state.username = nick;
+        localStorage.setItem("scord_username", nick);
+        localStorage.setItem("scord_pass", pass);
+        localStorage.setItem("scord_identity_id", identityId);
+        localStorage.setItem("scord_peer_id", identityId);
+        
+        if (typeof startApp === "function") startApp();
+      };
+    }
+  }, 500);
+})();
+
+// ══════════════════════════════════════════════════════════
+// PATCH: STATUS PICKER FIX
+// ══════════════════════════════════════════════════════════
+(function patchStatusPicker() {
+  // Make sure status picker is clickable
+  setInterval(function() {
+    var statusBar = document.querySelector(".user-bar");
+    if (statusBar && !statusBar.dataset.statusPickerFixed) {
+      statusBar.dataset.statusPickerFixed = "1";
+      var nameEl = statusBar.querySelector(".user-bar-name");
+      if (nameEl) {
+        nameEl.style.cursor = "pointer";
+        nameEl.addEventListener("click", function(e) {
+          if (typeof showStatusPicker === "function") showStatusPicker();
+        });
+      }
+    }
+  }, 1000);
+})();
+
+console.log("[App] All patches loaded");
