@@ -9914,3 +9914,58 @@ button, .btn, .rail-icon, .channel-item, .member-item, .vpc-card, .msg-row {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Performance: lightweight backdrop-filter (GPU friendly) ── */
+#modal-backdrop:not(.hidden) {
+  backdrop-filter: blur(4px) !important; /* 8px → 4px: yarı yarıya */
+  -webkit-backdrop-filter: blur(4px) !important;
+}
+.ctx-menu, .toast {
+  backdrop-filter: blur(6px) !important;
+  -webkit-backdrop-filter: blur(6px) !important;
+}
+
+/* ── Performance: heavy shadows azalt ─────────────── */
+.modal-card, .modal-content {
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4) !important; /* daha hafif */
+}
+.ctx-menu {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35) !important;
+}
+
+/* ── Virtual Scroll için CSS container ────────────── */
+.members-list, #members-list, #voice-members-list {
+  overflow-y: auto !important;
+  contain: strict !important;
+  height: 100% !important;
+}
+.member-item {
+  contain: layout style !important;
+}
+#voice-participants {
+  overflow-y: auto !important;
+  contain: strict !important;
+}
+
+/* ── GPU Composition Layer ────────────────────────── */
+.server-rail, .channel-sidebar, .chat-header, .user-bar {
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* ── Message list render optimization ─────────────── */
+.msg-row {
+  contain: layout style !important;
+}
+.messages-area {
+  contain: strict !important;
+}
+
+/* ── Debounce heavy paint operations ──────────────── */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+input, textarea, select, button {
+  -webkit-appearance: none;
+  appearance: none;
+}

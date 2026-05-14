@@ -206,6 +206,7 @@ function meshBroadcastReliable(payload) {
         return;
     }
     if (!state._p2pOutbox) state._p2pOutbox = [];
+    if (state._p2pOutbox.length > 200) state._p2pOutbox.shift();
     state._p2pOutbox.push(payload);
     if (payload?.type === "chat") {
         const t = Date.now();
@@ -10586,10 +10587,42 @@ const SCORD_V21_PERMISSIONS = [
     "screen_share", "camera", "music_control", "send_messages"
 ];
 
+// WS batch queue — typing, presence, activity gibi spam yapan eventleri 100ms batch'le
+if (!state._wsBatchQueue) state._wsBatchQueue = [];
+var _wsBatchTimer = null;
+function _flushWSBatch() {
+    if (!state._wsBatchQueue || state._wsBatchQueue.length === 0) return;
+    var batch = state._wsBatchQueue.splice(0);
+    var payload = batch.length === 1 ? batch[0] : { type: "batch", events: batch };
+    if (state.mesh) {
+        if (typeof state.mesh.sendSignal === "function") state.mesh.sendSignal(payload);
+        else if (typeof state.mesh._send === "function") state.mesh._send(payload);
+    }
+}
+function _queueWS(payload) {
+    if (!state._wsBatchQueue) state._wsBatchQueue = [];
+    state._wsBatchQueue.push(payload);
+    if (!_wsBatchTimer) {
+        _wsBatchTimer = setTimeout(function () {
+            _wsBatchTimer = null;
+            _flushWSBatch();
+        }, 100);
+    }
+}
+
 function sendServerEvent(payload) {
     if (!state.mesh || !payload) return false;
-    if (typeof state.mesh.sendSignal === "function") state.mesh.sendSignal(payload);
-    else if (typeof state.mesh._send === "function") state.mesh._send(payload);
+    // Chat, voice, role, kick gibi kritik eventler direkt gönder
+    var criticalTypes = ["chat", "voice_join", "voice_leave", "role_update", "permission_update",
+        "force_kick", "force_disconnect", "force_mute", "dm_relay", "dm_call_offer",
+        "dm_call_answer", "dm_call_end", "music_command", "server_update", "msg_delete"];
+    if (criticalTypes.indexOf(payload.type) !== -1) {
+        if (typeof state.mesh.sendSignal === "function") state.mesh.sendSignal(payload);
+        else if (typeof state.mesh._send === "function") state.mesh._send(payload);
+    } else {
+        // Typing, presence, activity, game gibi non-critical → batch
+        _queueWS(payload);
+    }
     return true;
 }
 
@@ -22228,6 +22261,13 @@ function init() {
       var _origSSS = window.startScreenShare;
       window.startScreenShare = async function () {
         try {
+          // 1→N: eğer başka biri zaten ekran paylaşıyorsa engelle
+          if (window.state?.mesh?.screenStream && window.state.mesh.screenStream !== this?.screenStream) {
+            if (typeof window.toast === "function") {
+              window.toast("Bir kullanıcı zaten ekran paylaşıyor. Aynı anda yalnızca bir yayın olabilir.", "warning");
+            }
+            return;
+          }
           // Orijinal fonksiyonu çağır
           var result = await _origSSS.apply(this, arguments);
           

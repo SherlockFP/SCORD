@@ -260,7 +260,10 @@ class P2PMesh {
                     if (peerObj._makingOffer) return;
                     peerObj._makingOffer = true;
 
-                    const offer = await pc.createOffer();
+                    const offer = await pc.createOffer({
+                        offerToReceiveAudio: true,
+                        offerToReceiveVideo: true,
+                    });
                     await pc.setLocalDescription(offer);
 
                     this._send({ type: "offer", target: peerId, sdp: pc.localDescription });
@@ -290,7 +293,10 @@ class P2PMesh {
             this._wireDataChannel(dc, peerId);
             peerObj.dc = dc;
 
-            const offer = await pc.createOffer();
+            const offer = await pc.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true,
+            });
             await pc.setLocalDescription(offer);
             this._send({ type: "offer", target: peerId, sdp: pc.localDescription });
         } else {
@@ -356,7 +362,10 @@ class P2PMesh {
         }
         this._pendingIce[fromId] = [];
 
-        const answer = await pc.createAnswer();
+        const answer = await pc.createAnswer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true,
+        });
         await pc.setLocalDescription(answer);
         this._send({ type: "answer", target: fromId, sdp: pc.localDescription });
     }
