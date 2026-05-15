@@ -1,1 +1,1 @@
-web: uvicorn server:app --host 0.0.0.0 --port $PORT
+web: cd static && uvicorn server:app --host 0.0.0.0 --port $PORT

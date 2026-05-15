@@ -1009,17 +1009,22 @@ def _cleanup_room(room_id: str):
 
 # ── Static files / SPA ────────────────────────────────────────────────────────
 
-STATIC_DIR = Path(__file__).parent / "static"
+PROJECT_ROOT = Path(__file__).parent.parent
+STATIC_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/app.js")
 def serve_app_js():
-    return FileResponse(Path(__file__).parent / "app.js")
+    return FileResponse(str(PROJECT_ROOT / "app.js"))
+
+@app.get("/favicon.ico")
+def serve_favicon():
+    return FileResponse(str(STATIC_DIR / "favicon.ico"))
 
 @app.get("/{full_path:path}")
 def serve_spa(full_path: str):
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    return FileResponse(str(PROJECT_ROOT / "index.html"))
 
 # Render / proxies often use HEAD / for health checks.
 @app.head("/{full_path:path}", include_in_schema=False)

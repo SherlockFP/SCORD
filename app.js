@@ -2073,10 +2073,12 @@ function initSetup() {
 
     // Enable button when both username and password have values
     function updateBtnState() {
-        var nick = nameInput?.value?.trim() || "";
-        var pass = passInput?.value || "";
+        var nick = nameInput ? nameInput.value.trim() : "";
+        var pass = passInput ? passInput.value : "";
+        console.log("[Setup] Nick:", nick.length, "Pass:", pass.length);
         if (enterBtn) {
-            enterBtn.disabled = nick.length < 2 || pass.length < 1;
+            enterBtn.disabled = nick.length < 1 || pass.length < 1;
+            enterBtn.style.opacity = enterBtn.disabled ? "0.5" : "1";
         }
     }
 
