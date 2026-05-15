@@ -2,6 +2,36 @@
    Shercord — Modern Dark UI Design System
    ═══════════════════════════════════════════════════ */
 
+/* Performance optimizations */
+* {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.messages-area {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: auto !important;
+}
+
+.message-wrapper, .msg-wrapper {
+  contain: content;
+}
+
+button, .rail-icon, .channel-item {
+  transform: translateZ(0);
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* Voice Call Indicator */
 .voice-call-indicator {
   position: fixed;
@@ -10148,6 +10178,58 @@ input, textarea, select, button {
 .screen-overlay {
   padding: 0 !important;
   flex-direction: column !important;
+}
+
+/* ── Screen Full Button Design ── */
+#screen-full-btn,
+.screen-full-btn,
+.screen-overlay-tool {
+  background: linear-gradient(135deg, rgba(30, 30, 50, 0.95), rgba(40, 40, 70, 0.95)) !important;
+  border: 1px solid rgba(99, 102, 241, 0.5) !important;
+  color: #fff !important;
+  padding: 10px 20px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 25px rgba(99, 102, 241, 0.2) !important;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  z-index: 100 !important;
+  position: relative !important;
+}
+
+#screen-full-btn::before,
+.screen-full-btn::before,
+.screen-overlay-tool::before {
+  content: "⛶" !important;
+  font-size: 16px !important;
+}
+
+#screen-full-btn:hover,
+.screen-full-btn:hover,
+.screen-overlay-tool:hover {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+  border-color: transparent !important;
+  transform: translateY(-2px) !important;
+  box-shadow: 0 6px 28px rgba(99, 102, 241, 0.5), 0 0 35px rgba(99, 102, 241, 0.3) !important;
+}
+
+/* ── Voice Mute Indicator (Discord style) ── */
+.vpc-mute-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  margin-left: 6px !important;
+  font-size: 12px !important;
+  filter: grayscale(0.3);
+}
+.vpc-name-container {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px !important;
 }
 
 

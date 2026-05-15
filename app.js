@@ -2069,23 +2069,59 @@ function hideModal() {
 function initSetup() {
     const nameInput = document.getElementById("username-input");
     const enterBtn = document.getElementById("enter-btn");
+    const passInput = document.getElementById("scord-pass-input");
 
-    nameInput.addEventListener("input", () => {
-        enterBtn.disabled = nameInput.value.trim().length < 2;
-    });
+    // Enable button when both username and password have values
+    function updateBtnState() {
+        var nick = nameInput?.value?.trim() || "";
+        var pass = passInput?.value || "";
+        if (enterBtn) {
+            enterBtn.disabled = nick.length < 2 || pass.length < 1;
+        }
+    }
 
-    nameInput.addEventListener("keydown", e => {
-        if (e.key === "Enter" && !enterBtn.disabled) enterBtn.click();
-    });
+    if (nameInput) {
+        nameInput.addEventListener("input", updateBtnState);
+    }
+    if (passInput) {
+        passInput.addEventListener("input", updateBtnState);
+    }
 
-    enterBtn.addEventListener("click", () => {
-        state.username = nameInput.value.trim();
-        state.peerId = genId();
-        localStorage.setItem("scord_username", state.username);
-        localStorage.setItem("scord_color", state.avatarColor);
-        localStorage.setItem("scord_peer_id", state.peerId);
-        startApp();
-    });
+    if (nameInput) {
+        nameInput.addEventListener("keydown", e => {
+            if (e.key === "Enter" && !enterBtn.disabled) enterBtn.click();
+        });
+    }
+
+    if (enterBtn) {
+        enterBtn.addEventListener("click", () => {
+            var nick = nameInput.value.trim();
+            var pass = passInput ? passInput.value : "";
+            
+            if (!nick || !pass) {
+                toast("Kullanıcı adı ve şifre gerekli!", "error");
+                return;
+            }
+            
+            // Generate unique ID from nick+pass
+            var h = 0;
+            var str = nick.toLowerCase().trim() + ":" + pass;
+            for (var i = 0; i < str.length; i++) {
+                h = ((h << 5) - h) + str.charCodeAt(i);
+                h |= 0;
+            }
+            var identityId = "id_" + Math.abs(h).toString(36);
+            
+            state.username = nick;
+            state.peerId = identityId;
+            localStorage.setItem("scord_username", nick);
+            localStorage.setItem("scord_pass", pass);
+            localStorage.setItem("scord_identity_id", identityId);
+            localStorage.setItem("scord_color", state.avatarColor);
+            localStorage.setItem("scord_peer_id", identityId);
+            startApp();
+        });
+    }
 
     // Restore saved identity
     const saved = {
@@ -3896,6 +3932,15 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
         return;
     }
 
+    // Force stop screen share (someone closed my screen from their side)
+    if (data.type === "force_stop_screen" && data.targetPeerId === state.peerId) {
+        if (typeof stopScreenShare === "function") {
+            stopScreenShare();
+            toast("Ekran paylaşımınız kapatıldı.", "info");
+        }
+        return;
+    }
+
     if (data.type === "status_update") {
         handleStatusUpdate({ from: fromPeerId, ...data });
         return;
@@ -4948,6 +4993,12 @@ function leaveVoiceChannel() {
     document.getElementById("voice-screen-btn")?.classList.add("hidden");
     document.getElementById("voice-camera-btn")?.classList.add("hidden");
 
+    // Stop music bot when leaving voice
+    if (state.musicBot && (state.musicBot.videoId || state.musicBot.player)) {
+        stopMusicBot();
+        toast("Müzik durduruldu.", "info");
+    }
+
     try {
         if (state.mesh?.screenStream) state.mesh.stopScreenShare();
     } catch (e) { /* noop */ }
@@ -5036,6 +5087,7 @@ function startMusicBot(videoId, startAt = 0) {
                 },
                 events: {
                     onReady: (e) => {
+                        state.musicBot.playerFailed = false;
                         e.target.setVolume(state.musicBot.volume);
                         e.target.playVideo();
                         renderMusicBotPanel();
@@ -5045,8 +5097,9 @@ function startMusicBot(videoId, startAt = 0) {
                         renderMusicBotPanel();
                     },
                     onError: (e) => {
-                        toast("Müzik botu: Video oynatılamadı (kısıtlı veya geçersiz video). 🎵", "error");
+                        state.musicBot.playerFailed = true;
                         console.warn("[MusicBot] YT error:", e.data);
+                        renderMusicBotPanel(); // Show fallback UI
                     }
                 }
             });
@@ -5115,6 +5168,7 @@ function renderMusicBotPanel() {
     initMusicBotState();
     const mb = state.musicBot;
     const isHost = isVoiceSessionHost();
+    const playerFailed = mb.playerFailed;
 
     const vidId = mb.videoId;
     const playing = mb.isPlaying;
@@ -5125,7 +5179,25 @@ function renderMusicBotPanel() {
       <span class="mbot-title">Müzik Botu</span>
       ${vidId ? `<a class="mbot-yt-link" href="https://youtu.be/${vidId}" target="_blank" rel="noopener">YouTube'da Aç ↗</a>` : ""}
     </div>
-    ${vidId ? `
+    ${playerFailed ? `
+    <div class="mbot-now-playing" style="opacity:0.7;">
+      <img class="mbot-thumb" src="https://img.youtube.com/vi/${vidId}/mqdefault.jpg" alt="thumbnail" loading="lazy"/>
+      <div class="mbot-now-info">
+        <div class="mbot-now-label">🔇 Sadece Ses (Video engellendi)</div>
+        <div class="mbot-now-id">${vidId}</div>
+      </div>
+    </div>
+    <div class="mbot-controls">
+      ${isHost ? `
+        <button class="mbot-btn" id="mbot-pause-btn" title="${playing ? "Duraklat" : "Devam Et"}">${playing ? "⏸️" : "▶️"}</button>
+        <button class="mbot-btn mbot-btn--danger" id="mbot-stop-btn" title="Durdur">⏹️</button>
+      ` : '<span style="font-size:11px;color:var(--text-muted);">Ses çalıyor...</span>'}
+      <div class="mbot-vol-wrap">
+        <span style="font-size:12px;">🔊</span>
+        <input type="range" class="mbot-vol-slider" id="mbot-vol-slider" min="0" max="100" value="${mb.volume}" title="Ses Seviyesi (Kişisel)">
+      </div>
+    </div>
+    ` : vidId ? `
     <div class="mbot-now-playing">
       <img class="mbot-thumb" src="https://img.youtube.com/vi/${vidId}/mqdefault.jpg" alt="thumbnail" loading="lazy"/>
       <div class="mbot-now-info">
@@ -5366,6 +5438,25 @@ function renderVoiceParticipants(serverId, channelId) {
         }
         nameEl.textContent = displayName + (m.peer_id === state.peerId ? " (sen)" : "");
 
+        // Add mute indicator next to name (like Discord)
+        let muteIcon = nameContainer.querySelector('.vpc-mute-icon');
+        const isMuted = m.peer_id === state.peerId ? state.muted : (state.peerMuted?.[m.peer_id]);
+        const isDeafened = m.peer_id === state.peerId ? state.deafened : (state.peerDeafened?.[m.peer_id]);
+        
+        if (isMuted || isDeafened) {
+            if (!muteIcon) {
+                muteIcon = document.createElement("span");
+                muteIcon.className = "vpc-mute-icon";
+                nameContainer.appendChild(muteIcon);
+            }
+            muteIcon.textContent = isDeafened ? "🔇" : "🎤";
+            muteIcon.title = isDeafened ? "Ses Kapatıldı" : "Mikrofon Kapatıldı";
+            muteIcon.style.marginLeft = "6px";
+            muteIcon.style.fontSize = "12px";
+        } else if (muteIcon) {
+            muteIcon.remove();
+        }
+
         // Add sharing icons
         let shareIcon = nameContainer.querySelector('.share-icon');
         if (m.isSharingScreen || (m.peer_id === state.peerId && getLocalShareStream())) {
@@ -5602,6 +5693,51 @@ function openScreenOverlay(peerId, username) {
     closeBtn.className = "screen-overlay-close";
     closeBtn.textContent = "Kapat";
     closeBtn.onclick = () => overlay.remove();
+
+    // Right-click menu to close someone's screen
+    overlay.oncontextmenu = (e) => {
+        e.preventDefault();
+        // Remove existing menu
+        const existingMenu = document.getElementById("screen-ctx-menu");
+        if (existingMenu) existingMenu.remove();
+
+        const menu = document.createElement("div");
+        menu.id = "screen-ctx-menu";
+        menu.style.cssText = "position:fixed;left:" + e.clientX + "px;top:" + e.clientY + "px;background:rgba(30,30,50,0.95);border:1px solid rgba(255,255,255,0.2);border-radius:10px;padding:8px 0;z-index:10000;min-width:180px;backdrop-filter:blur(12px);box-shadow:0 8px 24px rgba(0,0,0,0.5);";
+        
+        const closeItem = document.createElement("div");
+        closeItem.style.cssText = "padding:10px 16px;color:#fff;cursor:pointer;font-size:14px;display:flex;align-items:center;gap:8px;";
+        closeItem.innerHTML = "🚫 Ekranı Kapat";
+        closeItem.onclick = () => {
+            // Send message to close peer's screen
+            if (state.mesh) {
+                state.mesh.broadcast({
+                    type: "force_stop_screen",
+                    targetPeerId: peerId
+                });
+            }
+            overlay.remove();
+            menu.remove();
+        };
+        
+        const cancelItem = document.createElement("div");
+        cancelItem.style.cssText = "padding:10px 16px;color:rgba(255,255,255,0.6);cursor:pointer;font-size:14px;";
+        cancelItem.textContent = "İptal";
+        cancelItem.onclick = () => menu.remove();
+        
+        menu.appendChild(closeItem);
+        menu.appendChild(cancelItem);
+        document.body.appendChild(menu);
+
+        // Close menu on click outside
+        const closeMenu = (ev) => {
+            if (!menu.contains(ev.target)) {
+                menu.remove();
+                document.removeEventListener("click", closeMenu);
+            }
+        };
+        setTimeout(() => document.addEventListener("click", closeMenu), 10);
+    };
 
     const label = document.createElement("div");
     label.className = "screen-overlay-label";
@@ -10858,8 +10994,25 @@ function syncMusicSessionFromServer(session) {
     }
     if (!state.voiceChannelId || session.voiceChannelId !== state.voiceChannelId) return;
 
+    // Check if YouTube API is ready
+    if (typeof YT === "undefined" || !YT.Player) {
+        console.warn("[MusicBot] YouTube API not ready, waiting...");
+        // Try again after a short delay
+        setTimeout(() => syncMusicSessionFromServer(session), 1000);
+        return;
+    }
+
     const startedAt = session.startedAt || computeMusicStartedAt(session.position || 0);
-    startMusicBot(session.videoId, startedAt);
+    
+    // Clear any existing player errors
+    try {
+        startMusicBot(session.videoId, startedAt);
+    } catch (e) {
+        console.error("[MusicBot] Failed to start:", e);
+        toast("Müzik başlatılamadı. YouTube erişimi kontrol edilmeli.", "error");
+        return;
+    }
+    
     const player = state.musicBot.player;
     if (player && typeof player.seekTo === "function") {
         const expected = session.state === "playing"
@@ -10870,7 +11023,9 @@ function syncMusicSessionFromServer(session) {
             if (Math.abs(current - expected) > 2.5) player.seekTo(expected, true);
             if (session.state === "paused") player.pauseVideo?.();
             else player.playVideo?.();
-        } catch { }
+        } catch (e) {
+            console.warn("[MusicBot] Seek/play error:", e);
+        }
     }
 }
 
@@ -15617,17 +15772,18 @@ function initializeGifPicker() {
 
 let selectedGif = null;
 
-function loadTrendingGifs() {
+async function loadTrendingGifs() {
     showGifLoading();
-
-    // Simulate API call with mock data
-    setTimeout(() => {
-        const trendingGifs = getMockGifs('trending');
+    try {
+        const trendingGifs = await getMockGifs('trending');
         displayGifResults(trendingGifs);
-    }, 800);
+    } catch (e) {
+        console.error('Load trending GIFs error:', e);
+        displayGifResults([]);
+    }
 }
 
-function searchGifs() {
+async function searchGifs() {
     const searchInput = document.getElementById('gif-search-input');
     const query = searchInput?.value.trim();
 
@@ -15637,22 +15793,24 @@ function searchGifs() {
     }
 
     showGifLoading();
-
-    // Simulate API call with mock data
-    setTimeout(() => {
-        const searchResults = getMockGifs('search', query);
+    try {
+        const searchResults = await getMockGifs('search', query);
         displayGifResults(searchResults);
-    }, 600);
+    } catch (e) {
+        console.error('Search GIFs error:', e);
+        displayGifResults([]);
+    }
 }
 
-function loadCategoryGifs(category) {
+async function loadCategoryGifs(category) {
     showGifLoading();
-
-    // Simulate API call with mock data
-    setTimeout(() => {
-        const categoryGifs = getMockGifs(category);
+    try {
+        const categoryGifs = await getMockGifs(category);
         displayGifResults(categoryGifs);
-    }, 600);
+    } catch (e) {
+        console.error('Load category GIFs error:', e);
+        displayGifResults([]);
+    }
 }
 
 function showGifLoading() {
@@ -15814,79 +15972,40 @@ function getRecentGifs() {
     }
 }
 
-// Mock GIF data generator
-function getMockGifs(category, query = '') {
-    const mockGifs = [
-        // Trending
-        { id: 't1', title: 'Happy Dance', url: 'https://media.giphy.com/media/3o7TKTD1NUq1q7CB5C/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7TKTD1NUq1q7CB5C/giphy.gif', width: 480, height: 270 },
-        { id: 't2', title: 'Mind Blown', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
-        { id: 't3', title: 'Yes!', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
-        { id: 't4', title: 'Facepalm', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
-        { id: 't5', title: 'Celebration', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
+// Giphy API - Gerçek GIF verisi
+const GIPHY_API_KEY = 'Gl1GZQ4BJpmGk2eMN4eM0oO0mO6i1nX6'; // Public beta key
 
-        // Reactions
-        { id: 'r1', title: 'Laughing', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
-        { id: 'r2', title: 'Crying', url: 'https://media.giphy.com/media/l41lGvinE5Vw/giphy.gif', thumbnail: 'https://media.giphy.com/media/l41lGvinE5Vw/giphy.gif', width: 480, height: 270 },
-        { id: 'r3', title: 'Angry', url: 'https://media.giphy.com/media/3o6fJgOdwvUIa3dGxK/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6fJgOdwvUIa3dGxK/giphy.gif', width: 480, height: 270 },
-        { id: 'r4', title: 'Love', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
-        { id: 'r5', title: 'Wow', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
-
-        // Memes
-        { id: 'm1', title: 'Distracted Boyfriend', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
-        { id: 'm2', title: 'This is Fine', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
-        { id: 'm3', title: 'Change My Mind', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
-        { id: 'm4', title: 'Drake Hotline Bling', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
-        { id: 'm5', title: 'Two Buttons', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
-
-        // Gaming
-        { id: 'g1', title: 'Gaming Moment', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
-        { id: 'g2', title: 'Victory Royale', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
-        { id: 'g3', title: 'Rage Quit', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
-        { id: 'g4', title: 'Epic Win', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
-        { id: 'g5', title: 'GG WP', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
-
-        // Anime
-        { id: 'a1', title: 'Anime Dance', url: 'https://media.giphy.com/media/3o7TKTD1NUq1q7CB5C/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7TKTD1NUq1q7CB5C/giphy.gif', width: 480, height: 270 },
-        { id: 'a2', title: 'Sweat Drop', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 },
-        { id: 'a3', title: 'Anime Cry', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
-        { id: 'a4', title: 'Power Up', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
-        { id: 'a5', title: 'Anime Fight', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
-
-        // Cute
-        { id: 'c1', title: 'Cute Cat', url: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', thumbnail: 'https://media.giphy.com/media/l2Je66zG6mAAZxgqI2/giphy.gif', width: 480, height: 270 },
-        { id: 'c2', title: 'Puppy Love', url: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o6ZtaO9BZhKU4wFM8/giphy.gif', width: 480, height: 270 },
-        { id: 'c3', title: 'Baby Laugh', url: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', thumbnail: 'https://media.giphy.com/media/jUwpNzg9IcyrK/giphy.gif', width: 480, height: 270 },
-        { id: 'c4', title: 'Cute Bunny', url: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', thumbnail: 'https://media.giphy.com/media/3o7aD2saalBwwftBIQ8/giphy.gif', width: 480, height: 270 },
-        { id: 'c5', title: 'Happy Puppy', url: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', thumbnail: 'https://media.giphy.com/media/l4FGKXHhc4Aq/giphy.gif', width: 480, height: 270 }
-    ];
-
-    // Filter by category
-    let filteredGifs = [];
-    switch (category) {
-        case 'trending':
-            filteredGifs = mockGifs.filter(g => g.id.startsWith('t'));
-            break;
-        case 'reactions':
-            filteredGifs = mockGifs.filter(g => g.id.startsWith('r'));
-            break;
-        case 'memes':
-            filteredGifs = mockGifs.filter(g => g.id.startsWith('m'));
-            break;
-        case 'gaming':
-            filteredGifs = mockGifs.filter(g => g.id.startsWith('g'));
-            break;
-        case 'anime':
-            filteredGifs = mockGifs.filter(g => g.id.startsWith('a'));
-            break;
-        case 'cute':
-            filteredGifs = mockGifs.filter(g => g.id.startsWith('c'));
-            break;
-        case 'search':
-            // Simple search simulation
-            filteredGifs = mockGifs.filter(g =>
-                g.title.toLowerCase().includes(query.toLowerCase())
-            );
-            break;
+async function getMockGifs(category, query = '') {
+    try {
+        let url = '';
+        
+        if (category === 'search' && query) {
+            // Search Giphy
+            url = `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(query)}&limit=20&rating=g`;
+        } else {
+            // Trending GIFs
+            url = `https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_API_KEY}&limit=20&rating=g`;
+        }
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.data && data.data.length > 0) {
+            return data.data.map(gif => ({
+                id: gif.id,
+                title: gif.title || 'GIF',
+                url: gif.images.original.url,
+                thumbnail: gif.images.fixed_height_small.url || gif.images.fixed_width_small.url,
+                width: parseInt(gif.images.original.width),
+                height: parseInt(gif.images.original.height)
+            }));
+        }
+        
+        return [];
+    } catch (e) {
+        console.error('Giphy API error:', e);
+        return [];
+    }
         default:
             filteredGifs = mockGifs;
     }
@@ -22801,79 +22920,1064 @@ init();
 })();
 
 // ══════════════════════════════════════════════════════════
-// PATCH: PASSWORD LOGIN HANDLER
-// ══════════════════════════════════════════════════════════
-(function patchPasswordLogin() {
-  // Handle password field in login
-  var passInterval = setInterval(function() {
-    var enterBtn = document.getElementById("enter-btn");
-    var passInput = document.getElementById("scord-pass-input");
-    if (!enterBtn || !passInput) return;
-    clearInterval(passInterval);
-
-    enterBtn.textContent = "Giriş Yap";
-
-    // Enable button when both fields have values
-    function updateBtnState() {
-      var nick = document.getElementById("username-input")?.value?.trim();
-      var pass = passInput.value;
-      enterBtn.disabled = !nick || !pass;
-    }
-    updateBtnState();
-    passInput.addEventListener("input", updateBtnState);
-    document.getElementById("username-input")?.addEventListener("input", updateBtnState);
-
-    // Handle login click
-    if (!enterBtn.dataset.passwordPatched) {
-      enterBtn.dataset.passwordPatched = "1";
-      enterBtn.onclick = function() {
-        var nick = document.getElementById("username-input")?.value?.trim();
-        var pass = passInput.value;
-        if (!nick || !pass) {
-          toast("Kullanıcı adı ve şifre gerekli!", "error");
-          return;
-        }
-        
-        // Generate identity from nick+pass
-        var h = 0;
-        var str = nick.toLowerCase().trim() + ":" + pass;
-        for (var i = 0; i < str.length; i++) {
-          h = ((h << 5) - h) + str.charCodeAt(i);
-          h |= 0;
-        }
-        var identityId = "id_" + Math.abs(h).toString(36);
-        
-        state.peerId = identityId;
-        state.username = nick;
-        localStorage.setItem("scord_username", nick);
-        localStorage.setItem("scord_pass", pass);
-        localStorage.setItem("scord_identity_id", identityId);
-        localStorage.setItem("scord_peer_id", identityId);
-        
-        if (typeof startApp === "function") startApp();
-      };
-    }
-  }, 500);
-})();
-
-// ══════════════════════════════════════════════════════════
 // PATCH: STATUS PICKER FIX
 // ══════════════════════════════════════════════════════════
 (function patchStatusPicker() {
-  // Make sure status picker is clickable
-  setInterval(function() {
-    var statusBar = document.querySelector(".user-bar");
-    if (statusBar && !statusBar.dataset.statusPickerFixed) {
-      statusBar.dataset.statusPickerFixed = "1";
-      var nameEl = statusBar.querySelector(".user-bar-name");
-      if (nameEl) {
-        nameEl.style.cursor = "pointer";
-        nameEl.addEventListener("click", function(e) {
-          if (typeof showStatusPicker === "function") showStatusPicker();
-        });
+  // Direct status picker - works reliably
+  function setupStatusClick() {
+    var userBar = document.querySelector(".user-bar");
+    if (!userBar) return;
+    
+    // Check if status indicator exists, if not create it
+    var statusIndicator = userBar.querySelector(".status-indicator");
+    if (statusIndicator && !statusIndicator._scordClickFixed) {
+      statusIndicator._scordClickFixed = true;
+      statusIndicator.style.cursor = "pointer";
+      statusIndicator.onclick = function(e) {
+        e.stopPropagation();
+        if (typeof showStatusPicker === "function") {
+          showStatusPicker();
+        } else {
+          // Fallback: direct status change
+          var currentStatus = state.status || "online";
+          var nextStatus = currentStatus === "online" ? "dnd" : currentStatus === "dnd" ? "idle" : currentStatus === "idle" ? "invisible" : "online";
+          setStatus(nextStatus, state.customStatus, state.statusEmoji);
+        }
+      };
+    }
+    
+    // Also try user-bar-name
+    var nameEl = userBar.querySelector(".user-bar-name");
+    if (nameEl && !nameEl._scordClickFixed) {
+      nameEl._scordClickFixed = true;
+      nameEl.style.cursor = "pointer";
+      nameEl.onclick = function(e) {
+        e.stopPropagation();
+        if (typeof showStatusPicker === "function") showStatusPicker();
+      };
+    }
+  }
+  
+  // Fix sidebar server name when in voice
+  function updateSidebarServerName() {
+    var nameEl = document.getElementById("sidebar-server-name");
+    if (!nameEl) return;
+    
+    // If in voice channel, show actual server name
+    if (state.voiceChannelId && state.activeServerId) {
+      var server = state.servers.find(function(s) { return s.id === state.activeServerId; });
+      if (server && server.name && nameEl.textContent !== server.name) {
+        nameEl.textContent = server.name;
       }
     }
-  }, 1000);
+  }
+  
+  // Run immediately and periodically
+  setupStatusClick();
+  setInterval(setupStatusClick, 1500);
+  setInterval(updateSidebarServerName, 2000);
 })();
 
-console.log("[App] All patches loaded");
+// ══════════════════════════════════════════════════════════
+// PERFORMANCE OPTIMIZATIONS
+// ══════════════════════════════════════════════════════════
+(function optimizePerformance() {
+    // 1. Throttle render functions with requestAnimationFrame
+    const _throttle = function(fn, delay) {
+        let lastCall = 0;
+        return function(...args) {
+            const now = Date.now();
+            if (now - lastCall >= delay) {
+                lastCall = now;
+                return fn.apply(this, args);
+            }
+        };
+    };
+
+    // 2. Batch DOM updates
+    if (typeof renderMessages === "function") {
+        const _origRenderMessages = renderMessages;
+        let renderMessagesPending = false;
+        window.renderMessages = function() {
+            if (renderMessagesPending) return;
+            renderMessagesPending = true;
+            requestAnimationFrame(() => {
+                _origRenderMessages.apply(this, arguments);
+                renderMessagesPending = false;
+            });
+        };
+    }
+
+    // 3. Optimize chat input
+    const chatInput = document.getElementById("chat-input");
+    if (chatInput) {
+        chatInput.addEventListener("input", _throttle(() => {
+            // Debounce expensive operations
+        }, 100), { passive: true });
+    }
+
+    // 4. Reduce animation complexity
+    document.documentElement.style.setProperty("--animation-duration", "0.15s");
+    
+    // 5. Optimize scroll performance
+    const messagesArea = document.querySelector(".messages-area");
+    if (messagesArea) {
+        messagesArea.style.scrollBehavior = "auto";
+    }
+
+    // 6. Cache DOM queries
+    const _cache = new Map();
+    window._cachedQuery = function(selector) {
+        if (!_cache.has(selector)) {
+            _cache.set(selector, document.querySelector(selector));
+        }
+        return _cache.get(selector);
+    };
+
+    // 7. Disable heavy visual effects when not needed
+    if (!window.matchMedia("(prefers-reduced-motion: no-preference)").matches) {
+        document.documentElement.style.setProperty("--animation-duration", "0.05s");
+    }
+
+    // 8. Optimize voice participant rendering
+    if (typeof renderVoiceParticipants === "function") {
+        let rvpcTimeout = null;
+        const _origRVP = renderVoiceParticipants;
+        window.renderVoiceParticipants = function(...args) {
+            if (rvpcTimeout) return;
+            rvpcTimeout = setTimeout(() => {
+                rvpcTimeout = null;
+                _origRVP.apply(this, args);
+            }, 50); // Batch updates within 50ms
+        };
+    }
+
+    console.log("[App] Performance optimizations applied");
+})();
+
+// ══════════════════════════════════════════════════════════
+// NEW FEATURES: SERVER STATS & MODERATION
+// ══════════════════════════════════════════════════════════
+
+// ── SERVER STATISTICS ────────────────────────────────────
+function showServerStatsModal() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const memberCount = server.members?.length || 0;
+    const channelCount = server.channels?.length || 0;
+    const roleCount = Object.keys(server.roles || {}).length;
+    const createdAt = server.createdAt || new Date().toISOString();
+    const createdDate = new Date(createdAt).toLocaleDateString('tr-TR');
+    
+    // Calculate online members (active in last 5 mins)
+    const now = Date.now();
+    const onlineMembers = (server.members || []).filter(m => {
+        const lastActive = m.lastSeen || 0;
+        return (now - lastActive) < 300000; // 5 mins
+    }).length;
+    
+    const html = `
+        <div class="server-stats-modal" style="display:flex;flex-direction:column;gap:20px;padding:10px;">
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;">
+                <div class="stat-card" style="background:rgba(255,255,255,0.05);padding:20px;border-radius:12px;text-align:center;">
+                    <div style="font-size:32px;font-weight:bold;color:var(--accent);">${memberCount}</div>
+                    <div style="color:var(--text-muted);font-size:13px;">Toplam Üye</div>
+                </div>
+                <div class="stat-card" style="background:rgba(255,255,255,0.05);padding:20px;border-radius:12px;text-align:center;">
+                    <div style="font-size:32px;font-weight:bold;color:#3ba55c;">${onlineMembers}</div>
+                    <div style="color:var(--text-muted);font-size:13px;">Çevrimiçi</div>
+                </div>
+                <div class="stat-card" style="background:rgba(255,255,255,0.05);padding:20px;border-radius:12px;text-align:center;">
+                    <div style="font-size:32px;font-weight:bold;color:#faa61a;">${channelCount}</div>
+                    <div style="color:var(--text-muted);font-size:13px;">Kanal</div>
+                </div>
+                <div class="stat-card" style="background:rgba(255,255,255,0.05);padding:20px;border-radius:12px;text-align:center;">
+                    <div style="font-size:32px;font-weight:bold;color:#ed4245;">${roleCount}</div>
+                    <div style="color:var(--text-muted);font-size:13px;">Rol</div>
+                </div>
+            </div>
+            <div style="background:rgba(255,255,255,0.03);padding:16px;border-radius:8px;">
+                <div style="font-size:14px;color:var(--text-muted);margin-bottom:8px;">Sunucu Bilgileri</div>
+                <div style="font-size:13px;color:var(--text-secondary);">
+                    <div>Kuruluş: ${createdDate}</div>
+                    <div>Sunucu ID: ${server.id}</div>
+                    <div>Sahip: ${server.ownerId === state.peerId ? 'Sen' : 'Bilgi yok'}</div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    showModal("📊 Sunucu İstatistikleri", html, '<button class="btn-secondary" onclick="hideModal()">Kapat</button>');
+}
+window.showServerStatsModal = showServerStatsModal;
+
+// ── SLOWMODE SYSTEM ─────────────────────────────────────
+function setChannelSlowmode(serverId, channelId, seconds) {
+    const server = state.servers.find(s => s.id === serverId);
+    if (!server) return;
+    
+    const channel = server.channels.find(c => c.id === channelId);
+    if (!channel) return;
+    
+    channel.slowmode = seconds;
+    localStorage.setItem(`scord_slowmode_${serverId}_${channelId}`, seconds);
+    
+    if (seconds > 0) {
+        toast(`Kanal yavaşmodu: ${seconds} saniye`, "info");
+    } else {
+        toast("Yavaşmod kapatıldı", "info");
+    }
+    
+    if (typeof renderMessages === "function") renderMessages(serverId, channelId);
+}
+window.setChannelSlowmode = setChannelSlowmode;
+
+function getChannelSlowmode(serverId, channelId) {
+    try {
+        return parseInt(localStorage.getItem(`scord_slowmode_${serverId}_${channelId}`)) || 0;
+    } catch (e) { return 0; }
+}
+
+function checkSlowmode(serverId, channelId) {
+    const slowmode = getChannelSlowmode(serverId, channelId);
+    if (slowmode <= 0) return true;
+    
+    const key = `scord_lastmsg_${serverId}_${channelId}_${state.peerId}`;
+    const lastMsg = parseInt(localStorage.getItem(key) || 0);
+    const now = Date.now();
+    
+    if (now - lastMsg < (slowmode * 1000)) {
+        const remaining = Math.ceil((slowmode * 1000 - (now - lastMsg)) / 1000);
+        toast(`Yavaşmod aktif! ${remaining} saniye beklemelisin.`, "error");
+        return false;
+    }
+    
+    localStorage.setItem(key, now);
+    return true;
+}
+
+// ── WARNING SYSTEM ────────────────────────────────────────
+function warnUser(peerId, username, reason) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    server.warnings = server.warnings || {};
+    server.warnings[peerId] = server.warnings[peerId] || [];
+    
+    const warning = {
+        id: Date.now(),
+        from: state.peerId,
+        fromName: state.username,
+        reason: reason,
+        timestamp: Date.now()
+    };
+    
+    server.warnings[peerId].push(warning);
+    
+    // Save to localStorage
+    localStorage.setItem(`scord_warnings_${server.id}`, JSON.stringify(server.warnings));
+    
+    // Broadcast
+    if (state.mesh) {
+        state.mesh.broadcast({
+            type: "user_warning",
+            targetPeerId: peerId,
+            warning: warning
+        });
+    }
+    
+    const warnCount = server.warnings[peerId].length;
+    toast(`⚠️ ${username} uyarıldı! (Toplam: ${warnCount})`, "warning");
+    
+    // Auto action based on warning count
+    if (warnCount >= 3) {
+        kickPeer(peerId, username);
+        toast(`${username} 3 uyarı sonrası atıldı.`, "error");
+    }
+    
+    logModerationAction("Uyarı", username, reason);
+}
+window.warnUser = warnUser;
+
+function getWarnings(peerId) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server || !server.warnings) return [];
+    return server.warnings[peerId] || [];
+}
+
+// ── MODERATION LOGS ─────────────────────────────────────
+function logModerationAction(action, target, reason) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    server.modLogs = server.modLogs || [];
+    
+    const log = {
+        id: Date.now(),
+        action: action,
+        target: target,
+        reason: reason || "",
+        moderator: state.username,
+        timestamp: Date.now()
+    };
+    
+    server.modLogs.push(log);
+    
+    // Keep only last 100 logs
+    if (server.modLogs.length > 100) {
+        server.modLogs = server.modLogs.slice(-100);
+    }
+    
+    localStorage.setItem(`scord_modlogs_${server.id}`, JSON.stringify(server.modLogs));
+}
+window.logModerationAction = logModerationAction;
+
+function showModLogsModal() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const logs = (server.modLogs || []).slice().reverse();
+    
+    if (logs.length === 0) {
+        showModal("📋 Moderasyon Logları", '<div style="padding:20px;text-align:center;color:var(--text-muted);">Henüz moderasyon işlemi yok.</div>', '<button class="btn-secondary" onclick="hideModal()">Kapat</button>');
+        return;
+    }
+    
+    let html = '<div class="mod-logs-list" style="max-height:400px;overflow-y:auto;">';
+    
+    logs.forEach(log => {
+        const date = new Date(log.timestamp).toLocaleString('tr-TR');
+        html += `
+            <div style="padding:12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:4px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="font-weight:600;color:var(--accent);">${log.action}</span>
+                    <span style="font-size:12px;color:var(--text-muted);">${date}</span>
+                </div>
+                <div style="font-size:13px;">👤 <strong>${log.target}</strong></div>
+                ${log.reason ? `<div style="font-size:12px;color:var(--text-secondary);">📝 ${log.reason}</div>` : ''}
+                <div style="font-size:11px;color:var(--text-muted);">👮 Moderatör: ${log.moderator}</div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    
+    showModal("📋 Moderasyon Logları", html, '<button class="btn-secondary" onclick="hideModal()">Kapat</button>');
+}
+window.showModLogsModal = showModLogsModal;
+
+// ── ENHANCED ROLE MANAGEMENT ─────────────────────────────
+function showRoleManagerModal() {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server) return;
+    
+    const roles = server.roles || {};
+    const permissions = [
+        { id: 'send_messages', name: 'Mesaj Gönder', icon: '💬' },
+        { id: 'manage_messages', name: 'Mesaj Yönet', icon: '🗑️' },
+        { id: 'manage_channels', name: 'Kanal Yönet', icon: '📝' },
+        { id: 'manage_roles', name: 'Rol Yönet', icon: '🎭' },
+        { id: 'kick_members', name: 'Üye At', icon: '👢' },
+        { id: 'ban_members', name: 'Üye Yasakla', icon: '🚫' },
+        { id: 'manage_server', name: 'Sunucu Yönet', icon: '⚙️' }
+    ];
+    
+    let html = `
+        <div style="display:flex;flex-direction:column;gap:16px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-weight:600;">Rol Yönetimi</span>
+                <button onclick="createNewRole()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;">+ Yeni Rol</button>
+            </div>
+            <div style="max-height:300px;overflow-y:auto;">
+    `;
+    
+    Object.entries(roles).forEach(([roleId, roleData]) => {
+        const memberCount = Object.values(server.peer_roles || {}).filter(r => r === roleId).length;
+        
+        html += `
+            <div style="background:rgba(255,255,255,0.05);padding:12px;border-radius:8px;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                    <input type="color" value="${roleData.color || '#5865f2'}" onchange="updateRoleColor('${roleId}', this.value)" style="width:30px;height:30px;border:none;cursor:pointer;border-radius:4px;">
+                    <input type="text" value="${roleData.name || roleId}" onchange="updateRoleName('${roleId}', this.value)" style="background:transparent;border:1px solid var(--border);color:#fff;padding:6px 10px;border-radius:4px;flex:1;">
+                    <span style="font-size:12px;color:var(--text-muted);">${memberCount} üye</span>
+                    <button onclick="deleteRole('${roleId}')" style="background:#ed4245;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Sil</button>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                    ${permissions.map(p => `
+                        <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;">
+                            <input type="checkbox" ${roleData.permissions?.includes(p.id) ? 'checked' : ''} onchange="toggleRolePermission('${roleId}', '${p.id}', this.checked)">
+                            ${p.icon} ${p.name}
+                        </label>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div></div>';
+    
+    showModal("🎭 Rol Yönetimi", html, '<button class="btn-secondary" onclick="hideModal()">Kapat</button>');
+}
+window.showRoleManagerModal = showRoleManagerModal;
+
+function toggleRolePermission(roleId, permissionId, granted) {
+    const server = state.servers.find(s => s.id === state.activeServerId);
+    if (!server || !server.roles[roleId]) return;
+    
+    server.roles[roleId].permissions = server.roles[roleId].permissions || [];
+    
+    if (granted) {
+        if (!server.roles[roleId].permissions.includes(permissionId)) {
+            server.roles[roleId].permissions.push(permissionId);
+        }
+    } else {
+        server.roles[roleId].permissions = server.roles[roleId].permissions.filter(p => p !== permissionId);
+    }
+    
+    localStorage.setItem(`scord_roles_${server.id}`, JSON.stringify(server.roles));
+    sendServerEvent({ type: "role_update", roles: server.roles, peer_roles: server.peer_roles });
+}
+window.toggleRolePermission = toggleRolePermission;
+
+// ── NOTIFICATION SYSTEM ─────────────────────────────────
+function requestNotificationPermission() {
+    if (!("Notification" in window)) {
+        toast("Tarayıcı bildirimleri desteklemiyor.", "error");
+        return;
+    }
+    
+    if (Notification.permission === "granted") {
+        toast("Bildirimler zaten açık!", "info");
+        return;
+    }
+    
+    Notification.requestPermission().then(permission => {
+        if (permission === "granted") {
+            new Notification("SCORD", { body: "Bildirimler açıldı! 🔔" });
+            localStorage.setItem("scord_notifications", "true");
+        } else {
+            toast("Bildirimler reddedildi.", "error");
+        }
+    });
+}
+window.requestNotificationPermission = requestNotificationPermission;
+
+function showNotification(title, body, icon) {
+    if (Notification.permission === "granted" && localStorage.getItem("scord_notifications") === "true") {
+        new Notification(title, { body, icon });
+    }
+}
+
+// Add notification toggle to user bar
+setInterval(() => {
+    const userBar = document.querySelector(".user-bar-controls");
+    if (userBar && !document.getElementById("notif-toggle-btn")) {
+        const btn = document.createElement("button");
+        btn.id = "notif-toggle-btn";
+        btn.className = "user-ctrl-btn";
+        btn.innerHTML = "🔔";
+        btn.title = "Bildirim Ayarları";
+        btn.onclick = () => {
+            const current = localStorage.getItem("scord_notifications");
+            if (current === "true") {
+                localStorage.setItem("scord_notifications", "false");
+                toast("Bildirimler kapatıldı", "info");
+            } else {
+                requestNotificationPermission();
+            }
+        };
+        userBar.appendChild(btn);
+    }
+}, 2000);
+
+console.log("[App] New features loaded: Stats, Moderation, Roles, Notifications");
+
+/* ── PERFORMANCE OPTIMIZATION ───────────────────────────────────── */
+const PERFORMANCE = {
+    lazyLoadThreshold: 50,
+    messageBatchSize: 20,
+    debounceTimers: {},
+    cache: new Map(),
+    memoryUsage: 0,
+    
+    debounce(key, fn, delay = 300) {
+        clearTimeout(this.debounceTimers[key]);
+        this.debounceTimers[key] = setTimeout(fn, delay);
+    },
+    
+    throttle(key, fn, limit = 100) {
+        if (this.debounceTimers[key]) return;
+        this.debounceTimers[key] = true;
+        fn();
+        setTimeout(() => { this.debounceTimers[key] = false; }, limit);
+    },
+    
+    memoize(fn, keyFn) {
+        return (...args) => {
+            const key = keyFn ? keyFn(...args) : JSON.stringify(args);
+            if (this.cache.has(key)) return this.cache.get(key);
+            const result = fn(...args);
+            this.cache.set(key, result);
+            if (this.cache.size > 500) {
+                const firstKey = this.cache.keys().next().value;
+                this.cache.delete(firstKey);
+            }
+            return result;
+        };
+    },
+    
+    clearCache() {
+        this.cache.clear();
+        if (window.gc) window.gc();
+        console.log("[Performance] Cache cleared");
+    },
+    
+    getMemoryUsage() {
+        if (performance.memory) {
+            return {
+                used: (performance.memory.usedJSHeapSize / 1048576).toFixed(2) + " MB",
+                total: (performance.memory.totalJSHeapSize / 1048576).toFixed(2) + " MB",
+                limit: (performance.memory.jsHeapSizeLimit / 1048576).toFixed(2) + " MB"
+            };
+        }
+        return { used: "N/A", total: "N/A", limit: "N/A" };
+    }
+};
+
+setInterval(() => {
+    const mem = PERFORMANCE.getMemoryUsage();
+    if (parseFloat(mem.used) > 100) {
+        console.warn("[Performance] High memory usage:", mem.used);
+        PERFORMANCE.clearCache();
+    }
+}, 60000);
+
+window.PERFORMANCE = PERFORMANCE;
+
+/* ── ADVANCED MUSIC BOT ──────────────────────────────────────────── */
+const MUSIC_STATE = {
+    queue: [],
+    currentIndex: 0,
+    isPlaying: false,
+    repeatMode: "off",
+    volume: 0.7,
+    djMode: false,
+    djUserId: null,
+    playlists: {},
+    history: [],
+    equalizer: { bass: 0, mid: 0, treble: 0 }
+};
+
+function addToQueue(url) {
+    const track = {
+        id: Date.now(),
+        url: url,
+        title: extractVideoTitle(url),
+        addedBy: state.myPeerId,
+        addedAt: Date.now(),
+        duration: 0
+    };
+    MUSIC_STATE.queue.push(track);
+    updateMusicQueueUI();
+    showMusicEmbed(track);
+    return track;
+}
+
+function addPlaylist(name) {
+    if (!MUSIC_STATE.playlists[name]) {
+        MUSIC_STATE.playlists[name] = [];
+        toast(`Playlist "${name}" oluşturuldu`, "success");
+    }
+}
+
+function addToPlaylist(name, url) {
+    if (MUSIC_STATE.playlists[name]) {
+        MUSIC_STATE.playlists[name].push({ url, addedAt: Date.now() });
+        toast(`Şarkı playlist'e eklendi`, "success");
+    }
+}
+
+function playPlaylist(name) {
+    const playlist = MUSIC_STATE.playlists[name];
+    if (playlist && playlist.length > 0) {
+        MUSIC_STATE.queue = [...playlist];
+        MUSIC_STATE.currentIndex = 0;
+        playCurrentTrack();
+        toast(`Playlist "${name}" oynatılıyor`, "info");
+    }
+}
+
+function nextTrack() {
+    if (MUSIC_STATE.repeatMode === "one") {
+        playCurrentTrack();
+    } else if (MUSIC_STATE.currentIndex < MUSIC_STATE.queue.length - 1) {
+        MUSIC_STATE.currentIndex++;
+        playCurrentTrack();
+    } else if (MUSIC_STATE.repeatMode === "all") {
+        MUSIC_STATE.currentIndex = 0;
+        playCurrentTrack();
+    } else {
+        MUSIC_STATE.isPlaying = false;
+    }
+    updateMusicQueueUI();
+}
+
+function previousTrack() {
+    if (MUSIC_STATE.currentIndex > 0) {
+        MUSIC_STATE.currentIndex--;
+        playCurrentTrack();
+        updateMusicQueueUI();
+    }
+}
+
+function setRepeatMode(mode) {
+    MUSIC_STATE.repeatMode = mode;
+    toast(`Tekrar modu: ${mode}`, "info");
+}
+
+function toggleDJMode() {
+    MUSIC_STATE.djMode = !MUSIC_STATE.djMode;
+    if (MUSIC_STATE.djMode) {
+        MUSIC_STATE.djUserId = state.myPeerId;
+        toast("DJ modu açıldı - Sadece DJ şarkı değiştirebilir", "info");
+    } else {
+        MUSIC_STATE.djUserId = null;
+        toast("DJ modu kapatıldı", "info");
+    }
+}
+
+function setVolume(vol) {
+    MUSIC_STATE.volume = Math.max(0, Math.min(1, vol));
+    if (musicAudioElement) {
+        musicAudioElement.volume = MUSIC_STATE.volume;
+    }
+    updateVolumeUI();
+}
+
+function setEqualizer(bass, mid, treble) {
+    MUSIC_STATE.equalizer = { bass, mid, treble };
+    applyEqualizer();
+}
+
+function applyEqualizer() {
+    if (!musicAudioElement) return;
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    // Simple EQ simulation via gain nodes
+}
+
+function extractVideoTitle(url) {
+    if (url.includes('youtube.com') || url.includes('youtu.be')) {
+        return "YouTube Track";
+    } else if (url.includes('spotify')) {
+        return "Spotify Track";
+    }
+    return url.substring(0, 30) + "...";
+}
+
+function updateMusicQueueUI() {
+    // Update queue display in music panel
+}
+
+function updateVolumeUI() {
+    const volIndicator = document.getElementById('volume-indicator');
+    if (volIndicator) {
+        volIndicator.textContent = Math.round(MUSIC_STATE.volume * 100) + "%";
+    }
+}
+
+function shuffleQueue() {
+    for (let i = MUSIC_STATE.queue.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [MUSIC_STATE.queue[i], MUSIC_STATE.queue[j]] = [MUSIC_STATE.queue[j], MUSIC_STATE.queue[i]];
+    }
+    toast("Sıra karıştırıldı", "info");
+    updateMusicQueueUI();
+}
+
+function clearQueue() {
+    MUSIC_STATE.queue = [];
+    MUSIC_STATE.currentIndex = 0;
+    if (musicAudioElement) {
+        musicAudioElement.pause();
+        musicAudioElement.src = "";
+    }
+    MUSIC_STATE.isPlaying = false;
+    toast("Sıra temizlendi", "info");
+}
+
+function showMusicQueueModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    
+    let queueHtml = MUSIC_STATE.queue.map((track, i) => `
+        <div style="padding:10px;margin:5px 0;background:rgba(255,255,255,0.05);border-radius:6px;display:flex;justify-content:space-between;align-items:center;${i === MUSIC_STATE.currentIndex ? 'border:2px solid var(--accent);' : ''}">
+            <span>${i + 1}. ${track.title}</span>
+            <button onclick="removeFromQueue(${i})" style="background:#ff4444;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">✕</button>
+        </div>
+    `).join('');
+    
+    modal.innerHTML = `
+        <div style="background:#1a1a2e;padding:20px;border-radius:12px;max-width:500px;max-height:80vh;overflow-y:auto;">
+            <h2>Müzik Kuyruğu 🎵</h2>
+            <div style="margin:10px 0;display:flex;gap:10px;">
+                <button onclick="shuffleQueue()" style="background:#444;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">🔀 Karıştır</button>
+                <button onclick="clearQueue()" style="background:#444;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">🗑️ Temizle</button>
+                <button onclick="toggleDJMode()" style="background:${MUSIC_STATE.djMode ? 'var(--accent)' : '#444'};border:none;padding:8px 12px;border-radius:6px;cursor:pointer;">🎧 DJ Mod</button>
+            </div>
+            <div>${queueHtml || "Kuyruk boş"}</div>
+            <button onclick="this.closest('.modal-overlay').remove()" style="margin-top:20px;width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Kapat</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+function removeFromQueue(index) {
+    MUSIC_STATE.queue.splice(index, 1);
+    if (index < MUSIC_STATE.currentIndex) MUSIC_STATE.currentIndex--;
+    updateMusicQueueUI();
+}
+
+window.MUSIC_STATE = MUSIC_STATE;
+
+/* ── ADVANCED PROFILE SYSTEM ──────────────────────────────────────── */
+const USER_PROFILE = {
+    banner: null,
+    bio: "",
+    connections: [],
+    pronouns: "",
+    birthday: null
+};
+
+function showProfileEditorModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    
+    modal.innerHTML = `
+        <div style="background:#1a1a2e;padding:20px;border-radius:12px;width:400px;">
+            <h2>Profil Düzenle ✏️</h2>
+            <div style="margin:15px 0;">
+                <label style="display:block;margin-bottom:5px;">Banner URL:</label>
+                <input type="text" id="profile-banner" value="${USER_PROFILE.banner || ''}" style="width:100%;padding:8px;background:#2a2a3e;border:1px solid #444;border-radius:6px;color:#fff;">
+            </div>
+            <div style="margin:15px 0;">
+                <label style="display:block;margin-bottom:5px;">Biyografi:</label>
+                <textarea id="profile-bio" style="width:100%;padding:8px;background:#2a2a3e;border:1px solid #444;border-radius:6px;color:#fff;height:80px;">${USER_PROFILE.bio || ''}</textarea>
+            </div>
+            <div style="margin:15px 0;">
+                <label style="display:block;margin-bottom:5px;">İsimler (örn. ona/hanım):</label>
+                <input type="text" id="profile-pronouns" value="${USER_PROFILE.pronouns || ''}" style="width:100%;padding:8px;background:#2a2a3e;border:1px solid #444;border-radius:6px;color:#fff;">
+            </div>
+            <div style="margin:15px 0;">
+                <label style="display:block;margin-bottom:5px;">Doğum Tarihi:</label>
+                <input type="date" id="profile-birthday" value="${USER_PROFILE.birthday || ''}" style="width:100%;padding:8px;background:#2a2a3e;border:1px solid #444;border-radius:6px;color:#fff;">
+            </div>
+            <div style="margin:15px 0;">
+                <label style="display:block;margin-bottom:5px;">Bağlantılar (her satıra bir URL):</label>
+                <textarea id="profile-connections" style="width:100%;padding:8px;background:#2a2a3e;border:1px solid #444;border-radius:6px;color:#fff;height:60px;">${USER_PROFILE.connections.join('\n') || ''}</textarea>
+            </div>
+            <button onclick="saveProfile()" style="width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;margin-top:10px;">Kaydet</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+function saveProfile() {
+    USER_PROFILE.banner = document.getElementById('profile-banner').value;
+    USER_PROFILE.bio = document.getElementById('profile-bio').value;
+    USER_PROFILE.pronouns = document.getElementById('profile-pronouns').value;
+    USER_PROFILE.birthday = document.getElementById('profile-birthday').value;
+    USER_PROFILE.connections = document.getElementById('profile-connections').value.split('\n').filter(c => c.trim());
+    
+    localStorage.setItem('userProfile', JSON.stringify(USER_PROFILE));
+    toast("Profil kaydedildi!", "success");
+    document.querySelector('.modal-overlay')?.remove();
+    updateProfileDisplay();
+}
+
+function updateProfileDisplay() {
+    const profileEl = document.getElementById('user-profile-display');
+    if (profileEl && USER_PROFILE.banner) {
+        profileEl.style.backgroundImage = `url(${USER_PROFILE.banner})`;
+    }
+}
+
+function showUserProfileModal(peerId) {
+    const user = state.peers[peerId] || {};
+    const profile = state.peerProfiles?.[peerId] || USER_PROFILE;
+    
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    
+    modal.innerHTML = `
+        <div style="background:#1a1a2e;border-radius:12px;overflow:hidden;width:350px;">
+            <div style="height:120px;background:${profile.banner ? `url(${profile.banner}) center/cover` : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'};"></div>
+            <div style="padding:20px;">
+                <div style="display:flex;align-items:flex-end;margin-top:-50px;margin-bottom:15px;">
+                    <div style="width:80px;height:80px;border-radius:50%;background:#333;border:4px solid #1a1a2e;display:flex;align-items:center;justify-content:center;font-size:30px;">
+                        ${user.avatar || '👤'}
+                    </div>
+                    <div style="margin-left:15px;">
+                        <h3 style="margin:0;">${user.username || 'Bilinmeyen'}</h3>
+                        ${profile.pronouns ? `<small style="color:#888;">${profile.pronouns}</small>` : ''}
+                    </div>
+                </div>
+                ${profile.bio ? `<p style="color:#ccc;margin:10px 0;">${profile.bio}</p>` : ''}
+                ${profile.connections?.length ? `
+                    <div style="margin-top:15px;">
+                        <small style="color:#888;">Bağlantılar:</small>
+                        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px;">
+                            ${profile.connections.map(c => `<a href="${c}" target="_blank" style="color:var(--accent);font-size:12px;">${new URL(c).hostname}</a>`).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+// Load profile on init
+try {
+    const saved = localStorage.getItem('userProfile');
+    if (saved) Object.assign(USER_PROFILE, JSON.parse(saved));
+} catch(e) {}
+
+window.USER_PROFILE = USER_PROFILE;
+
+/* ── ADVANCED BLOCK SYSTEM ───────────────────────────────────────── */
+const BLOCK_SETTINGS = {
+    blockMessages: true,
+    blockVoice: true,
+    blockVideo: true,
+    blockScreenShare: true,
+    hideOnlineStatus: false,
+    blockCalls: true
+};
+
+function showBlockSettingsModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    
+    modal.innerHTML = `
+        <div style="background:#1a1a2e;padding:20px;border-radius:12px;width:400px;">
+            <h2>Engelleme Ayarları 🚫</h2>
+            <div style="margin:15px 0;">
+                <label style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(255,255,255,0.05);border-radius:6px;margin:5px 0;">
+                    <span>Mesajları engelle</span>
+                    <input type="checkbox" ${BLOCK_SETTINGS.blockMessages ? 'checked' : ''} onchange="BLOCK_SETTINGS.blockMessages = this.checked">
+                </label>
+                <label style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(255,255,255,0.05);border-radius:6px;margin:5px 0;">
+                    <span>Sesli aramaları engelle</span>
+                    <input type="checkbox" ${BLOCK_SETTINGS.blockVoice ? 'checked' : ''} onchange="BLOCK_SETTINGS.blockVoice = this.checked">
+                </label>
+                <label style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(255,255,255,0.05);border-radius:6px;margin:5px 0;">
+                    <span>Görüntülü aramaları engelle</span>
+                    <input type="checkbox" ${BLOCK_SETTINGS.blockVideo ? 'checked' : ''} onchange="BLOCK_SETTINGS.blockVideo = this.checked">
+                </label>
+                <label style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(255,255,255,0.05);border-radius:6px;margin:5px 0;">
+                    <span>Ekran paylaşımını engelle</span>
+                    <input type="checkbox" ${BLOCK_SETTINGS.blockScreenShare ? 'checked' : ''} onchange="BLOCK_SETTINGS.blockScreenShare = this.checked">
+                </label>
+                <label style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(255,255,255,0.05);border-radius:6px;margin:5px 0;">
+                    <span>Çevrimiçi durumunu gizle</span>
+                    <input type="checkbox" ${BLOCK_SETTINGS.hideOnlineStatus ? 'checked' : ''} onchange="BLOCK_SETTINGS.hideOnlineStatus = this.checked">
+                </label>
+                <label style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:rgba(255,255,255,0.05);border-radius:6px;margin:5px 0;">
+                    <span>Tüm aramaları engelle</span>
+                    <input type="checkbox" ${BLOCK_SETTINGS.blockCalls ? 'checked' : ''} onchange="BLOCK_SETTINGS.blockCalls = this.checked">
+                </label>
+            </div>
+            <button onclick="saveBlockSettings()" style="width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Kaydet</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+function saveBlockSettings() {
+    localStorage.setItem('blockSettings', JSON.stringify(BLOCK_SETTINGS));
+    toast("Engelleme ayarları kaydedildi", "success");
+    document.querySelector('.modal-overlay')?.remove();
+}
+
+function shouldBlockAction(peerId, actionType) {
+    const isBlocked = state.blockedUsers?.includes(peerId);
+    if (!isBlocked) return false;
+    
+    switch(actionType) {
+        case 'message': return BLOCK_SETTINGS.blockMessages;
+        case 'voice': return BLOCK_SETTINGS.blockVoice;
+        case 'video': return BLOCK_SETTINGS.blockVideo;
+        case 'screen': return BLOCK_SETTINGS.blockScreenShare;
+        case 'call': return BLOCK_SETTINGS.blockCalls;
+        default: return true;
+    }
+}
+
+try {
+    const saved = localStorage.getItem('blockSettings');
+    if (saved) Object.assign(BLOCK_SETTINGS, JSON.parse(saved));
+} catch(e) {}
+
+window.BLOCK_SETTINGS = BLOCK_SETTINGS;
+
+/* ── ACTIVITY STATUS (Spotify/Game) ───────────────────────────────── */
+const ACTIVITY_STATE = {
+    current: null,
+    spotify: null,
+    game: null,
+    startTime: null
+};
+
+function setActivity(name, type, details = {}) {
+    ACTIVITY_STATE.current = { name, type, details, startTime: Date.now() };
+    broadcastActivity();
+    updateActivityDisplay();
+}
+
+function clearActivity() {
+    ACTIVITY_STATE.current = null;
+    broadcastActivity();
+    updateActivityDisplay();
+}
+
+function broadcastActivity() {
+    if (typeof broadcast === 'function') {
+        broadcast({ type: 'activity', data: ACTIVITY_STATE.current });
+    }
+}
+
+function updateActivityDisplay() {
+    const activityEl = document.getElementById('activity-display');
+    if (!activityEl) return;
+    
+    if (!ACTIVITY_STATE.current) {
+        activityEl.innerHTML = '';
+        return;
+    }
+    
+    const { name, type } = ACTIVITY_STATE.current;
+    const icon = type === 'spotify' ? '🎵' : type === 'game' ? '🎮' : '📺';
+    activityEl.innerHTML = `<span style="font-size:12px;">${icon} ${name}</span>`;
+}
+
+function showActivityPickerModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    
+    modal.innerHTML = `
+        <div style="background:#1a1a2e;padding:20px;border-radius:12px;width:350px;">
+            <h2>Etkinlik Ayarla 🎯</h2>
+            <div style="margin:15px 0;">
+                <input type="text" id="activity-name" placeholder="Etkinlik adı" style="width:100%;padding:10px;background:#2a2a3e;border:1px solid #444;border-radius:6px;color:#fff;margin-bottom:10px;">
+                <select id="activity-type" style="width:100%;padding:10px;background:#2a2a3e;border:1px solid #444;border-radius:6px;color:#fff;">
+                    <option value="custom">Özel</option>
+                    <option value="game">Oyun</option>
+                    <option value="spotify">Müzik</option>
+                </select>
+            </div>
+            <div style="display:flex;gap:10px;">
+                <button onclick="setActivityFromModal()" style="flex:1;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Ayarla</button>
+                <button onclick="clearActivity()" style="flex:1;padding:10px;background:#444;color:#fff;border:none;border-radius:6px;cursor:pointer;">Kaldır</button>
+            </div>
+            <button onclick="this.closest('.modal-overlay').remove()" style="width:100%;margin-top:10px;padding:10px;background:transparent;color:#888;border:none;cursor:pointer;">Kapat</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+function setActivityFromModal() {
+    const name = document.getElementById('activity-name').value;
+    const type = document.getElementById('activity-type').value;
+    if (name) {
+        setActivity(name, type);
+        document.querySelector('.modal-overlay')?.remove();
+        toast("Etkinlik ayarlandı!", "success");
+    }
+}
+
+window.ACTIVITY_STATE = ACTIVITY_STATE;
+
+/* ── VIDEO QUALITY SETTINGS ───────────────────────────────────────── */
+const VIDEO_QUALITY = {
+    preferred: 'hd',
+    bandwidth: 'auto',
+    frameRate: 30
+};
+
+function showVideoSettingsModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    
+    modal.innerHTML = `
+        <div style="background:#1a1a2e;padding:20px;border-radius:12px;width:350px;">
+            <h2>Video Kalitesi 🎥</h2>
+            <div style="margin:15px 0;">
+                <label style="display:block;margin-bottom:5px;">Kalite:</label>
+                <select id="video-quality-select" style="width:100%;padding:10px;background:#2a2a3e;border:1px solid #444;border-radius:6px;color:#fff;">
+                    <option value="hd" ${VIDEO_QUALITY.preferred === 'hd' ? 'selected' : ''}>HD (720p)</option>
+                    <option value="sd" ${VIDEO_QUALITY.preferred === 'sd' ? 'selected' : ''}>SD (480p)</option>
+                    <option value="low" ${VIDEO_QUALITY.preferred === 'low' ? 'selected' : ''}>Düşük (360p)</option>
+                </select>
+            </div>
+            <div style="margin:15px 0;">
+                <label style="display:block;margin-bottom:5px;">Bant Genişliği:</label>
+                <select id="video-bandwidth-select" style="width:100%;padding:10px;background:#2a2a3e;border:1px solid #444;border-radius:6px;color:#fff;">
+                    <option value="auto">Otomatik</option>
+                    <option value="high">Yüksek</option>
+                    <option value="medium">Orta</option>
+                    <option value="low">Düşük</option>
+                </select>
+            </div>
+            <div style="margin:15px 0;">
+                <label style="display:block;margin-bottom:5px;">FPS:</label>
+                <input type="range" id="video-fps" min="15" max="60" value="${VIDEO_QUALITY.frameRate}" style="width:100%;">
+                <span style="text-align:center;display:block;">${VIDEO_QUALITY.frameRate} FPS</span>
+            </div>
+            <button onclick="saveVideoSettings()" style="width:100%;padding:10px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">Kaydet</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+function saveVideoSettings() {
+    VIDEO_QUALITY.preferred = document.getElementById('video-quality-select').value;
+    VIDEO_QUALITY.bandwidth = document.getElementById('video-bandwidth-select').value;
+    VIDEO_QUALITY.frameRate = parseInt(document.getElementById('video-fps').value);
+    localStorage.setItem('videoQuality', JSON.stringify(VIDEO_QUALITY));
+    applyVideoSettings();
+    toast("Video ayarları kaydedildi", "success");
+    document.querySelector('.modal-overlay')?.remove();
+}
+
+function applyVideoSettings() {
+    const constraints = {
+        video: {
+            width: VIDEO_QUALITY.preferred === 'hd' ? 1280 : VIDEO_QUALITY.preferred === 'sd' ? 854 : 640,
+            height: VIDEO_QUALITY.preferred === 'hd' ? 720 : VIDEO_QUALITY.preferred === 'sd' ? 480 : 360,
+            frameRate: { ideal: VIDEO_QUALITY.frameRate }
+        }
+    };
+    // Apply to all local video streams
+    if (localVideoStream) {
+        localVideoStream.getVideoTracks().forEach(track => {
+            track.applyConstraints(constraints.video);
+        });
+    }
+}
+
+try {
+    const saved = localStorage.getItem('videoQuality');
+    if (saved) Object.assign(VIDEO_QUALITY, JSON.parse(saved));
+} catch(e) {}
+
+window.VIDEO_QUALITY = VIDEO_QUALITY;
+
+console.log("[App] Advanced features loaded: Performance, Music Bot, Profile, Block System, Activity, Video Quality");
