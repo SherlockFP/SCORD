@@ -33,7 +33,7 @@ app = FastAPI(title="SCORD Signaling Server")
 # ── Global State ──────────────────────────────────────────────────────────────
 
 rooms: Dict[str, "Room"] = {}
-DATABASE_FILE = "rooms.json"
+DATABASE_FILE = os.environ.get("SCORD_DATABASE_FILE", "rooms.json")
 
 DEFAULT_ROLE_PERMISSIONS = {
     "owner": {
@@ -102,6 +102,7 @@ def load_db():
             room.peer_roles = rdata.get("peer_roles", room.peer_roles)
             room.pinned_messages = rdata.get("pinned_messages", [])
             room.messages = rdata.get("messages", {})
+            room.community = rdata.get("community", {"polls": [], "events": []})
             room.channel_backgrounds = rdata.get("channel_backgrounds", {})
             room.icon_url = rdata.get("icon_url", None)
             room.invite_code = rdata.get("invite_code", str(uuid.uuid4())[:6].upper())
@@ -242,6 +243,7 @@ class Room:
         self.peer_roles = {owner_id: "admin"}
         self.pinned_messages = []
         self.messages = {}  # channel_id -> list[dict]
+        self.community = {"polls": [], "events": []}
         self.channel_backgrounds = {}  # channel_id -> image url
         self.icon_url = None
         self.invite_code = str(uuid.uuid4())[:6].upper()
@@ -259,6 +261,7 @@ class Room:
             "peer_roles": self.peer_roles,
             "pinned_messages": self.pinned_messages,
             "messages": self.messages,
+            "community": self.community,
             "channel_backgrounds": self.channel_backgrounds,
             "icon_url": self.icon_url,
             "invite_code": self.invite_code,
@@ -271,7 +274,7 @@ class Room:
             "room_id": self.room_id,
             "name": self.name,
             "owner_id": self.owner_id,
-            "peer_count": max(1, len(self.peers)),
+            "peer_count": len(self.peers),
             "channels": self.channels,
             "roles": self.roles,
             "channel_permissions": self.channel_permissions,
@@ -333,6 +336,75 @@ class Room:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def community_action(room: Room, peer_id: str, msg: dict):
+    """Room socket identity only; this is not an authenticated account system."""
+    action = msg.get("action")
+    manager = room.role_for(peer_id) in {"owner", "admin", "mod"}
+    if action in {"create_poll", "create_event", "close_poll", "delete_poll", "delete_event"} and not manager:
+        raise ValueError("Bu işlem için sunucu yöneticisi veya moderatör olmalısınız.")
+    def field(name, limit):
+        value = msg.get(name)
+        if not isinstance(value, str) or not value.strip() or len(value.strip()) > limit:
+            raise ValueError(f"{name}: 1–{limit} karakter girin.")
+        return value.strip()
+    if action == "create_poll":
+        title = field("title", 160)
+        options = msg.get("options")
+        if not isinstance(options, list) or not 2 <= len(options) <= 6 or any(not isinstance(o, str) or not o.strip() or len(o.strip()) > 80 for o in options):
+            raise ValueError("2–6 seçenek girin; her biri en fazla 80 karakter olabilir.")
+        options = [o.strip() for o in options]
+        if len(set(o.casefold() for o in options)) != len(options):
+            raise ValueError("Anket seçenekleri birbirinden farklı olmalı.")
+        if len(room.community["polls"]) >= 50:
+            raise ValueError("En fazla 50 anket saklanabilir. Önce eski bir anketi silin.")
+        room.community["polls"].append({"id": uuid.uuid4().hex, "title": title, "options": options, "votes": {}, "closed": False, "created_at": time.time()})
+    elif action == "create_event":
+        title = field("title", 160)
+        description = field("description", 600)
+        starts_at = msg.get("starts_at")
+        if isinstance(starts_at, bool) or not isinstance(starts_at, (int, float)) or not time.time() < starts_at < time.time() + 366 * 86400:
+            raise ValueError("Gelecek bir yıl içinde geçerli bir tarih seçin.")
+        if len(room.community["events"]) >= 50:
+            raise ValueError("En fazla 50 etkinlik saklanabilir. Önce eski bir etkinliği silin.")
+        room.community["events"].append({"id": uuid.uuid4().hex, "title": title, "description": description, "starts_at": starts_at, "attendees": []})
+    elif action in {"vote", "close_poll", "delete_poll", "rsvp", "delete_event"}:
+        collection = room.community["events" if action in {"rsvp", "delete_event"} else "polls"]
+        item = next((x for x in collection if x["id"] == msg.get("id")), None)
+        if item is None:
+            raise ValueError("Kayıt bulunamadı; listeyi yenileyin.")
+        if action == "vote":
+            option = msg.get("option")
+            if item["closed"]:
+                raise ValueError("Bu anket oylamaya kapalı.")
+            if type(option) is not int or not 0 <= option < len(item["options"]):
+                raise ValueError("Geçerli bir seçenek seçin.")
+            item["votes"][peer_id] = option
+        elif action == "close_poll":
+            item["closed"] = True
+        elif action == "rsvp":
+            if item["starts_at"] <= time.time():
+                raise ValueError("Başlamış bir etkinliğin katılımı değiştirilemez.")
+            if type(msg.get("attending")) is not bool:
+                raise ValueError("Geçerli bir katılım seçin.")
+            if msg["attending"] and peer_id not in item["attendees"]:
+                item["attendees"].append(peer_id)
+            elif not msg["attending"] and peer_id in item["attendees"]:
+                item["attendees"].remove(peer_id)
+        else:
+            collection.remove(item)
+    else:
+        raise ValueError("Bilinmeyen topluluk işlemi.")
+
+
+def community_snapshot(room: Room, peer_id: str):
+    return {"type": "community_state", "room_id": room.room_id,
+            "can_manage": room.role_for(peer_id) in {"owner", "admin", "mod"},
+            "polls": [{k: v for k, v in p.items() if k != "votes"} | {
+                "counts": [list(p["votes"].values()).count(i) for i in range(len(p["options"]))],
+                "my_vote": p["votes"].get(peer_id)} for p in room.community["polls"]],
+            "events": [{k: v for k, v in e.items() if k != "attendees"} | {
+                "attendee_count": len(e["attendees"]), "attending": peer_id in e["attendees"]} for e in room.community["events"]]}
 
 async def broadcast_to_room(room: Room, message: dict, exclude: str | None = None):
     """Send a JSON message to every peer in a room except the excluded one."""
@@ -773,6 +845,19 @@ async def signaling_ws(websocket: WebSocket, room_id: str, peer_id: str):
             msg = json.loads(raw)
             msg_type = msg.get("type", "")
 
+            if msg_type in {"community_get", "community_action"}:
+                try:
+                    if msg_type == "community_action":
+                        community_action(room, peer_id, msg)
+                        schedule_save_db()
+                        for member_id in list(room.peers):
+                            await send_to_peer(room, member_id, community_snapshot(room, member_id))
+                    else:
+                        await websocket.send_text(json.dumps(community_snapshot(room, peer_id)))
+                except ValueError as exc:
+                    await websocket.send_text(json.dumps({"type": "community_error", "message": str(exc)}))
+                continue
+
             if msg_type in ("offer", "answer", "ice_candidate"):
                 # Route signaling messages to a specific peer
                 target = msg.get("target")
@@ -1000,7 +1085,7 @@ def serve_app_js():
 
 @app.get("/{full_path:path}")
 def serve_spa(full_path: str):
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    return FileResponse(str(Path(__file__).parent / "index.html"))
 
 # Render / proxies often use HEAD / for health checks.
 @app.head("/{full_path:path}", include_in_schema=False)
@@ -1011,7 +1096,8 @@ def serve_spa_head(full_path: str):
 @app.on_event("startup")
 def startup_event():
     load_db()
-    ensure_template_rooms()
+    if os.environ.get("SCORD_SEED_DEMO_ROOMS", "").lower() in {"1", "true", "yes"}:
+        ensure_template_rooms()
 
 if __name__ == "__main__":
     import uvicorn

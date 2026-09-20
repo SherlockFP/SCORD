@@ -510,6 +510,7 @@ function startRttPingTimer() {
 }
 
 function applyAvatarToElement(el, color, image, name) {
+    if (!el) return;
     if (image) {
         el.style.backgroundColor = "transparent";
         el.style.backgroundImage = `url(${image})`;
@@ -638,9 +639,9 @@ function normalizeReactionsMap(raw) {
 
 function escapeHtml(s) {
     if (s == null) return "";
-    const d = document.createElement("div");
-    d.textContent = String(s);
-    return d.innerHTML;
+    return String(s).replace(/[&<>"']/g, char => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[char]);
 }
 
 // Status System Functions
@@ -2179,6 +2180,7 @@ function initSetup() {
 /* ── Start app after identity chosen ─────────────────────── */
 function startApp() {
     document.getElementById("setup-overlay").classList.remove("active");
+    document.getElementById("setup-overlay").style.display = "none";
     document.getElementById("app").classList.remove("hidden");
     loadUserPrefs();
     applyScordAppearance();
@@ -2216,9 +2218,11 @@ function startApp() {
     };
     document.body.appendChild(quickAvInput);
 
-    avatar.style.cursor = "pointer";
-    avatar.title = "Profil Fotoğrafını Değiştir";
-    avatar.onclick = () => quickAvInput.click();
+    if (avatar) {
+        avatar.style.cursor = "pointer";
+        avatar.title = "Profil Fotoğrafını Değiştir";
+        avatar.onclick = () => quickAvInput.click();
+    }
 
     showHomeView();
     refreshDiscovery();
@@ -2355,7 +2359,7 @@ function showChatView(serverId, channelId) {
         return;
     }
 
-    const channel = server.channels.find(c => c.id === channelId);
+    let channel = server.channels.find(c => c.id === channelId);
     if (!channel) {
         console.error("[ChatView] Channel not found:", channelId);
         // Try to find first text channel as fallback
@@ -2363,6 +2367,7 @@ function showChatView(serverId, channelId) {
         if (firstText) {
             console.log("[ChatView] Using fallback channel:", firstText.id);
             channelId = firstText.id;
+            channel = firstText;
         } else {
             toast("Kanal bulunamadı.", "error");
             return;
@@ -2370,6 +2375,17 @@ function showChatView(serverId, channelId) {
     }
 
     const wasInVoice = !!state.voiceChannelId;
+
+    if (state.activeServerId !== serverId || state.activeChannelId !== channelId) {
+        persistChatDraftFor(state.activeServerId, state.activeChannelId);
+        const composer = document.getElementById("chat-input");
+        if (composer) {
+            composer.value = localStorage.getItem(draftStorageKey(serverId, channelId)) || "";
+            composer.style.height = "auto";
+            composer.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        clearReplyTarget();
+    }
 
     state.activeServerId = serverId;
     state.activeChannelId = channelId;
@@ -2390,6 +2406,8 @@ function showChatView(serverId, channelId) {
     // Update channel name in header
     const channelNameEl = document.getElementById("active-channel-name");
     if (channelNameEl) channelNameEl.textContent = channel.name;
+    const serverNameEl = document.getElementById("sidebar-server-name");
+    if (serverNameEl) serverNameEl.textContent = server.name;
 
     // Auto-focus chat input
     setTimeout(() => document.getElementById("chat-input")?.focus(), 100);
@@ -3338,9 +3356,15 @@ async function sendMessage() {
     }
 
     let finalJoinText = text;
+    const sendingServer = state.activeServerId;
+    const sendingChannel = state.activeChannelId;
     if (state.translationEnabled) {
         toast("Çeviriliyor...", "info");
         finalJoinText = await translateText(text, state.targetLang);
+        if (state.activeServerId !== sendingServer || state.activeChannelId !== sendingChannel) {
+            toast("Kanal değiştiği için mesaj gönderilmedi. Önceki kanalda taslağın duruyor.", "info");
+            return;
+        }
     }
 
     const msg = {
@@ -3376,6 +3400,7 @@ async function sendMessage() {
     input.value = "";
     input.style.height = "auto";
 
+    persistChatDraftFor(state.activeServerId, state.activeChannelId);
     clearReplyTarget();
     saveMessage(state.activeServerId, msg);
     meshBroadcastReliable({ type: "chat", payload: msg });
@@ -3436,6 +3461,7 @@ function applyMentionsThenEscape(text, serverId) {
         });
     }
     s = escapeHtml(s);
+    s = s.replace(/@(everyone|here)\b/g, '<span class="mention mention-everyone" data-mention="$1">@$1</span>');
     for (let i = 0; i < ph.length; i++) {
         s = s.split(`\uE000${i}\uE001`).join(ph[i]);
     }
@@ -3448,9 +3474,10 @@ function parseMessageText(text, serverId) {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     return String(text).split(urlRegex).map(part => {
         if (part.match(urlRegex)) {
+            const safeUrl = escapeHtml(part);
             // Check for images
             if (part.match(/\.(jpeg|jpg|gif|png|webp)($|\?)/i)) {
-                return `<a href="${part}" target="_blank" class="rich-link"><img src="${part}" class="chat-embed-img" alt="" loading="lazy" decoding="async" /></a>`;
+                return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="rich-link"><img src="${safeUrl}" class="chat-embed-img" alt="" loading="lazy" decoding="async" /></a>`;
             }
             // Check for YouTube
             const ytMatch = part.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
@@ -3458,7 +3485,7 @@ function parseMessageText(text, serverId) {
                 return `<div class="chat-embed-video"><iframe src="https://www.youtube.com/embed/${ytMatch[1]}" frameborder="0" allowfullscreen></iframe></div>`;
             }
             // Generic link
-            return `<a href="${part}" target="_blank" class="chat-link">${part}</a>`;
+            return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="chat-link">${safeUrl}</a>`;
         }
         return renderPlainChatSegment(part, sid);
     }).join("");
@@ -3693,29 +3720,39 @@ function promptAddChannel(serverId, type) {
 
 async function submitAddChannel(serverId, type) {
     const nameInput = document.getElementById("new-ch-name");
-    const name = nameInput.value.trim().toLowerCase().replace(/\s+/g, '-');
-    if (!name) return toast("Bir kanal adı girmelisin.", "error");
+    const name = (nameInput?.value || "").trim().toLowerCase().replace(/\s+/g, '-');
+    if (!name) { toast("Bir kanal adı girmelisin.", "error"); return false; }
 
+    try {
     const res = await fetch(`${API_BASE}/rooms/${serverId}/channels`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, type })
     });
-    const newCh = await res.json();
-
-    if (newCh.error) return toast(newCh.error, "error");
+    const newCh = await res.json().catch(() => null);
+    if (!res.ok || !newCh || newCh.error || typeof newCh.id !== "string" || !newCh.id || typeof newCh.name !== "string" || !["text", "voice"].includes(newCh.type)) {
+        const detail = typeof newCh?.error === "string" ? newCh.error : typeof newCh?.detail === "string" ? newCh.detail : "Kanal oluşturulamadı. Tekrar deneyebilirsin.";
+        toast(detail, "error");
+        return false;
+    }
 
     const server = state.servers.find(s => s.id === serverId);
     if (server) {
-        server.channels.push(newCh);
+        if (!server.channels) server.channels = [];
+        if (!server.channels.some(channel => channel.id === newCh.id)) server.channels.push(newCh);
         if (state.mesh) {
             state.mesh.broadcast({ type: "channel_create", payload: { serverId, channel: newCh } });
         }
         updateChannelSidebar(serverId);
     }
 
-    hideModal();
+    if (document.getElementById("new-ch-name") === nameInput) hideModal();
     toast(`#${name} kanalı oluşturuldu.`, "success");
+    return true;
+    } catch (error) {
+        toast("Sunucuya ulaşılamadı. Bağlantını kontrol edip tekrar dene.", "error");
+        return false;
+    }
 }
 
 async function deleteChannel(serverId, channelId) {
@@ -3910,6 +3947,7 @@ function connectMesh(serverId) {
 
 /* ── P2P event handlers ───────────────────────────────────── */
 function handleIncomingP2P(fromPeerId, data, roomId) {
+    if (window.ScordDM?.receive(fromPeerId, data)) return;
     if (data && data.type === "broadcast" && data.payload && typeof data.payload === "object") {
         handleIncomingP2P(fromPeerId, data.payload, roomId);
         return;
@@ -4027,6 +4065,9 @@ function handleIncomingP2P(fromPeerId, data, roomId) {
             }
         }
     } else if (data.type === "dm" || data.type === "dm_relay") {
+        if (state.blockedPeers?.includes(fromPeerId) || window.ScordSocial?.getState?.()?.blocked?.[fromPeerId]) return;
+        if (!data.payload || typeof data.payload.text !== "string" || data.payload.text.length > 2000) return;
+        data.payload = { ...data.payload, authorId: fromPeerId };
         if (data.type === "dm_relay" && data.target && data.target !== state.peerId) {
             return;
         }
@@ -4614,9 +4655,10 @@ function loadUserPrefs() {
             dm: o.dm !== false,
             join: o.join !== false,
             chatLevel,
+            messageSound: o.messageSound !== false,
         };
     } catch {
-        state.notifSettings = { chat: true, dm: true, join: true, chatLevel: "all" };
+        state.notifSettings = { chat: true, dm: true, join: true, chatLevel: "all", messageSound: true };
     }
     state.compactMode = localStorage.getItem("scord_compact_mode") === "1";
     document.body.classList.toggle("compact-mode", state.compactMode);
@@ -5980,8 +6022,8 @@ function openSettingsModal() {
             </select>
           </div>
           <div class="form-group" style="margin-bottom:12px">
-            <label class="modal-label">Giriş Sesi — <span id="vol-label">${Math.round((vs.volume || 1) * 100)}%</span></label>
-            <input type="range" id="settings-volume" min="0" max="3" step="0.1" value="${vs.volume || 1}" style="width:100%" oninput="document.getElementById('vol-label').textContent=Math.round(this.value*100)+'%'" />
+            <label class="modal-label">Giriş Sesi — <span id="vol-label">${Math.round((vs.volume ?? 1) * 100)}%</span></label>
+            <input type="range" id="settings-volume" min="0" max="3" step="0.1" value="${vs.volume ?? 1}" style="width:100%" oninput="document.getElementById('vol-label').textContent=Math.round(this.value*100)+'%'" />
           </div>
           <div class="form-group" style="margin-bottom:10px">
             <label class="modal-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
@@ -6768,6 +6810,7 @@ function saveSettings() {
 
     if (micId !== undefined) {
         state.voiceSettings = {
+            ...state.voiceSettings,
             micId, filter, volume: parseFloat(volume),
             noiseSuppression, echoCancellation,
             inputMode, pttKey
@@ -6780,9 +6823,9 @@ function saveSettings() {
         const track = state.originalMicStream.getAudioTracks()[0];
         if (track) {
             if (state.voiceSettings.inputMode === "ptt") {
-                track.enabled = !!state._pttActive;
+                track.enabled = !state.micMuted && !!state._pttActive;
             } else {
-                track.enabled = true;
+                track.enabled = !state.micMuted;
             }
         }
     }
@@ -7170,6 +7213,8 @@ function saveServerSettings() {
 
 /* ── Direct Messaging ─────────────────────────────────────── */
 function openDM(peerId, name, avatarColor = null, avatarImage = null) {
+    window.ScordDM?.captureDraft();
+    window.ScordDM?.restore();
     state.activeDM = peerId;
     const peer = getPeerDisplaySafe(peerId, name, avatarColor, avatarImage);
     document.getElementById("dm-target-name").textContent = "@" + peer.name;
@@ -7181,20 +7226,31 @@ function openDM(peerId, name, avatarColor = null, avatarImage = null) {
 
     addToRecentDMs(peerId, peer.name, peer.avatarColor, peer.avatarImage);
     showDMMainView(peerId, peer.name, peer.avatarColor, peer.avatarImage);
+    window.ScordDM?.restoreDraft();
     renderDMMessages(peerId);
     setTimeout(() => document.getElementById("dm-main-input")?.focus(), 80);
 }
 
 function addToRecentDMs(peerId, name, avatarColor, avatarImage) {
     if (!state.recentDMs) state.recentDMs = [];
-    const idx = state.recentDMs.findIndex(d => d.peerId === peerId);
-    if (idx !== -1) state.recentDMs.splice(idx, 1);
+    state.recentDMs = state.recentDMs.filter(d => d.peerId !== peerId);
 
     state.recentDMs.unshift({ peerId, name, avatarColor, avatarImage });
     if (state.recentDMs.length > 50) state.recentDMs.pop();
 
     localStorage.setItem("scord_recent_dms", JSON.stringify(state.recentDMs));
     if (!state.activeServerId) renderHomeSidebar();
+}
+
+function uniqueDMContacts(rows, query = "") {
+    const seen = new Set();
+    const q = String(query).trim().toLocaleLowerCase("tr-TR");
+    return rows.filter(row => {
+        if (!row.peerId || seen.has(row.peerId)) return false;
+        if (q && !String(row.name || "").toLocaleLowerCase("tr-TR").includes(q)) return false;
+        seen.add(row.peerId);
+        return true;
+    });
 }
 
 function renderHomeSidebar() {
@@ -7239,11 +7295,8 @@ function renderHomeSidebar() {
                 kind: "friend",
             })),
         ];
-        const seen = new Set();
-        rows
-            .filter(row => row.peerId && !seen.has(row.peerId) && (!q || String(row.name || "").toLowerCase().includes(q)))
+        uniqueDMContacts(rows, query)
             .forEach(row => {
-                seen.add(row.peerId);
                 const item = createSidebarItem(row.name || "Kullanici", row.avatarColor, row.avatarImage, () => openDM(row.peerId, row.name, row.avatarColor, row.avatarImage), row.peerId);
                 if (state.activeDM === row.peerId) item.classList.add("active");
                 dmList.appendChild(item);
@@ -7420,6 +7473,8 @@ function ensureDMMainView() {
     view.querySelector("#dm-main-close-btn")?.addEventListener("click", () => hideDMMainView(true));
     view.querySelector("#dm-main-call-btn")?.addEventListener("click", () => startDirectCall(state.activeDM));
     view.querySelector("#dm-main-search-input")?.addEventListener("input", renderDMMainSearch);
+    window.ScordIcons?.decorate(view.querySelector("#dm-main-send-btn"), "send", "Mesaj gönder");
+    window.ScordIcons?.decorate(view.querySelector("#dm-main-close-btn"), "close", "Sohbeti kapat");
     return view;
 }
 
@@ -7447,6 +7502,7 @@ function showDMMainView(peerId, name, avatarColor, avatarImage) {
 }
 
 function hideDMMainView(clearActive = false) {
+    window.ScordDM?.captureDraft();
     const view = document.getElementById("dm-main-view");
     if (view) view.classList.add("hidden");
     document.getElementById("home-view")?.classList.remove("home-dm-active");
@@ -7528,10 +7584,8 @@ function renderDMMainSearch() {
         ...(state.recentDMs || []).map(dm => ({ ...dm, label: "DM" })),
         ...(state.friends || []).map(f => ({ peerId: f.peerId, name: f.name || f.username, avatarColor: f.avatarColor, avatarImage: f.avatarImage, label: "Arkadas" })),
     ];
-    const seen = new Set();
     actions.innerHTML = "";
-    rows.filter(row => row.peerId && !seen.has(row.peerId) && (!q || String(row.name || "").toLowerCase().includes(q))).slice(0, 6).forEach(row => {
-        seen.add(row.peerId);
+    uniqueDMContacts(rows, q).slice(0, 6).forEach(row => {
         const btn = document.createElement("button");
         btn.className = "dm-main-person-chip";
         btn.type = "button";
@@ -7600,6 +7654,22 @@ function renderDMMessages(peerId) {
 
         bubble.appendChild(meta);
         bubble.appendChild(text);
+        if (msg.authorId === state.peerId && msg.delivery) {
+            const delivery = document.createElement("div");
+            delivery.className = "dm-delivery";
+            delivery.textContent = window.ScordDM?.statusText(msg.delivery) || "";
+            if (msg.delivery === "queued") {
+                for (const [action, label] of [["retry", "Şimdi dene"], ["cancel", "Tekrarı durdur"]]) {
+                    const button = document.createElement("button");
+                    button.type = "button"; button.textContent = label;
+                    button.dataset.dmAction = action;
+                    button.dataset.peer = peerId;
+                    button.dataset.messageId = msg.id;
+                    delivery.appendChild(button);
+                }
+            }
+            bubble.appendChild(delivery);
+        }
         row.appendChild(av);
         row.appendChild(bubble);
         area.appendChild(row);
@@ -7629,6 +7699,14 @@ function sendDM() {
         text,
         time: now()
     };
+    if (window.ScordDM) {
+        const result = window.ScordDM.send(state.activeDM, msg);
+        if (result.error) { toast(result.error, "warning"); return; }
+        if (mainInput) mainInput.value = "";
+        if (overlayInput) overlayInput.value = "";
+        window.ScordDM.captureDraft();
+        return;
+    }
     if (!state.dms) state.dms = {};
     if (!state.dms[state.activeDM]) state.dms[state.activeDM] = [];
     state.dms[state.activeDM].push(msg);
@@ -8076,13 +8154,10 @@ document.addEventListener("DOMContentLoaded", () => {
     // Mic toggle
     const micToggleBtn = document.getElementById("mic-toggle-btn");
     if (micToggleBtn) {
-        micToggleBtn.onclick = () => {
-            if (!state.mesh) return;
-            const muted = state.mesh.toggleMic();
-            micToggleBtn.classList.toggle("muted", muted);
-            toast(muted ? "Mikrofon kapatıldı 🔇" : "Mikrofon açıldı 🎙️", "info");
-        };
+        micToggleBtn.onclick = toggleMicrophone;
     }
+    const deafenToggleBtn = document.getElementById("deafen-toggle-btn");
+    if (deafenToggleBtn) deafenToggleBtn.onclick = toggleDeafen;
 
     // Emoji picker
     const emojiBtn = document.getElementById("emoji-btn");
@@ -8238,7 +8313,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // PTT Global Listeners
     window.addEventListener("keydown", (e) => {
-        if (state.voiceSettings?.inputMode === "ptt" && e.key === state.voiceSettings.pttKey) {
+        if (!state.micMuted && state.voiceSettings?.inputMode === "ptt" && e.key === state.voiceSettings.pttKey) {
             if (state._pttActive) return;
             state._pttActive = true;
             if (state.originalMicStream) {
@@ -8446,13 +8521,13 @@ function updateMuteStates() {
     Object.keys(state.remoteMedia).forEach(peerId => {
         const video = state.remoteMedia[peerId];
         if (!video) return;
-        const shouldHear = !!myChannel && myChannelPeers.includes(peerId) && peerId !== state.peerId && !blocked.has(peerId);
+        const shouldHear = !state.deafened && !!myChannel && myChannelPeers.includes(peerId) && peerId !== state.peerId && !blocked.has(peerId);
 
         video.muted = !shouldHear;
         (video.srcObject?.getAudioTracks?.() || []).forEach(track => {
             track.enabled = shouldHear;
         });
-        video.volume = Math.max(0, Math.min(2, Number(state.userVolumes?.[peerId] ?? 100) / 100));
+        video.volume = Math.max(0, Math.min(1, Number(state.userVolumes?.[peerId] ?? 100) / 100));
         if (shouldHear) video.play?.().catch(() => { });
     });
 }
@@ -8464,7 +8539,7 @@ function setPeerVolume(peerId, value) {
     state.userVolumes[peerId] = volume;
     localStorage.setItem("scord_user_volumes", JSON.stringify(state.userVolumes));
     const video = state.remoteMedia?.[peerId];
-    if (video) video.volume = volume / 100;
+    if (video) video.volume = Math.min(1, volume / 100);
 }
 
 /* ── Music Bot (YouTube IFrame API) ───────────────────────── */
@@ -9430,54 +9505,7 @@ window.startApp = function () {
 // Enhanced mention parsing in parseMessageText
 const _origParseMessageText = window.parseMessageText;
 window.parseMessageText = function (text, serverId) {
-    if (!text) return "";
-    const sid = serverId !== undefined ? serverId : state.activeServerId;
-
-    // First handle @everyone and @here
-    let result = String(text);
-    const server = state.servers.find(s => s.id === sid);
-
-    // @everyone mention
-    result = result.replace(/@everyone/g, (match) => {
-        return `<span class="mention mention-everyone" data-mention="everyone" title="Everyone" style="background:rgba(239,68,68,0.2);color:#fca5a5;">@everyone</span>`;
-    });
-
-    // @here mention
-    result = result.replace(/@here/g, (match) => {
-        return `<span class="mention mention-here" data-mention="here" title="Here" style="background:rgba(34,197,94,0.2);color:#86efac;">@here</span>`;
-    });
-
-    // @user mentions (handle usernames with spaces)
-    if (server && server.members) {
-        const members = server.members;
-        // Sort by length descending to match longer names first
-        const sortedNames = [...new Set(members.map(m => m.username).filter(Boolean))].sort((a, b) => b.length - a.length);
-
-        sortedNames.forEach(name => {
-            const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            const regex = new RegExp(`(^|\\s)@${escaped}(?!\\w)`, "g");
-            result = result.replace(regex, (full, lead) => {
-                const member = members.find(m => m.username === name);
-                return `${lead}<span class="mention" data-peer="${member?.peer_id || ""}" style="background:rgba(99,102,241,0.2);color:#c7d2fe;cursor:pointer;">@${escapeHtml(name)}</span>`;
-            });
-        });
-    }
-
-    // Handle URLs and other formatting
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    return result.split(urlRegex).map(part => {
-        if (part.match(urlRegex)) {
-            if (part.match(/\.(jpeg|jpg|gif|png|webp)($|\?)/i)) {
-                return `<a href="${part}" target="_blank" class="rich-link"><img src="${part}" class="chat-embed-img" alt="" loading="lazy" decoding="async" /></a>`;
-            }
-            const ytMatch = part.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-            if (ytMatch) {
-                return `<div class="chat-embed-video"><iframe src="https://www.youtube.com/embed/${ytMatch[1]}" frameborder="0" allowfullscreen></iframe></div>`;
-            }
-            return `<a href="${part}" target="_blank" class="chat-link">${part}</a>`;
-        }
-        return part;
-    }).join("");
+    return _origParseMessageText(text, serverId !== undefined ? serverId : state.activeServerId);
 };
 
 // Mention click handler
@@ -11198,7 +11226,7 @@ openSettingsModal = window.openSettingsModal = function () {
             <h3>Ses ve Video</h3>
             <label>Mikrofon<select class="modal-input" id="settings-mic-select"><option value="default">Varsayilan</option></select></label>
             <label>Ses filtresi<select class="modal-input" id="settings-filter"><option value="none">Normal</option><option value="bass">Bass Boost</option><option value="radio">Lo-Fi Radio</option></select></label>
-            <label>Giris sesi <span id="vol-label">${Math.round((vs.volume || 1) * 100)}%</span><input type="range" id="settings-volume" min="0" max="3" step="0.1" value="${vs.volume || 1}" oninput="document.getElementById('vol-label').textContent=Math.round(this.value*100)+'%'"></label>
+            <label>Giris sesi <span id="vol-label">${Math.round((vs.volume ?? 1) * 100)}%</span><input type="range" id="settings-volume" min="0" max="3" step="0.1" value="${vs.volume ?? 1}" oninput="document.getElementById('vol-label').textContent=Math.round(this.value*100)+'%'"></label>
             <label class="scord-check"><input type="checkbox" id="settings-noise-suppress" ${vs.noiseSuppression !== false ? "checked" : ""}> Gurultu engelleme</label>
             <label class="scord-check"><input type="checkbox" id="settings-echo-cancel" ${vs.echoCancellation !== false ? "checked" : ""}> Yanki engelleme</label>
             <label class="scord-check"><input type="checkbox" id="settings-auto-gain" ${vs.autoGainControl === true ? "checked" : ""}> Otomatik seviye dengeleme</label>
@@ -13687,7 +13715,7 @@ function createNewServer() {
 function createNewChannel() {
     const server = state.servers.find(s => s.id === state.activeServerId);
     if (server) {
-        showCreateChannelModal(server.id);
+        promptAddChannel(server.id, "text");
     }
 }
 
@@ -13820,15 +13848,32 @@ function moveToNextServer() {
 }
 
 function toggleMicrophone() {
-    if (state.mesh && state.mesh.voiceActive) {
-        toggleMute();
-    }
+    if (!state.mesh?.voiceActive) return toast("Önce bir ses kanalına katıl.", "info");
+    const muted = !!state.mesh.toggleMic();
+    state.micMuted = muted;
+    state.muted = muted;
+    const enabled = !muted && (state.voiceSettings?.inputMode !== "ptt" || !!state._pttActive);
+    [state.originalMicStream, state.mesh.localStream].forEach(stream => {
+        stream?.getAudioTracks().forEach(track => { track.enabled = enabled; });
+    });
+    const button = document.getElementById("mic-toggle-btn");
+    button?.classList.toggle("muted", muted);
+    button?.setAttribute("aria-pressed", String(muted));
+    state.mesh.broadcast({ type: "voice_mute_status", peerId: state.peerId, muted, deafened: !!state.deafened });
+    toast(muted ? "Mikrofon kapatıldı" : "Mikrofon açıldı", "info");
 }
 
 function toggleDeafen() {
-    if (state.mesh && state.mesh.voiceActive) {
-        toggleDeafen();
-    }
+    state.deafened = !state.deafened;
+    updateMuteStates();
+    Object.entries(state.remoteAudios || {}).forEach(([peerId, audio]) => {
+        audio.muted = state.deafened || (state.blockedPeers || []).includes(peerId);
+    });
+    const button = document.getElementById("deafen-toggle-btn");
+    button?.classList.toggle("muted", state.deafened);
+    button?.setAttribute("aria-pressed", String(state.deafened));
+    state.mesh?.broadcast({ type: "voice_mute_status", peerId: state.peerId, muted: !!state.micMuted, deafened: state.deafened });
+    toast(state.deafened ? "Gelen ses kapatıldı" : "Gelen ses açıldı", "info");
 }
 
 function openProfileSettings() {
@@ -16008,12 +16053,6 @@ async function getMockGifs(category, query = '') {
         console.error('Giphy API error:', e);
         return [];
     }
-        default:
-            filteredGifs = mockGifs;
-    }
-
-    // Shuffle and return subset
-    return filteredGifs.sort(() => Math.random() - 0.5).slice(0, 12);
 }
 
 // GIF message display
@@ -19976,6 +20015,7 @@ console.log("[Shercord V24] Voice empty layout, auto members, leave/join logs, t
     if (!confirm("@" + username + " ile olan DM geçmişini silmek istediğine emin misin?")) return;
     if (!window.state) return;
     if (!window.state.dms) window.state.dms = {};
+    if (window.ScordDM?.clearPeer(peerId) === false) return;
     delete window.state.dms[peerId];
     try {
       var stored = JSON.parse(localStorage.getItem("scord_dms") || "{}");
@@ -20557,6 +20597,7 @@ console.log("[Shercord V24] Voice empty layout, auto members, leave/join logs, t
               window.state.recentDMs = window.state.recentDMs.filter(function (d) { return d.peerId !== peerId; });
               localStorage.setItem("scord_recent_dms", JSON.stringify(window.state.recentDMs));
             }
+            if (window.ScordDM?.clearPeer(peerId) === false) return;
             if (window.state?.dms) delete window.state.dms[peerId];
             try {
               var stored = JSON.parse(localStorage.getItem("scord_dms") || "{}");
@@ -20762,6 +20803,10 @@ console.log("[Shercord V24] Voice empty layout, auto members, leave/join logs, t
     }
 
     addItem(isBlocked ? "✅" : "🚫", isBlocked ? "Engeli Kaldır" : "Kişiyi Engelle", function () {
+      if (window.ScordSocial && typeof window.toggleBlockStatus === "function") {
+        window.toggleBlockStatus(peerId, username);
+        return;
+      }
       if (!window.state.blockedPeers) window.state.blockedPeers = [];
       var idx = window.state.blockedPeers.indexOf(peerId);
       if (idx !== -1) { window.state.blockedPeers.splice(idx, 1); toast("@" + username + " engeli kaldırıldı.", "success"); }
@@ -20779,6 +20824,7 @@ console.log("[Shercord V24] Voice empty layout, auto members, leave/join logs, t
 
     addItem("❌", "Konuşmayı Sil", function () {
       if (!confirm("@" + username + " ile olan tüm mesajları silmek istediğine emin misin?")) return;
+      if (window.ScordDM?.clearPeer(peerId) === false) return;
       if (window.state?.dms) delete window.state.dms[peerId];
       var stored = JSON.parse(localStorage.getItem("scord_dms") || "{}");
       delete stored[peerId];
@@ -21152,6 +21198,8 @@ console.log("[Shercord V24] Voice empty layout, auto members, leave/join logs, t
         }
       };
     }, 200);
+
+    }
 
     // startApp patch - "Anonim" fix
     var _origSA = window.startApp;
@@ -22059,7 +22107,7 @@ function init() {
       patchPersistence();
       patchChatHeader();
       patchGlobalBugs();
-      patchFriendRequestSystem();
+      if (!window.ScordSocial) patchFriendRequestSystem();
       patchProfileSystem();
       patchStatusBar();
       patchVoiceMuteIndicator();
@@ -22338,7 +22386,6 @@ function init() {
       }
     `;
     document.head.appendChild(burstStyle);
-  }
   }
 
   /* ══════════════════════════════════════════════════════════

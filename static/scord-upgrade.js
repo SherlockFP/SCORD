@@ -259,6 +259,8 @@
   };
 
   function playDiscordSFX(name) {
+    if ((name === "message" || name === "dm") && window.state?.notifSettings?.messageSound === false) return;
+    if ((name === "join" || name === "leave") && window.state?.notifSettings?.join === false) return;
     var fn = DISCORD_SFX[name];
     if (fn) {
       try { fn(); } catch (e) {}
@@ -618,7 +620,7 @@
             var friendsData = (window.state.friends || []).map(function (f) {
               return { peerId: f.peerId, name: f.name, avatarColor: f.avatarColor, avatarImage: f.avatarImage };
             });
-            if (friendsData.length > 0) {
+            if (!window.ScordSocial && friendsData.length > 0) {
               window.state.mesh.sendTo(peerId, {
                 type: "friend_list_sync",
                 friends: friendsData,
@@ -931,8 +933,8 @@
       if (!window.state || !window.state.peerId) return;
       clearInterval(readyCheck);
 
-      patchFriendSystem();
-      patchHomeSidebar();
+      if (!window.ScordSocial) patchFriendSystem();
+      if (!window.ScordSocial) patchHomeSidebar();
       patchStatusSystem();
       patchPasswordSystem();
       patchScreenOverlay();
@@ -940,7 +942,7 @@
       hookSoundEffects();
 
       /* Render friend section periodically */
-      setInterval(renderFriendSection, 5000);
+      if (!window.ScordSocial) setInterval(renderFriendSection, 5000);
 
       console.log("[SCORD-UPGRADE] v2.0 fully loaded");
     }, 1000);

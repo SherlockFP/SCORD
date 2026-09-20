@@ -1,0 +1,25 @@
+/* Shared icon geometry inherits each theme's existing palette. */
+.scord-icon{display:inline-block;width:20px;height:20px;flex:0 0 auto;vertical-align:middle;pointer-events:none;overflow:visible}
+.scord-icon-control{display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.scord-icon-control[hidden]{display:none!important}
+.scord-icon-control>span{pointer-events:none}
+button.scord-icon-control:focus-visible{outline:2px solid var(--accent-light,var(--accent));outline-offset:3px}
+.scord-icon-control:disabled{cursor:not-allowed}
+#community-open.scord-icon-control{justify-content:flex-start;font-size:11px;line-height:1.45;gap:9px;min-height:40px;text-align:left}
+#community-open .scord-icon{width:17px;height:17px;color:var(--accent-light,var(--accent))}
+.input-action-btn.scord-icon-control .scord-icon{width:19px;height:19px}
+.sidebar-header-btn.scord-icon-control .scord-icon{width:16px;height:16px}
+@media(hover:hover) and (prefers-reduced-motion:no-preference){
+  .scord-icon-control .scord-icon{transition:transform 140ms ease-out,opacity 140ms ease-out}
+  .scord-icon-control:hover:not(:disabled) .scord-icon{transform:translateY(-1px)}
+  .scord-icon-control:active:not(:disabled) .scord-icon{transform:scale(.94)}
+}
+@media(prefers-reduced-motion:reduce){.scord-icon-control,.scord-icon-control .scord-icon{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+@media(max-width:768px){
+  /* The persistent top bar already provides a menu; retain its single drawer control. */
+  html[data-scord-ui] .app:has(.scord-design-mobile) #mobile-menu-btn{display:none!important}
+  .scord-design-mobile .scord-icon-control{min-width:72px;min-height:44px;border-radius:10px;font-size:12px;gap:7px}
+  .scord-design-mobile .scord-icon{width:18px;height:18px}
+  .mobile-bottom-nav .mobile-nav-btn{min-height:44px;border-radius:10px}
+  #chat-view .input-action-btn.scord-icon-control{min-width:36px;min-height:40px;flex-shrink:0}
+}

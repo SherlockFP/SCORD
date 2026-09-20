@@ -1,0 +1,34 @@
+/* Scope all additions to the enhanced server menus. */
+.server-menu-intro{padding:20px;border:1px solid var(--border);border-radius:14px;background:var(--bg-elevated);margin-bottom:20px}
+.server-menu-eyebrow{font-size:10px;letter-spacing:1.8px;font-weight:700;color:var(--accent-light)}
+.server-menu-intro h3{font-size:23px;margin:9px 0;color:var(--text-primary);overflow-wrap:anywhere}
+.server-menu-intro p,.server-menu-flow .modal-info{font-size:13px;color:var(--text-secondary);line-height:1.65}
+.server-menu-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:20px}
+.server-menu-stats>div{display:flex;flex-direction:column;gap:6px;padding:12px;background:var(--bg-deep);border-radius:10px}
+.server-menu-stats strong{font-size:19px;color:var(--text-primary)}
+.server-menu-stats span{font-size:11px;color:var(--text-muted)}
+.server-menu-actions{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 0}
+.server-menu-actions button{font-size:12px;padding:9px 12px}
+.server-menu-settings .settings-tabs{gap:6px!important;flex-wrap:wrap;border-bottom:0!important}
+.server-menu-settings [role=tab]{padding:10px 12px;border:1px solid transparent;border-radius:8px;font-size:12px}
+.server-menu-settings [role=tab][aria-selected=true]{background:var(--bg-elevated);border-color:var(--border)}
+.server-menu-settings [role=tabpanel]{padding:8px 0}
+.server-menu-settings [role=tab]:focus-visible,.server-menu-flow button:focus-visible,.server-menu-flow input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.server-menu-settings .form-group{padding:15px;background:var(--bg-deep);border:1px solid var(--border);border-radius:10px}
+.server-menu-settings .modal-input,.server-menu-flow .modal-input{min-width:0;width:100%;box-sizing:border-box}
+.server-member-search{margin-bottom:12px}
+.server-menu-status{color:var(--text-secondary);font-size:12px;line-height:1.5;margin:10px 0}
+.server-menu-settings [hidden]{display:none!important}
+.server-copy-field{display:flex;align-items:center;gap:8px;margin:8px 0 20px}
+.server-copy-field button{flex-shrink:0}
+.server-menu-flow .modal-label{display:block;margin-top:10px}
+@media(max-width:520px){.server-menu-intro{padding:16px}.server-menu-intro h3{font-size:20px}.server-menu-stats{gap:6px}.server-menu-stats>div{padding:10px}.server-menu-stats strong{font-size:16px}.server-menu-settings .settings-tabs{display:grid!important;grid-template-columns:1fr 1fr}.server-copy-field{flex-wrap:wrap}.server-copy-field input{flex-basis:100%}.server-menu-settings .form-group>div{flex-wrap:wrap}}
+.server-channel-search{margin:16px 0 12px}
+.server-channel-directory{display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto}
+.server-channel-row{display:flex;align-items:center;gap:8px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg-deep)}
+.server-channel-row>div{display:flex;flex-direction:column;gap:5px;min-width:0;flex:1}
+.server-channel-row strong{font-size:13px;overflow-wrap:anywhere;color:var(--text-primary)}
+.server-channel-row small{font-size:11px;color:var(--text-muted)}
+.server-channel-row button{font-size:11px;padding:7px 9px;flex-shrink:0}
+.server-menu-settings button[role=tab]{background:transparent;font-family:inherit;text-align:left;color:var(--text-muted);cursor:pointer}
+@media(max-width:520px){.server-channel-row{flex-wrap:wrap}.server-channel-row>div{flex-basis:100%}.server-menu-settings .settings-tabs [role=tab]{font-size:11px}}

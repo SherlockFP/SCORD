@@ -1,0 +1,150 @@
+/* SCORD Studio: theme tokens are scoped to coexist with legacy appearance settings. */
+html[data-scord-theme] {
+  color-scheme: dark;
+  --bg-void: #11121a !important; --bg-deep: #161720 !important;
+  --bg-base: #1b1c27 !important; --bg-mid: #20222f !important;
+  --bg-elevated: #272a39 !important; --bg-highlight: #2e3142 !important;
+  --bg-hover: #34384c !important; --bg-active: #36364e !important;
+  --bg-primary: var(--bg-base) !important; --bg-secondary: var(--bg-deep) !important;
+  --bg-surface: var(--bg-mid) !important;
+  --accent: #8b7cf8 !important; --accent-light: #b1a7ff !important;
+  --accent-2: #a596ff !important; --accent-glow: #8b7cf826 !important;
+  --accent-gradient: linear-gradient(125deg,#8b7cf8,#a596ff) !important;
+  --text-primary: #f1f0fa !important; --text-secondary: #b8b8cc !important;
+  --text-muted: #9b9bae !important; --text-disabled: #78788e !important;
+  --border: #ffffff0e !important; --border-strong: #ffffff1c !important;
+  --rail-width: 76px; --sidebar-width: 252px; --header-height: 64px;
+}
+html[data-scord-theme="ocean"] {
+  --bg-void:#091820 !important; --bg-deep:#10212b !important; --bg-base:#142b36 !important;
+  --bg-mid:#19323e !important; --bg-elevated:#213e4a !important; --bg-highlight:#284953 !important;
+  --bg-hover:#315763 !important; --bg-active:#24515e !important;
+  --accent:#48c9cf !important; --accent-light:#8ae5e7 !important; --accent-2:#59a9df !important;
+  --accent-glow:#48c9cf26 !important; --accent-gradient:linear-gradient(125deg,#48c9cf,#59a9df) !important;
+  --text-primary:#ecf8fc !important; --text-secondary:#b0cbd5 !important; --text-muted:#96b6c3 !important;
+}
+html[data-scord-theme="forest"] {
+  --bg-void:#101b17 !important; --bg-deep:#16251e !important; --bg-base:#1c2e25 !important;
+  --bg-mid:#24382d !important; --bg-elevated:#2c4235 !important; --bg-highlight:#354d3e !important;
+  --bg-hover:#405d4b !important; --bg-active:#36563f !important;
+  --accent:#8bd6a2 !important; --accent-light:#b0edbf !important; --accent-2:#b2cc83 !important;
+  --accent-glow:#8bd6a226 !important; --accent-gradient:linear-gradient(125deg,#8bd6a2,#b2cc83) !important;
+  --text-primary:#f0f7ef !important; --text-secondary:#bccdbf !important; --text-muted:#a0b8a5 !important;
+}
+html[data-scord-theme="ember"] {
+  --bg-void:#211516 !important; --bg-deep:#2a1d1e !important; --bg-base:#322426 !important;
+  --bg-mid:#3b2c2c !important; --bg-elevated:#493435 !important; --bg-highlight:#563e3d !important;
+  --bg-hover:#654a45 !important; --bg-active:#63463c !important;
+  --accent:#f3ad83 !important; --accent-light:#ffd0ae !important; --accent-2:#e48ea0 !important;
+  --accent-glow:#f3ad8326 !important; --accent-gradient:linear-gradient(125deg,#f3ad83,#e48ea0) !important;
+  --text-primary:#fff3ed !important; --text-secondary:#d7beb5 !important; --text-muted:#c2a69e !important;
+}
+html[data-scord-theme] body {background:var(--bg-void);color:var(--text-primary);font-family:Inter,system-ui,sans-serif}
+html[data-scord-theme] body,html[data-scord-theme] #app,html[data-scord-theme] .main-content {transform:none;backface-visibility:visible}
+html[data-scord-theme] .app {height:100dvh;background:var(--bg-base)}
+html[data-scord-theme] .server-rail {background:var(--bg-void)!important;backdrop-filter:none!important;padding-top:20px;gap:12px}
+html[data-scord-theme] .channel-sidebar {background:var(--bg-deep)!important;backdrop-filter:none!important}
+html[data-scord-theme] .main-content,html[data-scord-theme] .chat-view,html[data-scord-theme] .messages-area {background:var(--bg-base)!important;min-width:0}
+html[data-scord-theme] .rail-icon {width:46px;height:46px;border-radius:16px!important;background:var(--bg-mid);box-shadow:none!important;flex-shrink:0}
+html[data-scord-theme] .rail-icon:hover {transform:none!important;background:var(--bg-highlight)}
+html[data-scord-theme] .rail-icon.active {background:var(--accent)!important;color:var(--bg-void)!important;border-radius:16px!important;box-shadow:none!important}
+html[data-scord-theme] .sidebar-header,html[data-scord-theme] .chat-header {min-height:64px;background:var(--bg-base)!important;border-bottom:1px solid var(--border);box-shadow:none!important}
+html[data-scord-theme] .sidebar-header {background:var(--bg-deep)!important;font-weight:700;padding:0 18px}
+html[data-scord-theme] .channel-list {padding:14px 10px;contain:none!important}
+html[data-scord-theme] .channel-item {min-height:38px;color:var(--text-secondary);border:1px solid transparent}
+html[data-scord-theme] .channel-item:hover {transform:none!important;background:var(--bg-highlight)!important}
+html[data-scord-theme] .channel-item.active {background:var(--accent-glow)!important;color:var(--accent-light)!important;border-color:var(--accent-glow)}
+html[data-scord-theme] .user-bar {background:var(--bg-void)!important;border-top:1px solid var(--border);padding:12px}
+html[data-scord-theme] .members-panel,html[data-scord-theme] .members-sidebar {background:var(--bg-deep)!important;border-left:1px solid var(--border)}
+html[data-scord-theme] .chat-input-wrapper {background:var(--bg-elevated)!important;border:1px solid var(--border-strong)!important;border-radius:14px!important;box-shadow:none!important}
+html[data-scord-theme] .chat-input-wrapper:focus-within {border-color:var(--accent)!important}
+html[data-scord-theme] .chat-input-area {background:var(--bg-base)!important;padding:16px 22px 20px}
+html[data-scord-theme] .msg-row {padding:8px 16px!important;animation:none}
+html[data-scord-density="compact"] .msg-row {padding:3px 16px!important}
+html[data-scord-theme] button {font-family:inherit}
+html[data-scord-theme] :is(button,input,textarea,select,a):focus-visible {outline:2px solid var(--accent-light)!important;outline-offset:3px}
+html[data-scord-theme] :is(input,textarea,select) {color:var(--text-primary);accent-color:var(--accent)}
+html[data-scord-theme] .btn-primary,html[data-scord-theme] #enter-btn,html[data-scord-theme] .hero-btn.primary {background:var(--accent)!important;color:var(--bg-void)!important;box-shadow:none!important;border:1px solid transparent!important;font-weight:700}
+html[data-scord-theme] #modal-backdrop .modal,html[data-scord-theme] .ctx-menu,html[data-scord-theme] .dm-overlay,html[data-scord-theme] .toast {background:var(--bg-mid)!important;border:1px solid var(--border-strong)!important;box-shadow:0 24px 80px #0005!important}
+html[data-scord-theme] .home-view:not(.home-dm-active) {padding:44px clamp(20px,4vw,64px);background:radial-gradient(ellipse at 90% 0,var(--accent-glow),transparent 55%),var(--bg-base)!important}
+html[data-scord-theme] .home-hero {max-width:1050px;align-items:flex-start;text-align:left;gap:16px}
+html[data-scord-theme] .home-hero>svg {display:none}
+html[data-scord-theme] .home-hero h2 {font-size:clamp(28px,3.3vw,44px);letter-spacing:-1.6px;line-height:1.12;font-weight:750;margin:0;max-width:620px}
+html[data-scord-theme] .home-hero>p {max-width:590px;line-height:1.75;font-size:15px;margin:0}
+.scord-eyebrow {color:var(--accent-light);font-size:11px;letter-spacing:2px;font-weight:750;text-transform:uppercase;display:flex;align-items:center;gap:9px}
+.scord-eyebrow:before {content:"";width:7px;height:7px;border-radius:50%;background:var(--accent)}
+html[data-scord-theme] .hero-actions {justify-content:flex-start;gap:10px;margin-top:12px;width:100%;flex-wrap:wrap}
+html[data-scord-theme] .hero-btn {border-radius:10px;padding:12px 18px;min-height:44px;background:var(--bg-mid);color:var(--text-primary);box-shadow:none;transform:none}
+html[data-scord-theme] .hero-join-code {background:var(--bg-deep);border:1px solid var(--border-strong);border-radius:10px;padding:5px}
+html[data-scord-theme] .discover-section {width:100%;border-top:1px solid var(--border);padding-top:24px;margin-top:16px;text-align:left}
+.scord-features {display:grid;grid-template-columns:repeat(3,1fr);gap:12px;width:100%;margin:18px 0 0}
+.scord-feature {padding:22px;background:var(--bg-mid);border:1px solid var(--border);border-radius:14px}
+.scord-feature-icon {display:grid;place-items:center;width:36px;height:36px;background:var(--accent-glow);color:var(--accent-light);border-radius:10px;font-size:19px;margin-bottom:20px}
+.scord-feature h3 {font-size:14px;margin:0 0 8px;color:var(--text-primary)}
+.scord-feature p {font-size:12px!important;line-height:1.7!important;margin:0;color:var(--text-secondary)}
+html[data-scord-theme] #setup-overlay {background:radial-gradient(ellipse at 20% 50%,var(--accent-glow),transparent 55%),var(--bg-void)!important;gap:clamp(32px,7vw,110px);padding:32px;overflow-y:auto}
+html[data-scord-theme] .setup-card {width:400px;max-width:100%;padding:36px;background:var(--bg-mid)!important;border:1px solid var(--border-strong)!important;border-radius:20px!important;box-shadow:0 24px 90px #0003!important;flex-shrink:0;text-align:left}
+html[data-scord-theme] .setup-card .setup-logo {justify-content:flex-start;margin-bottom:24px}
+html[data-scord-theme] .setup-title {font-size:26px;letter-spacing:-.8px}
+html[data-scord-theme] .setup-sub {font-size:13px;line-height:1.7;color:var(--text-secondary)}
+html[data-scord-theme] .setup-hint {font-size:12px;line-height:1.7;color:var(--text-muted)}
+html[data-scord-theme] .setup-card input {background:var(--bg-deep)!important;border:1px solid var(--border-strong);border-radius:9px;min-height:46px}
+.scord-intro {max-width:490px;color:var(--text-primary)}
+.scord-wordmark {font-size:18px;letter-spacing:4px;font-weight:800;margin-bottom:56px;display:flex;gap:12px;align-items:center}
+.scord-wordmark span {background:var(--accent);color:var(--bg-void);border-radius:11px;width:36px;height:36px;display:grid;place-items:center;letter-spacing:0}
+.scord-intro h2 {font-size:clamp(38px,4.6vw,64px);line-height:1.06;letter-spacing:-2.5px;margin:20px 0}
+.scord-intro h2 em {font-style:normal;color:var(--accent-light)}
+.scord-intro>p {max-width:410px;line-height:1.8;color:var(--text-secondary);font-size:15px}
+.scord-intro-foot {display:flex;gap:18px;margin-top:36px;color:var(--text-muted);font-size:12px;flex-wrap:wrap}
+.scord-theme-launch {margin-top:auto!important;flex-shrink:0}
+.scord-theme-dialog {position:fixed;inset:0;z-index:1000000;display:grid;place-items:center;padding:20px;background:#0009;backdrop-filter:blur(7px);transform:none!important}
+.scord-theme-dialog[hidden] {display:none}
+.scord-theme-panel {width:min(560px,100%);max-height:90dvh;overflow:auto;background:var(--bg-base);border:1px solid var(--border-strong);border-radius:20px;padding:28px;box-shadow:0 32px 100px #0006}
+.scord-theme-top {display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:24px}
+.scord-theme-top h2 {font-size:24px;margin:0 0 8px;letter-spacing:-.5px}
+.scord-theme-top p {color:var(--text-secondary);line-height:1.6;margin:0;font-size:13px}
+.scord-theme-close {border:1px solid var(--border-strong);background:var(--bg-mid);color:var(--text-secondary);border-radius:9px;min-width:34px;height:34px;cursor:pointer}
+.scord-theme-grid {display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.scord-theme-option {padding:12px;border:2px solid var(--border-strong);background:var(--bg-mid);border-radius:12px;color:var(--text-primary);text-align:left;cursor:pointer}
+.scord-theme-option[aria-pressed="true"] {border-color:var(--accent)}
+.scord-theme-swatch {height:70px;border-radius:6px;display:flex;padding:10px;gap:5px;margin-bottom:12px;background:var(--preview-bg)}
+.scord-theme-swatch i {display:block;width:14%;border-radius:3px;background:var(--preview-side)}
+.scord-theme-swatch i:last-child {width:70%;background:linear-gradient(0deg,transparent 64%,var(--preview-accent) 65%,var(--preview-accent) 76%,transparent 77%),var(--preview-panel)}
+.scord-theme-option strong {display:block;font-size:13px}
+.scord-theme-option small {display:block;color:var(--text-secondary);margin-top:5px;font-size:11px}
+.scord-density {margin-top:24px;padding-top:20px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:13px;color:var(--text-secondary)}
+.scord-density select {background:var(--bg-mid);border:1px solid var(--border-strong);border-radius:8px;padding:9px;color:var(--text-primary)}
+.scord-design-mobile {display:none}
+.scord-drawer-mask {display:none}
+@media(min-width:769px) {html[data-scord-theme] .app {grid-template-columns:var(--rail-width) var(--sidebar-width) minmax(0,1fr)}}
+@media(max-width:1000px) {.scord-intro {max-width:380px}.scord-features {grid-template-columns:1fr}.scord-feature {padding:16px;display:grid;grid-template-columns:36px 1fr;column-gap:14px}.scord-feature-icon {grid-row:span 2;margin:0}.scord-feature h3 {margin:0 0 3px}}
+@media(max-width:768px) {
+  html[data-scord-ui] #setup-overlay {padding:24px;flex-direction:column;justify-content:flex-start;gap:28px}
+  .scord-intro {max-width:400px;width:100%;padding-top:16px}.scord-wordmark {margin-bottom:24px}.scord-intro h2 {font-size:38px;margin:14px 0}.scord-intro>p {font-size:13px}.scord-intro-foot {display:none}
+  html[data-scord-ui] .setup-card {padding:26px}.scord-intro .scord-eyebrow {font-size:10px}
+  html[data-scord-ui] .app {display:block;height:100dvh}
+  html[data-scord-ui] .main-content {height:100%;padding-top:48px;width:100%;min-width:0}
+  html[data-scord-ui] .server-rail {width:64px;transform:translateX(-100%)!important;z-index:901;top:48px;bottom:0;padding-top:12px}
+  html[data-scord-ui] .channel-sidebar {left:64px;width:min(252px,calc(100vw - 104px));transform:translateX(calc(-100% - 64px))!important;z-index:901;top:48px;bottom:0}
+  html[data-scord-ui] body.nav-open .server-rail,html[data-scord-ui] body.nav-open .channel-sidebar {transform:translateX(0)!important}
+  html[data-scord-ui] body.nav-open .channel-sidebar {display:flex!important}
+  html[data-scord-ui] body.nav-open #mobile-nav-mask {display:none!important}
+  .scord-design-mobile {position:fixed;top:0;left:0;right:0;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;background:var(--bg-void);border-bottom:1px solid var(--border);z-index:902}
+  .scord-design-mobile button {background:transparent;border:0;color:var(--text-primary);font-size:14px;min-height:40px;padding:8px;cursor:pointer}.scord-design-mobile strong {font-size:12px;letter-spacing:2px}
+  body.nav-open .scord-drawer-mask {display:block;position:fixed;inset:48px 0 0;background:#0009;border:0;z-index:900}
+  html[data-scord-ui] .home-view:not(.home-dm-active) {padding:26px 20px 90px}
+  html[data-scord-ui] .home-hero h2 {letter-spacing:-.8px}.scord-features {margin-top:8px}
+  html[data-scord-ui] .chat-input-area {padding:10px 10px 14px}.scord-theme-panel {padding:20px}
+  html[data-scord-ui] .chat-header {min-height:56px;padding:8px;flex-wrap:wrap;height:auto}
+}
+@media(prefers-reduced-motion:reduce) {html[data-scord-theme] *,html[data-scord-theme] *:before,html[data-scord-theme] *:after {animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+/* Keep form edges aligned and touch targets comfortable. */
+html[data-scord-theme] .setup-card {align-items:stretch;gap:18px}
+html[data-scord-theme] .setup-card .setup-logo {align-self:flex-start;margin-bottom:4px}
+html[data-scord-theme] .setup-card .setup-title,html[data-scord-theme] .setup-card .setup-sub,html[data-scord-theme] .setup-card .setup-hint {text-align:left;margin:0}
+html[data-scord-theme] .setup-card .form-group {width:100%;margin:8px 0 0}
+html[data-scord-theme] .setup-card #enter-btn {width:100%;min-height:46px}
+@media(max-width:768px) {html[data-scord-theme] .channel-item {min-height:44px}}
+
+
+html:not([data-scord-theme]) .scord-intro {display:none}

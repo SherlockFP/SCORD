@@ -1,0 +1,18 @@
+/* Shared native-control finish; colors follow classic SCORD or the optional theme. */
+:root{color-scheme:dark;--sc-scroll-thumb:color-mix(in srgb,var(--text-muted,#9da3b7) 32%,var(--bg-secondary,#171723));--sc-range-track:color-mix(in srgb,var(--text-muted,#9da3b7) 24%,var(--bg-secondary,#171723))}
+*{scrollbar-width:thin;scrollbar-color:var(--sc-scroll-thumb) transparent}
+*::-webkit-scrollbar{width:8px;height:7px}
+*::-webkit-scrollbar-track{background:transparent}
+*::-webkit-scrollbar-thumb{background:var(--sc-scroll-thumb);border:2px solid transparent;background-clip:padding-box;border-radius:10px}
+*::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--accent,#7c3aed) 45%,var(--text-muted,#9da3b7));background-clip:padding-box}
+*::-webkit-scrollbar-corner{background:transparent}
+input[type=range]{accent-color:var(--accent,#7c3aed);color-scheme:dark}
+input[type=range]:not(.sc-setting-range input){appearance:none;-webkit-appearance:none;height:25px;background:transparent;cursor:pointer;padding:0;border:0}
+input[type=range]:not(.sc-setting-range input)::-webkit-slider-runnable-track{height:5px;border-radius:10px;background:var(--sc-range-track)}
+input[type=range]:not(.sc-setting-range input)::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:15px;height:15px;margin-top:-5px;border:3px solid var(--accent,#7c3aed);border-radius:50%;background:color-mix(in srgb,var(--accent,#7c3aed) 15%,white);box-shadow:0 2px 6px #0005}
+input[type=range]:not(.sc-setting-range input)::-moz-range-track{height:5px;border-radius:10px;background:var(--sc-range-track)}
+input[type=range]:not(.sc-setting-range input)::-moz-range-progress{height:5px;border-radius:10px;background:var(--accent,#7c3aed)}
+input[type=range]:not(.sc-setting-range input)::-moz-range-thumb{width:11px;height:11px;border:3px solid var(--accent,#7c3aed);border-radius:50%;background:color-mix(in srgb,var(--accent,#7c3aed) 15%,white)}
+input[type=range]:focus-visible{outline:2px solid var(--accent,#7c3aed);outline-offset:4px}
+select,option,input[type=date],input[type=datetime-local],input[type=time]{color-scheme:dark}
+@media(forced-colors:active){input[type=range]:not(.sc-setting-range input){appearance:auto;-webkit-appearance:auto}*{scrollbar-color:auto}}
